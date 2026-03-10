@@ -71,10 +71,10 @@ export const DEFAULT_DASHBOARD_CONFIG = [
 ];
 
 const CATEGORIES = [
-  { id: 'all',     label: 'Tutti',             icon: '⬡' },
-  { id: 'squadra', label: 'Squadra',            icon: '🏐' },
   { id: 'trend',   label: 'Trend Stagionale',   icon: '📈' },
   { id: 'ranking', label: 'Ranking Giocatrici', icon: '🏆' },
+  { id: 'all',     label: 'Tutti',             icon: '⬡' },
+  { id: 'squadra', label: 'Squadra',            icon: '🏐' },
 ];
 
 // ─── Main Component ───────────────────────────────────────────────────────────
