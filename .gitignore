@@ -34,3 +34,6 @@ pnpm-debug.log*
 # Data files (local scout data - not for repo)
 Calendario/
 Scout/
+node_modules
+
+.vercel

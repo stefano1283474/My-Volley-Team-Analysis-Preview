@@ -61,20 +61,13 @@ export default function Dashboard({ analytics, matches, standings, weights, onSe
     setReferenceTeam(next);
     try { localStorage.setItem('vpa_reference_team', next || ''); } catch {}
   };
-
-  if (!analytics || matches.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-96 text-gray-500 text-sm">
-        <div className="text-5xl mb-4">🏐</div>
-        <p>Carica partite e calendario nella sezione <strong>Dati</strong> per vedere la dashboard.</p>
-      </div>
-    );
-  }
+  const hasData = !!analytics && matches.length > 0;
 
   // showChart: se dashboardConfig è definito, mostra solo i grafici selezionati
   const showChart = (id) => !dashboardConfig || dashboardConfig.includes(id);
 
-  const { matchAnalytics, playerTrends } = analytics;
+  const matchAnalytics = analytics?.matchAnalytics || [];
+  const playerTrends = analytics?.playerTrends || {};
 
   // ─── Sort matches by date ─────────────────────────────────────────────────
   const sortedMA = useMemo(() =>
@@ -184,6 +177,15 @@ export default function Dashboard({ analytics, matches, standings, weights, onSe
 
   // Grafici visibili in base alla config
   const anyChartVisible = !dashboardConfig || dashboardConfig.length > 0;
+
+  if (!hasData) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 text-gray-500 text-sm">
+        <div className="text-5xl mb-4">🏐</div>
+        <p>Carica partite e calendario nella sezione <strong>Dati</strong> per vedere la dashboard.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">

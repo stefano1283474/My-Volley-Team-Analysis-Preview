@@ -11,7 +11,7 @@ import {
   computeWeightedPlayerStats, computePlayerTrends, generateTrainingSuggestions,
   analyzeRallyChains, generateMatchReport, findOpponentStanding,
 } from './utils/analyticsEngine';
-import { DEFAULT_WEIGHTS, TEAM_MAP, FUNDAMENTALS, COLORS, SCALE_DESCRIPTIONS } from './utils/constants';
+import { APP_NAME, APP_VERSION, DEFAULT_WEIGHTS, TEAM_MAP, FUNDAMENTALS, COLORS, SCALE_DESCRIPTIONS } from './utils/constants';
 import {
   saveMatch,
   deleteMatchFromFirestore,
@@ -365,11 +365,9 @@ export default function App() {
             🏐
           </div>
           <div>
-            <h1 className="text-base font-bold tracking-tight" style={{ color: '#f59e0b' }}>
-              My Volley Team Analysis
-            </h1>
+            <h1 className="text-base font-bold tracking-tight" style={{ color: '#f59e0b' }}>{APP_NAME}</h1>
             <p className="text-[10px] text-gray-500 tracking-widest uppercase">
-              v1.0 · {matches.length} partite · {allPlayers.length} atlete
+              v{APP_VERSION} · {matches.length} partite · {allPlayers.length} atlete
             </p>
           </div>
         </div>

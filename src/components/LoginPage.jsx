@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { APP_NAME, APP_VERSION } from '../utils/constants';
 
 export default function LoginPage() {
   const { signInWithGoogle } = useAuth();
@@ -51,12 +52,9 @@ export default function LoginPage() {
             🏐
           </div>
           <div className="text-center">
-            <h1 className="text-2xl font-bold tracking-tight" style={{ color: '#f59e0b' }}>
-              My Volley Team
-            </h1>
-            <p className="text-base font-semibold text-white">Analysis</p>
+            <h1 className="text-2xl font-bold tracking-tight" style={{ color: '#f59e0b' }}>{APP_NAME}</h1>
             <p className="text-xs text-gray-500 mt-1 tracking-widest uppercase">
-              v1.0 · Analisi · Dati · Coaching
+              v{APP_VERSION} · Analisi · Dati · Coaching
             </p>
           </div>
         </div>
