@@ -7,6 +7,7 @@ import React, { useState, useRef } from 'react';
 
 export default function DatasetManager({
   matches, calendar, standings,
+  ownerTeamName = '',
   onUpload, onDelete,
   isLoading,
   uploadProgress = [],
@@ -15,6 +16,13 @@ export default function DatasetManager({
   const fileRef = useRef(null);
   const completedUploads = uploadProgress.filter(item => item.status === 'done').length;
   const failedUploads = uploadProgress.filter(item => item.status === 'error').length;
+  const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
+  const ownerTeamUpper = normalizeTeamName(ownerTeamName);
+  const isOwnerTeam = (teamName) => {
+    const teamUpper = normalizeTeamName(teamName);
+    if (!ownerTeamUpper || !teamUpper) return false;
+    return teamUpper === ownerTeamUpper || teamUpper.includes(ownerTeamUpper) || ownerTeamUpper.includes(teamUpper);
+  };
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -209,7 +217,7 @@ export default function DatasetManager({
               </thead>
               <tbody>
                 {standings.map(t => {
-                  const isUs = t.name.toUpperCase().includes('GEAS');
+                  const isUs = isOwnerTeam(t.name);
                   return (
                     <tr key={t.name}
                       className={`border-b border-white/[0.03] ${isUs ? 'bg-amber-500/5' : ''}`}>
@@ -244,10 +252,10 @@ export default function DatasetManager({
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
             {calendar
-              .filter(m => m.home.toUpperCase().includes('GEAS') || m.away.toUpperCase().includes('GEAS'))
+              .filter(m => isOwnerTeam(m.home) || isOwnerTeam(m.away))
               .sort((a, b) => a.giornata - b.giornata)
               .map((m, i) => {
-                const isHome = m.home.toUpperCase().includes('GEAS');
+                const isHome = isOwnerTeam(m.home);
                 return (
                   <div key={i} className="flex items-center gap-2 p-2 rounded bg-white/[0.02] text-[11px]">
                     <span className="text-gray-500 w-6">G{m.giornata}</span>

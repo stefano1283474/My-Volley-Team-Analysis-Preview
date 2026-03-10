@@ -3,7 +3,7 @@
 // Panoramica con grafici di trend: squadra / fondamentale / giocatrice
 // ============================================================================
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -49,18 +49,21 @@ const CHART_TOOLTIP_STYLE = {
   fontSize: 11,
 };
 
+const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
+
+function findStandingTeamByName(standings, teamName) {
+  const clean = normalizeTeamName(teamName);
+  if (!clean || !standings?.length) return null;
+  return (
+    standings.find(t => normalizeTeamName(t.name) === clean) ||
+    standings.find(t => normalizeTeamName(t.name).includes(clean) || clean.includes(normalizeTeamName(t.name))) ||
+    null
+  );
+}
+
 // ─── Main Dashboard component ─────────────────────────────────────────────────
 
-export default function Dashboard({ analytics, matches, standings, weights, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici }) {
-  const [referenceTeam, setReferenceTeam] = useState(() => {
-    try { return localStorage.getItem('vpa_reference_team') || null; } catch { return null; }
-  });
-
-  const handleReferenceTeamChange = (teamName) => {
-    const next = referenceTeam === teamName ? null : teamName;
-    setReferenceTeam(next);
-    try { localStorage.setItem('vpa_reference_team', next || ''); } catch {}
-  };
+export default function Dashboard({ analytics, matches, standings, weights, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici, ownerTeamName, onOwnerTeamChange }) {
   const hasData = !!analytics && matches.length > 0;
 
   // showChart: se dashboardConfig è definito, mostra solo i grafici selezionati
@@ -173,7 +176,24 @@ export default function Dashboard({ analytics, matches, standings, weights, onSe
       .slice(0, 6);
   }, [playerTrends]);
 
-  const ourStanding = standings.find(t => t.name.toUpperCase().includes('GEAS'));
+  const inferredOwnerTeam = useMemo(() => {
+    const selected = findStandingTeamByName(standings, ownerTeamName);
+    if (selected) return selected;
+    const fromMatches = findStandingTeamByName(
+      standings,
+      matches.find(m => m.metadata?.teamName)?.metadata?.teamName || ''
+    );
+    return fromMatches || null;
+  }, [standings, ownerTeamName, matches]);
+
+  useEffect(() => {
+    if (!inferredOwnerTeam?.name) return;
+    if (ownerTeamName !== inferredOwnerTeam.name && onOwnerTeamChange) {
+      onOwnerTeamChange(inferredOwnerTeam.name);
+    }
+  }, [inferredOwnerTeam, ownerTeamName, onOwnerTeamChange]);
+
+  const ourStanding = inferredOwnerTeam;
 
   // Grafici visibili in base alla config
   const anyChartVisible = !dashboardConfig || dashboardConfig.length > 0;
@@ -216,9 +236,8 @@ export default function Dashboard({ analytics, matches, standings, weights, onSe
       {standings && standings.length > 0 && (
         <StandingsWidget
           standings={standings}
-          ourTeam={ourStanding}
-          referenceTeam={referenceTeam}
-          onReferenceTeamChange={handleReferenceTeamChange}
+          ourTeamName={ourStanding?.name || ''}
+          onOwnerTeamChange={onOwnerTeamChange}
           matchAnalytics={sortedMA}
         />
       )}
@@ -829,16 +848,10 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA }) {
 
 // ─── Standings Widget ─────────────────────────────────────────────────────────
 
-function StandingsWidget({ standings, ourTeam, referenceTeam, onReferenceTeamChange, matchAnalytics }) {
+function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, matchAnalytics }) {
   const [expanded, setExpanded] = useState(false);
 
   const visibleTeams = expanded ? standings : standings.slice(0, 12);
-
-  // Compute our rank delta vs reference team
-  const refStanding = referenceTeam ? standings.find(t => t.name === referenceTeam) : null;
-  const ourRank = ourTeam?.rank || null;
-  const refRank = refStanding?.rank || null;
-  const rankDelta = (ourRank && refRank) ? ourRank - refRank : null;
 
   // Which teams were we opponents of (to show match results)
   const opponentNames = new Set(
@@ -851,24 +864,14 @@ function StandingsWidget({ standings, ourTeam, referenceTeam, onReferenceTeamCha
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-3">
           <h3 className="text-sm font-semibold text-gray-300">🏆 Classifica</h3>
-          {refStanding && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-400 border border-purple-500/25">
-                📌 {refStanding.name.substring(0, 18)}
-              </span>
-              {rankDelta !== null && (
-                <span className={`text-[10px] font-mono ${
-                  rankDelta < 0 ? 'text-red-400' : rankDelta > 0 ? 'text-green-400' : 'text-gray-400'
-                }`}>
-                  {rankDelta < 0 ? `▲ ${Math.abs(rankDelta)} sopra di noi` :
-                   rankDelta > 0 ? `▼ ${rankDelta} sotto di noi` : '= stessa posizione'}
-                </span>
-              )}
-            </div>
+          {ourTeamName && (
+            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25 text-[10px]">
+              ★ {ourTeamName.substring(0, 24)}
+            </span>
           )}
         </div>
         <p className="text-[10px] text-gray-500">
-          Clicca una squadra per impostarla come riferimento scout
+          Clicca una squadra per impostarla come proprietaria dei dati scout
         </p>
       </div>
 
@@ -889,20 +892,17 @@ function StandingsWidget({ standings, ourTeam, referenceTeam, onReferenceTeamCha
           </thead>
           <tbody>
             {visibleTeams.map(t => {
-              const isOurs = ourTeam && t.name === ourTeam.name;
-              const isRef = referenceTeam && t.name === referenceTeam;
+              const isOurs = !!ourTeamName && t.name === ourTeamName;
               const isOpponent = opponentNames.has(t.name.toUpperCase());
 
               return (
                 <tr
                   key={t.name}
-                  onClick={() => onReferenceTeamChange(t.name)}
+                  onClick={() => onOwnerTeamChange?.(t.name)}
                   className={`border-b border-white/[0.02] cursor-pointer transition-colors ${
                     isOurs
                       ? 'bg-amber-500/[0.08] hover:bg-amber-500/[0.12]'
-                      : isRef
-                        ? 'bg-purple-500/[0.10] hover:bg-purple-500/[0.15]'
-                        : 'hover:bg-white/[0.03]'
+                      : 'hover:bg-white/[0.03]'
                   }`}
                 >
                   <td className={`py-1.5 px-2 font-mono font-bold text-center ${
@@ -912,12 +912,9 @@ function StandingsWidget({ standings, ourTeam, referenceTeam, onReferenceTeamCha
                   </td>
                   <td className="py-1.5 px-2">
                     <div className="flex items-center gap-1.5">
-                      {isRef && <span className="text-purple-400 text-[9px]">📌</span>}
                       {isOurs && <span className="text-amber-400 text-[9px]">★</span>}
                       <span className={`font-medium ${
-                        isOurs ? 'text-amber-400' :
-                        isRef  ? 'text-purple-300' :
-                        isOpponent ? 'text-gray-200' : 'text-gray-400'
+                        isOurs ? 'text-amber-400' : isOpponent ? 'text-gray-200' : 'text-gray-400'
                       }`}>
                         {t.name.length > 22 ? t.name.substring(0, 22) + '…' : t.name}
                       </span>
@@ -927,7 +924,7 @@ function StandingsWidget({ standings, ourTeam, referenceTeam, onReferenceTeamCha
                     </div>
                   </td>
                   <td className={`text-center py-1.5 px-2 font-mono font-bold ${
-                    isOurs ? 'text-amber-400' : isRef ? 'text-purple-300' : 'text-gray-300'
+                    isOurs ? 'text-amber-400' : 'text-gray-300'
                   }`}>{t.pts}</td>
                   <td className="text-center py-1.5 px-2 text-gray-500">{t.matches || (t.w + t.l)}</td>
                   <td className="text-center py-1.5 px-2 text-green-400">{t.w}</td>
@@ -950,15 +947,12 @@ function StandingsWidget({ standings, ourTeam, referenceTeam, onReferenceTeamCha
         </button>
       )}
 
-      {refStanding && (
-        <div className="mt-3 pt-3 border-t border-white/[0.04] flex items-center gap-3 text-[10px] text-gray-500">
-          <span className="text-purple-400">ℹ</span>
-          <span>
-            I pesi delle partite riflettono la forza relativa dell'avversario. Squadre in alto in classifica danno peso maggiore alle vittorie;
-            sconfitte contro squadre più forti pesano meno negativamente.
-          </span>
-        </div>
-      )}
+      <div className="mt-3 pt-3 border-t border-white/[0.04] flex items-center gap-3 text-[10px] text-gray-500">
+        <span className="text-purple-400">ℹ</span>
+        <span>
+          La stellina identifica la squadra proprietaria dei dati scout. I pesi delle partite riflettono la forza relativa dell'avversario in classifica.
+        </span>
+      </div>
     </div>
   );
 }

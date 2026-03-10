@@ -47,6 +47,19 @@ const NAV_ITEMS = [
   { id: 'glossary',  label: 'Glossario',    icon: '📖' },
 ];
 
+const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
+
+function findStandingTeamName(standings, teamName) {
+  const clean = normalizeTeamName(teamName);
+  if (!clean || !standings?.length) return '';
+  const found = standings.find(t =>
+    normalizeTeamName(t.name) === clean ||
+    normalizeTeamName(t.name).includes(clean) ||
+    clean.includes(normalizeTeamName(t.name))
+  );
+  return found?.name || '';
+}
+
 export default function App() {
   const { user, authLoading, signOut } = useAuth();
 
@@ -63,6 +76,9 @@ export default function App() {
   const [errorMsg, setErrorMsg]           = useState('');
   const [dataLoaded, setDataLoaded]       = useState(false); // Firestore loaded once
   const [uploadProgress, setUploadProgress] = useState([]);
+  const [ownerTeamName, setOwnerTeamName] = useState(() => {
+    try { return localStorage.getItem('vpa_owner_team') || ''; } catch { return ''; }
+  });
 
   // ─── Dashboard personalizzata — config persistita in localStorage ─────────
   const [dashboardConfig, setDashboardConfig] = useState(() => {
@@ -77,6 +93,26 @@ export default function App() {
     setDashboardConfig(newConfig);
     try { localStorage.setItem('vpa_dashboard_config', JSON.stringify(newConfig)); } catch {}
   };
+
+  const handleOwnerTeamChange = useCallback((teamName) => {
+    const resolved = findStandingTeamName(standings, teamName) || teamName || '';
+    setOwnerTeamName(resolved);
+    try { localStorage.setItem('vpa_owner_team', resolved); } catch {}
+  }, [standings]);
+
+  useEffect(() => {
+    if (!standings.length) return;
+    const selected = findStandingTeamName(standings, ownerTeamName);
+    if (selected && selected === ownerTeamName) return;
+    const fromMatches = findStandingTeamName(
+      standings,
+      matches.find(m => m.metadata?.teamName)?.metadata?.teamName || ''
+    );
+    if (fromMatches) {
+      setOwnerTeamName(fromMatches);
+      try { localStorage.setItem('vpa_owner_team', fromMatches); } catch {}
+    }
+  }, [standings, matches, ownerTeamName]);
 
   // ─── Load data from Firestore when user logs in ──────────────────────────
   useEffect(() => {
@@ -445,6 +481,7 @@ export default function App() {
               matches={matches}
               calendar={calendar}
               standings={standings}
+              ownerTeamName={ownerTeamName}
               onUpload={handleFileUpload}
               onDelete={handleDeleteMatch}
               isLoading={isLoading}
@@ -462,6 +499,8 @@ export default function App() {
               onSelectPlayer={(p) => { setSelectedPlayer(p); setActiveTab('players'); }}
               dashboardConfig={dashboardConfig}
               onOpenGrafici={() => setActiveTab('grafici')}
+              ownerTeamName={ownerTeamName}
+              onOwnerTeamChange={handleOwnerTeamChange}
             />
           )}
 
