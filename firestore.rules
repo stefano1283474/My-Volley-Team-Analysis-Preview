@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(ownerUid) {
+      return isSignedIn() && request.auth.uid == ownerUid;
+    }
+
+    function isAllowedReader(ownerUid) {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && exists(/databases/$(database)/documents/volley_team_analysis_6_0_shared_access/$(ownerUid))
+        && get(/databases/$(database)/documents/volley_team_analysis_6_0_shared_access/$(ownerUid)).data.enabled == true
+        && request.auth.token.email.lower() in get(/databases/$(database)/documents/volley_team_analysis_6_0_shared_access/$(ownerUid)).data.allowedEmails;
+    }
+
+    match /volley_team_analysis_6_0/{ownerUid}/datasets/{docId} {
+      allow read: if isOwner(ownerUid) || isAllowedReader(ownerUid);
+      allow create, update, delete: if isOwner(ownerUid);
+    }
+
+    match /volley_team_analysis_6_0_shared_access/{ownerUid} {
+      allow read: if isOwner(ownerUid) || isAllowedReader(ownerUid);
+      allow create, update, delete: if isOwner(ownerUid);
+    }
+
+    match /volley_team_analysis_6_0_share_tokens/{token} {
+      allow read: if isSignedIn()
+        && resource.data.enabled == true
+        && (resource.data.ownerUid == request.auth.uid || isAllowedReader(resource.data.ownerUid));
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+  }
+}

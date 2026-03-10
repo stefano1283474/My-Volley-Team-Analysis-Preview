@@ -4,20 +4,25 @@
 // Storage: Firestore esclusivamente — nessun dato in locale
 // ============================================================================
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { parseMatchFile, parseCalendarCSV, computeStandings } from './utils/dataParser';
 import {
   reconstructOpponent, computeMatchWeight, computeFundamentalWeights,
   computeWeightedPlayerStats, computePlayerTrends, generateTrainingSuggestions,
   analyzeRallyChains, generateMatchReport, findOpponentStanding,
+  computeFundamentalBaselines,
 } from './utils/analyticsEngine';
-import { APP_NAME, APP_VERSION, DEFAULT_WEIGHTS, TEAM_MAP, FUNDAMENTALS, COLORS, SCALE_DESCRIPTIONS } from './utils/constants';
+import { APP_NAME, APP_VERSION, DEFAULT_WEIGHTS, DEFAULT_FNC_CONFIG, DEFAULT_PROFILE, TEAM_MAP, FUNDAMENTALS, COLORS, SCALE_DESCRIPTIONS } from './utils/constants';
 import {
   saveMatch,
   deleteMatchFromFirestore,
   loadAllMatches,
   saveCalendar,
   loadCalendar,
+  getOrCreateShareLink,
+  loadShareLinkForOwner,
+  updateShareAllowedEmails,
+  resolveSharedAccess,
 } from './utils/firestoreService';
 import { useAuth } from './context/AuthContext';
 
@@ -26,25 +31,28 @@ import ChartsExplorer, { DEFAULT_DASHBOARD_CONFIG } from './components/ChartsExp
 import MatchReport from './components/MatchReport';
 import PlayerCard from './components/PlayerCard';
 import WeightAdjuster from './components/WeightAdjuster';
+import ConfigPanel from './components/ConfigPanel';
 import DatasetManager from './components/DatasetManager';
 import TrainingSuggestions from './components/TrainingSuggestions';
 import TeamTrends from './components/TeamTrends';
 import RotationAnalysis from './components/RotationAnalysis';
+import AttackAnalysis from './components/AttackAnalysis';
 import LoginPage from './components/LoginPage';
 import Glossary from './components/Glossary';
 
 // ─── Navigation tabs ─────────────────────────────────────────────────────────
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard',    icon: '◉' },
-  { id: 'grafici',   label: 'Grafici',      icon: '📊' },
-  { id: 'matches',   label: 'Partite',      icon: '⚡' },
-  { id: 'players',   label: 'Giocatrici',   icon: '★' },
-  { id: 'trends',    label: 'Trend',        icon: '↗' },
-  { id: 'rotations', label: 'Rotazioni',    icon: '⟳' },
-  { id: 'training',  label: 'Allenamento',  icon: '⚙' },
-  { id: 'data',      label: 'Dati',         icon: '☰' },
-  { id: 'settings',  label: 'Pesi',         icon: '⚖' },
-  { id: 'glossary',  label: 'Glossario',    icon: '📖' },
+  { id: 'dashboard', label: 'Dashboard',       icon: '◉' },
+  { id: 'grafici',   label: 'Grafici',         icon: '📊' },
+  { id: 'matches',   label: 'Partite',         icon: '⚡' },
+  { id: 'players',   label: 'Giocatrici',      icon: '★' },
+  { id: 'trends',    label: 'Trend',           icon: '↗' },
+  { id: 'rotations', label: 'Rotazioni',       icon: '⟳' },
+  { id: 'attack',    label: 'Analisi attacco', icon: '⚔' },
+  { id: 'training',  label: 'Allenamento',     icon: '⚙' },
+  { id: 'data',      label: 'Dati',            icon: '☰' },
+  { id: 'config',    label: 'Config',          icon: '🔧' },
+  { id: 'glossary',  label: 'Glossario',       icon: '📖' },
 ];
 
 const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
@@ -62,6 +70,13 @@ function findStandingTeamName(standings, teamName) {
 
 export default function App() {
   const { user, authLoading, signOut } = useAuth();
+  const [shareToken] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('share') || '';
+    } catch {
+      return '';
+    }
+  });
 
   // ─── State ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab]         = useState('dashboard');
@@ -69,6 +84,85 @@ export default function App() {
   const [calendar, setCalendar]           = useState([]);
   const [standings, setStandings]         = useState([]);
   const [weights, setWeights]             = useState(DEFAULT_WEIGHTS);
+
+  // ── FNC & Profile state ──────────────────────────────────────────────────
+  const [fncConfig, setFncConfig] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vpa_fnc_config');
+      return saved ? { ...DEFAULT_FNC_CONFIG, ...JSON.parse(saved) } : { ...DEFAULT_FNC_CONFIG };
+    } catch { return { ...DEFAULT_FNC_CONFIG }; }
+  });
+
+  const [savedProfiles, setSavedProfiles] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vpa_saved_profiles');
+      const parsed = saved ? JSON.parse(saved) : [];
+      // always include DEFAULT_PROFILE as first item
+      if (!parsed.find(p => p.id === 'default')) {
+        return [DEFAULT_PROFILE, ...parsed];
+      }
+      return parsed;
+    } catch { return [DEFAULT_PROFILE]; }
+  });
+
+  const [activeProfileId, setActiveProfileId] = useState('default');
+
+  // Detect unsaved changes vs active profile
+  const hasUnsavedChanges = (() => {
+    const activeProfile = savedProfiles.find(p => p.id === activeProfileId);
+    if (!activeProfile) return false;
+    const wMatch = JSON.stringify(weights) === JSON.stringify(activeProfile.matchWeights);
+    const fMatch = JSON.stringify(fncConfig) === JSON.stringify(activeProfile.fncConfig);
+    return !wMatch || !fMatch;
+  })();
+
+  // Persist fncConfig to localStorage on every change
+  useEffect(() => {
+    try { localStorage.setItem('vpa_fnc_config', JSON.stringify(fncConfig)); } catch {}
+  }, [fncConfig]);
+
+  const handleFncConfigChange = useCallback((updater) => {
+    setFncConfig(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      return next;
+    });
+  }, []);
+
+  const handleProfileLoad = useCallback((profileId) => {
+    const profile = savedProfiles.find(p => p.id === profileId);
+    if (!profile) return;
+    setWeights({ ...profile.matchWeights });
+    setFncConfig({ ...profile.fncConfig });
+    setActiveProfileId(profileId);
+  }, [savedProfiles]);
+
+  const handleProfileSave = useCallback((name) => {
+    const id = `profile_${Date.now()}`;
+    const newProfile = { id, name, matchWeights: { ...weights }, fncConfig: { ...fncConfig } };
+    setSavedProfiles(prev => {
+      const updated = [...prev, newProfile];
+      try { localStorage.setItem('vpa_saved_profiles', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+    setActiveProfileId(id);
+  }, [weights, fncConfig]);
+
+  const handleProfileDelete = useCallback((profileId) => {
+    if (profileId === 'default') return;
+    setSavedProfiles(prev => {
+      const updated = prev.filter(p => p.id !== profileId);
+      try { localStorage.setItem('vpa_saved_profiles', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+    setActiveProfileId('default');
+    handleProfileLoad('default');
+  }, [handleProfileLoad]);
+
+  const handleProfileReset = useCallback(() => {
+    setWeights({ ...DEFAULT_WEIGHTS });
+    setFncConfig({ ...DEFAULT_FNC_CONFIG });
+    setActiveProfileId('default');
+  }, []);
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [isLoading, setIsLoading]         = useState(false);
@@ -76,6 +170,10 @@ export default function App() {
   const [errorMsg, setErrorMsg]           = useState('');
   const [dataLoaded, setDataLoaded]       = useState(false); // Firestore loaded once
   const [uploadProgress, setUploadProgress] = useState([]);
+  const [shareInfo, setShareInfo] = useState(null);
+  const [sharedAccess, setSharedAccess] = useState(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef(null);
   const [ownerTeamName, setOwnerTeamName] = useState(() => {
     try { return localStorage.getItem('vpa_owner_team') || ''; } catch { return ''; }
   });
@@ -93,6 +191,24 @@ export default function App() {
     setDashboardConfig(newConfig);
     try { localStorage.setItem('vpa_dashboard_config', JSON.stringify(newConfig)); } catch {}
   };
+
+  const isSharedMode = !!shareToken;
+  const canEditDataset = !!user && (!isSharedMode || !!sharedAccess?.isOwner);
+  const dataOwnerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
+  const shareUrl = shareInfo?.token
+    ? `${window.location.origin}${window.location.pathname}?share=${shareInfo.token}`
+    : '';
+
+  useEffect(() => {
+    const onDocClick = (event) => {
+      if (!userMenuRef.current) return;
+      if (!userMenuRef.current.contains(event.target)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
 
   const handleOwnerTeamChange = useCallback((teamName) => {
     const resolved = findStandingTeamName(standings, teamName) || teamName || '';
@@ -121,6 +237,8 @@ export default function App() {
       setMatches([]);
       setCalendar([]);
       setStandings([]);
+      setShareInfo(null);
+      setSharedAccess(null);
       setDataLoaded(false);
       return;
     }
@@ -131,9 +249,38 @@ export default function App() {
       setIsLoading(true);
       setLoadingMsg('Caricamento dati da Firestore…');
       try {
+        let ownerUid = user.uid;
+        if (isSharedMode) {
+          const access = await resolveSharedAccess(shareToken, user);
+          if (!access.granted) {
+            throw new Error('Non autorizzato ad accedere a questo dataset condiviso');
+          }
+          ownerUid = access.ownerUid;
+          setSharedAccess(access);
+          setShareInfo({
+            token: access.token,
+            ownerUid: access.ownerUid,
+            ownerEmail: access.ownerEmail,
+            allowedEmails: access.allowedEmails || [],
+          });
+        } else {
+          setSharedAccess({ isOwner: true, ownerUid: user.uid, token: '' });
+          try {
+            const existingShare = await loadShareLinkForOwner(user.uid);
+            if (existingShare) {
+              setShareInfo(existingShare);
+            } else {
+              setShareInfo(null);
+            }
+          } catch (shareErr) {
+            console.warn('[App] sharing metadata unavailable:', shareErr?.message || shareErr);
+            setShareInfo(null);
+          }
+        }
+
         const [loadedMatches, calData] = await Promise.all([
-          loadAllMatches(user.uid),
-          loadCalendar(user.uid),
+          loadAllMatches(ownerUid),
+          loadCalendar(ownerUid),
         ]);
 
         if (cancelled) return;
@@ -170,11 +317,42 @@ export default function App() {
 
     loadData();
     return () => { cancelled = true; };
+  }, [user, isSharedMode, shareToken]);
+
+  const handleCreateShareLink = useCallback(async () => {
+    if (!user) return;
+    const created = await getOrCreateShareLink(user.uid, user.email || '');
+    setShareInfo(created);
+    return created;
   }, [user]);
+
+  const handleUpdateShareReaders = useCallback(async (emails) => {
+    if (!user || !shareInfo?.token) return null;
+    const updated = await updateShareAllowedEmails(shareInfo.token, user.uid, emails);
+    setShareInfo(updated);
+    return updated;
+  }, [user, shareInfo]);
+
+  const handleShareOnWhatsApp = useCallback(async () => {
+    let url = shareUrl;
+    if (!url && canEditDataset) {
+      const created = await handleCreateShareLink();
+      if (created?.token) {
+        url = `${window.location.origin}${window.location.pathname}?share=${created.token}`;
+      }
+    }
+    if (!url) {
+      setErrorMsg('Link di condivisione non disponibile');
+      return;
+    }
+    const message = encodeURIComponent(`Ti condivido il dataset Volley Team Analysis (sola lettura): ${url}`);
+    window.open(`https://wa.me/?text=${message}`, '_blank', 'noopener,noreferrer');
+    setUserMenuOpen(false);
+  }, [shareUrl, canEditDataset, handleCreateShareLink]);
 
   // ─── File upload handler — parse + salva su Firestore ────────────────────
   const handleFileUpload = useCallback(async (files) => {
-    if (!user) return;
+    if (!user || !dataOwnerUid || !canEditDataset) return;
     setIsLoading(true);
     setErrorMsg('');
     const queuedFiles = files.map((file, index) => ({
@@ -233,7 +411,7 @@ export default function App() {
             progress: 85,
             detail: `Scrittura calendario e ${st.length} squadre`,
           });
-          await saveCalendar(user.uid, cal, st);
+          await saveCalendar(dataOwnerUid, cal, st);
 
           setCalendar(cal);
           setStandings(st);
@@ -260,7 +438,7 @@ export default function App() {
             progress: 80,
             detail: `vs ${match.metadata.opponent || 'N/D'} · ${match.metadata.date || 'Data N/D'}`,
           });
-          await saveMatch(user.uid, match);
+          await saveMatch(dataOwnerUid, match);
 
           setMatches(prev => {
             const exists = prev.find(m =>
@@ -299,20 +477,26 @@ export default function App() {
     setIsLoading(false);
     setLoadingMsg(`Upload completato: ${completedCount}/${files.length} file salvati`);
     setTimeout(() => setLoadingMsg(''), 5000);
-  }, [user]);
+  }, [user, dataOwnerUid, canEditDataset]);
 
   // ─── Delete match — rimuove da Firestore e dallo stato locale ─────────────
   const handleDeleteMatch = useCallback(async (matchId) => {
-    if (!user) return;
+    if (!user || !dataOwnerUid || !canEditDataset) return;
     try {
-      await deleteMatchFromFirestore(user.uid, matchId);
+      await deleteMatchFromFirestore(dataOwnerUid, matchId);
       setMatches(prev => prev.filter(m => m.id !== matchId));
       if (selectedMatch?.id === matchId) setSelectedMatch(null);
     } catch (err) {
       console.error('[App] deleteMatch error:', err);
       setErrorMsg(`Errore eliminazione: ${err.message}`);
     }
-  }, [user, selectedMatch]);
+  }, [user, selectedMatch, dataOwnerUid, canEditDataset]);
+
+  // ─── Fundamental baselines — depends only on match DATA (not on weights/FNC) ─
+  const baselines = useMemo(() => {
+    if (matches.length === 0) return null;
+    return computeFundamentalBaselines(matches);
+  }, [matches]);
 
   // ─── Computed analytics ──────────────────────────────────────────────────
   const analytics = useMemo(() => {
@@ -352,6 +536,8 @@ export default function App() {
     const suggestions = generateTrainingSuggestions(playerTrends, teamStats, roster);
 
     return { matchAnalytics, playerTrends, suggestions };
+  // fncConfig intentionally NOT in deps: FNC is applied at display-time in components,
+  // not recalculated in the engine (baselines are separate, weights trigger re-compute)
   }, [matches, standings, weights]);
 
   // ─── Roster da tutte le partite ──────────────────────────────────────────
@@ -410,6 +596,11 @@ export default function App() {
 
         {/* Centro: status messaggio */}
         <div className="flex-1 flex justify-center px-4">
+          {isSharedMode && (
+            <div className="text-[11px] text-sky-400">
+              Modalità sola lettura · Dataset condiviso
+            </div>
+          )}
           {isLoading && (
             <div className="flex items-center gap-2 text-xs text-amber-400">
               <div className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
@@ -437,13 +628,31 @@ export default function App() {
             <p className="text-xs font-medium text-gray-300">{user.displayName}</p>
             <p className="text-[10px] text-gray-600">Firebase · Google</p>
           </div>
-          <button
-            onClick={signOut}
-            className="text-[11px] text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-white/5"
-            title="Disconnetti"
-          >
-            Esci
-          </button>
+          <div className="relative" ref={userMenuRef}>
+            <button
+              onClick={() => setUserMenuOpen(v => !v)}
+              className="text-[11px] text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-white/5"
+              title="Menu utente"
+            >
+              ⋮
+            </button>
+            {userMenuOpen && (
+              <div className="absolute right-0 top-8 w-52 rounded-lg border border-white/10 bg-slate-900/95 shadow-xl backdrop-blur-sm overflow-hidden">
+                <button
+                  onClick={handleShareOnWhatsApp}
+                  className="w-full text-left px-3 py-2 text-xs text-green-300 hover:bg-green-500/10 transition-colors"
+                >
+                  Condividi link su WhatsApp
+                </button>
+                <button
+                  onClick={signOut}
+                  className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/5 transition-colors border-t border-white/5"
+                >
+                  Esci
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -482,6 +691,12 @@ export default function App() {
               calendar={calendar}
               standings={standings}
               ownerTeamName={ownerTeamName}
+              readOnly={!canEditDataset}
+              isSharedMode={isSharedMode}
+              shareInfo={shareInfo}
+              shareUrl={shareUrl}
+              onCreateShareLink={handleCreateShareLink}
+              onUpdateShareReaders={handleUpdateShareReaders}
               onUpload={handleFileUpload}
               onDelete={handleDeleteMatch}
               isLoading={isLoading}
@@ -495,6 +710,8 @@ export default function App() {
               matches={matches}
               standings={standings}
               weights={weights}
+              fncConfig={fncConfig}
+              baselines={baselines}
               onSelectMatch={(m) => { setSelectedMatch(m); setActiveTab('matches'); }}
               onSelectPlayer={(p) => { setSelectedPlayer(p); setActiveTab('players'); }}
               dashboardConfig={dashboardConfig}
@@ -533,6 +750,8 @@ export default function App() {
               matches={matches}
               selectedPlayer={selectedPlayer}
               onSelectPlayer={setSelectedPlayer}
+              fncConfig={fncConfig}
+              baselines={baselines}
             />
           )}
 
@@ -552,20 +771,38 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'attack' && (
+            <AttackAnalysis
+              analytics={analytics}
+              matches={matches}
+              allPlayers={allPlayers}
+            />
+          )}
+
           {activeTab === 'training' && (
             <TrainingSuggestions
               analytics={analytics}
               matches={matches}
+              readOnly={!canEditDataset}
+              datasetOwnerUid={dataOwnerUid}
             />
           )}
 
-          {activeTab === 'settings' && (
-            <WeightAdjuster
+          {activeTab === 'config' && (
+            <ConfigPanel
               weights={weights}
               onWeightsChange={setWeights}
+              fncConfig={fncConfig}
+              onFncConfigChange={handleFncConfigChange}
               analytics={analytics}
-              matches={matches}
-              standings={standings}
+              baselines={baselines}
+              savedProfiles={savedProfiles}
+              activeProfileId={activeProfileId}
+              onProfileLoad={handleProfileLoad}
+              onProfileSave={handleProfileSave}
+              onProfileDelete={handleProfileDelete}
+              onProfileReset={handleProfileReset}
+              hasUnsavedChanges={hasUnsavedChanges}
             />
           )}
 

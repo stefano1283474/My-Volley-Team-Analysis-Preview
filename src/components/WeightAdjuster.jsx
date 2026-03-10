@@ -1,4 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell,
+  LineChart, Line, Legend,
+} from 'recharts';
 import { DEFAULT_WEIGHTS } from '../utils/constants';
 
 const WEIGHT_LABELS = {
@@ -18,11 +22,38 @@ export default function WeightAdjuster({ weights, onWeightsChange, analytics, ma
     onWeightsChange(prev => ({ ...prev, [key]: value }));
   };
 
-  // Show impact preview if analytics available
-  const matchPreviews = analytics?.matchAnalytics?.slice(0, 3) || [];
+  const chartData = useMemo(() => {
+    const rows = analytics?.matchAnalytics || [];
+    const fundamentals = ['attack', 'serve', 'reception', 'defense', 'block'];
+    return [...rows]
+      .sort((a, b) => (a.match.metadata?.date || '').localeCompare(b.match.metadata?.date || ''))
+      .map(ma => {
+        const rawValues = fundamentals
+          .map(f => ma.match.riepilogo?.team?.[f]?.efficacy || 0)
+          .filter(v => v > 0);
+        const rawTeam = rawValues.length > 0
+          ? (rawValues.reduce((s, v) => s + v, 0) / rawValues.length) * 100
+          : 0;
+        const weight = ma.matchWeight?.final || 1;
+        return {
+          id: ma.match.id,
+          opponent: (ma.match.metadata?.opponent || 'N/D').substring(0, 14),
+          date: ma.match.metadata?.date || '',
+          weight,
+          rawTeam: +rawTeam.toFixed(1),
+          weightedTeam: +(rawTeam * weight).toFixed(1),
+        };
+      });
+  }, [analytics]);
+
+  const getWeightColor = (weight) => {
+    const ratio = Math.max(0, Math.min(1, (weight - 0.5) / 1));
+    const hue = (1 - ratio) * 120;
+    return `hsl(${hue}, 82%, 48%)`;
+  };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-white">Regolazione Pesi</h2>
@@ -38,96 +69,144 @@ export default function WeightAdjuster({ weights, onWeightsChange, analytics, ma
         </button>
       </div>
 
-      {/* Weight sliders */}
-      <div className="glass-card p-6 space-y-6">
-        {Object.entries(WEIGHT_LABELS).map(([key, meta]) => {
-          const val = weights[key] || 0;
-          return (
-            <div key={key}>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-sm text-gray-200 font-medium">{meta.label}</label>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-amber-400">±{(val * 100).toFixed(0)}%</span>
-                  <span className="text-[10px] text-gray-500">max</span>
-                </div>
-              </div>
-              <p className="text-[10px] text-gray-500 mb-2">{meta.desc}</p>
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] text-gray-600 w-8">0%</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="0.5"
-                  step="0.01"
-                  value={val}
-                  onChange={(e) => handleSliderChange(key, parseFloat(e.target.value))}
-                  className="flex-1"
-                />
-                <span className="text-[10px] text-gray-600 w-8">50%</span>
+      <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_1fr] gap-4">
+        {chartData.length > 0 && (
+          <div className="glass-card p-4 space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-300">
+                Incidenza Pesi per Partita (live)
+              </h3>
+              <p className="text-[10px] text-gray-500">
+                Verde = peso più basso, rosso = peso più alto.
+              </p>
+            </div>
+            <div className="h-40">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} margin={{ top: 6, right: 8, left: 0, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis
+                    dataKey="opponent"
+                    tick={{ fill: '#6b7280', fontSize: 9 }}
+                    angle={-18}
+                    textAnchor="end"
+                    interval={0}
+                    height={36}
+                  />
+                  <YAxis
+                    domain={[0.5, 1.5]}
+                    tick={{ fill: '#6b7280', fontSize: 9 }}
+                    tickFormatter={(v) => v.toFixed(2)}
+                    width={30}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'rgba(17,24,39,0.95)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 8,
+                      fontSize: 11,
+                    }}
+                    formatter={(value) => [Number(value).toFixed(3), 'Peso']}
+                    labelFormatter={(label, payload) => {
+                      const date = payload?.[0]?.payload?.date;
+                      return date ? `${label} · ${date}` : label;
+                    }}
+                  />
+                  <ReferenceLine y={1} stroke="rgba(245,158,11,0.7)" strokeDasharray="4 3" />
+                  <Bar dataKey="weight" radius={[4, 4, 0, 0]}>
+                    {chartData.map((entry) => (
+                      <Cell key={entry.id} fill={getWeightColor(entry.weight)} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div>
+              <p className="text-[10px] text-gray-500 mb-1">
+                Scostamento performance squadra: grezzo vs pesato
+              </p>
+              <div className="h-32">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 6, right: 8, left: 0, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis dataKey="opponent" hide />
+                    <YAxis tick={{ fill: '#6b7280', fontSize: 9 }} tickFormatter={(v) => `${v.toFixed(0)}%`} width={34} />
+                    <Tooltip
+                      contentStyle={{
+                        background: 'rgba(17,24,39,0.95)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 8,
+                        fontSize: 11,
+                      }}
+                      formatter={(value, name) => [`${Number(value).toFixed(1)}%`, name]}
+                      labelFormatter={(label, payload) => {
+                        const date = payload?.[0]?.payload?.date;
+                        return date ? `${label} · ${date}` : label;
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                    <Line
+                      type="monotone"
+                      dataKey="rawTeam"
+                      name="Team grezzo"
+                      stroke="#60a5fa"
+                      strokeWidth={2}
+                      dot={{ r: 2 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="weightedTeam"
+                      name="Team pesato"
+                      stroke="#f97316"
+                      strokeWidth={2}
+                      dot={{ r: 2 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
             </div>
-          );
-        })}
-
-        {/* Total */}
-        <div className="pt-4 border-t border-white/5">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-300">Escursione Massima Teorica</span>
-            <span className={`text-sm font-mono font-bold ${totalWeight > 0.6 ? 'text-amber-400' : 'text-green-400'}`}>
-              ±{(totalWeight * 100).toFixed(0)}%
-            </span>
           </div>
-          <p className="text-[10px] text-gray-500 mt-1">
-            In pratica lo scostamento tipico sarà ±{(totalWeight * 50).toFixed(0)}% perché è raro che tutti i fattori siano al massimo contemporaneamente.
-          </p>
+        )}
+
+        <div className="glass-card p-4 space-y-3">
+          {Object.entries(WEIGHT_LABELS).map(([key, meta]) => {
+            const val = weights[key] || 0;
+            return (
+              <div key={key}>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-sm text-gray-200 font-medium">{meta.label}</label>
+                  <span className="text-[11px] font-mono text-amber-400">±{(val * 100).toFixed(0)}%</span>
+                </div>
+                <p className="text-[10px] text-gray-500 mb-1 hidden 2xl:block">{meta.desc}</p>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] text-gray-600 w-7">0%</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="0.5"
+                    step="0.01"
+                    value={val}
+                    onChange={(e) => handleSliderChange(key, parseFloat(e.target.value))}
+                    className="flex-1"
+                  />
+                  <span className="text-[9px] text-gray-600 w-7 text-right">50%</span>
+                </div>
+              </div>
+            );
+          })}
+
+          <div className="pt-2 border-t border-white/5">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-300">Escursione Massima Teorica</span>
+              <span className={`text-sm font-mono font-bold ${totalWeight > 0.6 ? 'text-amber-400' : 'text-green-400'}`}>
+                ±{(totalWeight * 100).toFixed(0)}%
+              </span>
+            </div>
+            <p className="text-[10px] text-gray-500 mt-1">
+              Scostamento tipico atteso ±{(totalWeight * 50).toFixed(0)}%.
+            </p>
+          </div>
         </div>
       </div>
-
-      {/* Live Preview */}
-      {matchPreviews.length > 0 && (
-        <div className="glass-card p-5">
-          <h3 className="text-sm font-semibold text-gray-300 mb-3">
-            Anteprima Impatto sui Pesi
-          </h3>
-          <p className="text-[10px] text-gray-500 mb-3">
-            Come cambierebbe il peso delle ultime partite con questi parametri.
-          </p>
-          <div className="space-y-2">
-            {matchPreviews.map(ma => {
-              const m = ma.match;
-              const setsWon = (m.sets || []).filter(s => s.won).length;
-              const setsLost = (m.sets || []).filter(s => !s.won).length;
-              return (
-                <div key={m.id} className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02]">
-                  <div className="flex items-center gap-3">
-                    <span className={`text-xs font-mono ${setsWon > setsLost ? 'text-green-400' : 'text-red-400'}`}>
-                      {setsWon}-{setsLost}
-                    </span>
-                    <span className="text-sm text-gray-200">vs {m.metadata.opponent}</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-center">
-                      <p className="text-[9px] text-gray-500">Peso</p>
-                      <p className="text-sm font-mono text-amber-400">{ma.matchWeight.final.toFixed(3)}</p>
-                    </div>
-                    <div className="w-20 h-2 bg-white/5 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${((ma.matchWeight.final - 0.5) / 1.0) * 100}%`,
-                          background: ma.matchWeight.final > 1
-                            ? 'linear-gradient(90deg, #a3e635, #10b981)'
-                            : 'linear-gradient(90deg, #fb7185, #f59e0b)',
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Explanation */}
       <div className="glass-card p-5">

@@ -3,7 +3,7 @@
 // Galleria completa dei grafici con pin per dashboard personalizzata
 // ============================================================================
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -24,6 +24,13 @@ const FUND_ICONS = {
 const FUND_COLORS = {
   attack: '#f43f5e', serve: '#8b5cf6', reception: '#0ea5e9',
   defense: '#10b981', block: '#f59e0b',
+};
+const FUND_TOKEN_MAP = {
+  attack: 'a',
+  serve: 'b',
+  reception: 'r',
+  defense: 'd',
+  block: 'm',
 };
 const ROLE_GROUPS = [
   { id: 'all', label: 'Tutti' },
@@ -355,6 +362,7 @@ function ChartRenderer({ chartId, props }) {
           fund={fund}
           playerTrends={playerTrends}
           rosterRoleMap={rosterRoleMap}
+          matchAnalytics={sortedMA}
         />
       );
     }
@@ -491,29 +499,109 @@ function ExTrendSection({ sortedMA, teamTrendData, fundTrendData, playerList, pl
 
 // ─── New: Player Ranking Chart ────────────────────────────────────────────────
 
-function PlayerRankingChart({ fund, playerTrends, rosterRoleMap }) {
-  const [metric,     setMetric]     = useState('raw');
+function PlayerRankingChart({ fund, playerTrends, rosterRoleMap, matchAnalytics = [] }) {
+  const [metric,     setMetric]     = useState('avg');
   const [roleFilter, setRoleFilter] = useState('all');
+  const [selectedFund, setSelectedFund] = useState(fund || 'global');
+  const [selectedBar, setSelectedBar] = useState(null);
+
+  useEffect(() => {
+    setSelectedFund(fund || 'global');
+  }, [fund]);
+
+  const touchAggregation = useMemo(() => {
+    const activeFunds = selectedFund === 'global' ? FUNDS : [selectedFund];
+    const activeTokens = new Set(activeFunds.map(f => FUND_TOKEN_MAP[f]));
+    const byPlayer = {};
+    let teamWeightedTotal = 0;
+
+    for (const ma of matchAnalytics || []) {
+      const match = ma?.match;
+      const weightMatch = ma?.matchWeight?.final || 1;
+      const fundWeights = ma?.fundWeights || {};
+      const opponent = match?.metadata?.opponent || 'Avversario N/D';
+      const date = match?.metadata?.date || '';
+
+      for (const rally of match?.rallies || []) {
+        const set = rally?.set || 0;
+        const score = `${rally?.ourScore ?? 0}-${rally?.theirScore ?? 0}`;
+        for (const q of rally?.quartine || []) {
+          if (q?.type !== 'action') continue;
+          const token = (q.fundamental || '').toLowerCase();
+          if (!activeTokens.has(token)) continue;
+          const fundKey = Object.keys(FUND_TOKEN_MAP).find(k => FUND_TOKEN_MAP[k] === token);
+          if (!fundKey) continue;
+          const baseValue = Number(q.value || 0);
+          const fundW = fundWeights[token] || 1;
+          const weightedValue = baseValue * weightMatch * fundW;
+          const pNum = String(q.player || '');
+          if (!pNum) continue;
+          if (!byPlayer[pNum]) {
+            byPlayer[pNum] = { weightedTotal: 0, touches: [] };
+          }
+          byPlayer[pNum].weightedTotal += weightedValue;
+          byPlayer[pNum].touches.push({
+            opponent,
+            date,
+            set,
+            score,
+            fundamental: fundKey,
+            rawValue: baseValue,
+            matchWeight: weightMatch,
+            fundWeight: fundW,
+            weightedValue,
+          });
+          teamWeightedTotal += weightedValue;
+        }
+      }
+    }
+
+    return { byPlayer, teamWeightedTotal };
+  }, [matchAnalytics, selectedFund]);
 
   const rankingData = useMemo(() => {
     if (!playerTrends) return [];
+    const formatMatchLabel = (m) => {
+      const opp = (m?.opponent || 'Avv. N/D').toString();
+      const date = (m?.date || '').toString();
+      return date ? `${opp} · ${date}` : opp;
+    };
     return Object.values(playerTrends)
       .filter(p => p.matches.length >= 1)
       .map(p => {
         const role = rosterRoleMap?.[p.number]?.roleCode || '';
         let raw = 0, weighted = 0;
+        let metricBreakdown = [];
 
-        if (fund === 'global') {
+        if (selectedFund === 'global') {
           const tVals = Object.values(p.trends);
           if (tVals.length === 0) return null;
           raw      = tVals.reduce((s, t) => s + (t.rawAvg      || 0), 0) / tVals.length * 100;
           weighted = tVals.reduce((s, t) => s + (t.weightedAvg || 0), 0) / tVals.length * 100;
+          metricBreakdown = FUNDS
+            .map(f => ({
+              label: FUND_LABELS[f],
+              raw: ((p.trends[f]?.rawAvg || 0) * 100),
+              weighted: ((p.trends[f]?.weightedAvg || 0) * 100),
+            }))
+            .filter(x => x.raw > 0 || x.weighted > 0);
         } else {
-          const t = p.trends[fund];
+          const t = p.trends[selectedFund];
           if (!t) return null;
           raw      = (t.rawAvg      || 0) * 100;
           weighted = (t.weightedAvg || 0) * 100;
+          metricBreakdown = (t.matchLabels || []).map((m, i) => ({
+            label: formatMatchLabel(m),
+            raw: ((t.raw?.[i] || 0) * 100),
+            weighted: ((t.weighted?.[i] || 0) * 100),
+          }));
         }
+        const pAgg = touchAggregation.byPlayer[String(p.number)] || { weightedTotal: 0, touches: [] };
+        const teamTotal = touchAggregation.teamWeightedTotal || 0;
+        const avg = teamTotal > 0 ? (pAgg.weightedTotal / teamTotal) * 100 : 0;
+        const contribMatches = selectedFund === 'global'
+          ? [...new Set((p.matches || []).map(formatMatchLabel))]
+          : [...new Set((p.trends[selectedFund]?.matchLabels || []).map(formatMatchLabel))];
 
         return {
           name:     (p.name || '').substring(0, 16),
@@ -521,18 +609,41 @@ function PlayerRankingChart({ fund, playerTrends, rosterRoleMap }) {
           role,
           raw:      +raw.toFixed(1),
           weighted: +weighted.toFixed(1),
+          avg:      +avg.toFixed(1),
           matches:  p.matches.length,
+          contribMatches,
+          weightedTotal: pAgg.weightedTotal,
+          teamWeightedTotal: teamTotal,
+          touches: pAgg.touches,
+          metricBreakdown,
         };
       })
       .filter(Boolean)
-      .filter(p => (metric === 'raw' ? p.raw : p.weighted) > 0)
+      .filter(p => (metric === 'raw' ? p.raw : metric === 'weighted' ? p.weighted : p.avg) > 0)
       .filter(p => roleFilter === 'all' || p.role.startsWith(roleFilter))
-      .sort((a, b) => metric === 'raw' ? b.raw - a.raw : b.weighted - a.weighted)
+      .sort((a, b) =>
+        metric === 'raw'
+          ? b.raw - a.raw
+          : metric === 'weighted'
+            ? b.weighted - a.weighted
+            : b.avg - a.avg
+      )
       .slice(0, 12);
-  }, [playerTrends, fund, metric, roleFilter, rosterRoleMap]);
+  }, [playerTrends, selectedFund, metric, roleFilter, rosterRoleMap, touchAggregation]);
 
-  const barColor    = fund === 'global' ? '#f59e0b' : (FUND_COLORS[fund] || '#38bdf8');
-  const metricLabel = metric === 'raw' ? 'Efficacia %' : 'Efficienza (Contesto) %';
+  const barColor = selectedFund === 'global' ? '#f59e0b' : (FUND_COLORS[selectedFund] || '#38bdf8');
+  const metricLabel = metric === 'raw'
+    ? 'Efficacia %'
+    : metric === 'weighted'
+      ? 'Efficienza (Contesto) %'
+      : 'Valore medio %';
+  const metricValue = (row) => (
+    metric === 'raw'
+      ? row.raw
+      : metric === 'weighted'
+        ? row.weighted
+        : row.avg
+  );
 
   return (
     <div className="space-y-3">
@@ -548,6 +659,7 @@ function PlayerRankingChart({ fund, playerTrends, rosterRoleMap }) {
           {[
             { id: 'raw',      label: 'Efficacia',   icon: '📊' },
             { id: 'weighted', label: 'Efficienza',  icon: '⚖'  },
+            { id: 'avg',      label: 'Valore medio %', icon: '∿' },
           ].map(m => (
             <button
               key={m.id}
@@ -609,16 +721,36 @@ function PlayerRankingChart({ fund, playerTrends, rosterRoleMap }) {
               tick={{ fill: '#9ca3af', fontSize: 10 }}
             />
             <Tooltip
-              contentStyle={CHART_TOOLTIP_STYLE}
-              formatter={(val, _, entry) => [
-                `${val.toFixed(1)}%  ·  ${entry.payload.matches} partite`,
-                metricLabel,
-              ]}
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const row = payload[0].payload;
+                const list = row.contribMatches || [];
+                return (
+                  <div
+                    className="rounded-lg border border-white/10 p-3 text-[11px]"
+                    style={{ background: 'rgba(17,24,39,0.96)', maxWidth: 300 }}
+                  >
+                    <div className="text-white font-semibold mb-1">{row.name}</div>
+                    <div className="text-gray-300 mb-2">
+                      {metricLabel}: <span className="text-amber-300">{metricValue(row).toFixed(1)}%</span> · {list.length} partite
+                    </div>
+                    <div className="max-h-40 overflow-y-auto space-y-1">
+                      {list.map((m, i) => (
+                        <div key={`${row.number}_${i}`} className="text-gray-400">• {m}</div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }}
             />
             <Bar
               dataKey={metric}
               fill={barColor}
               radius={[0, 4, 4, 0]}
+              onClick={(entry) => {
+                const row = entry?.payload || null;
+                if (row) setSelectedBar(row);
+              }}
               label={{
                 position: 'right',
                 fill: '#6b7280',
@@ -628,6 +760,122 @@ function PlayerRankingChart({ fund, playerTrends, rosterRoleMap }) {
             />
           </BarChart>
         </ResponsiveContainer>
+      )}
+
+      <div className="flex flex-wrap gap-1 pt-1">
+        <button
+          onClick={() => setSelectedFund('global')}
+          className={`text-[10px] px-2 py-0.5 rounded-lg border transition-all ${
+            selectedFund === 'global'
+              ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+              : 'text-gray-500 border-white/[0.08] hover:text-gray-300'
+          }`}
+        >
+          Tutti
+        </button>
+        {FUNDS.map(f => (
+          <button
+            key={f}
+            onClick={() => setSelectedFund(f)}
+            className={`text-[10px] px-2 py-0.5 rounded-lg border transition-all ${
+              selectedFund === f
+                ? 'font-medium'
+                : ''
+            }`}
+            style={{
+              borderColor: selectedFund === f ? `${FUND_COLORS[f]}80` : 'rgba(255,255,255,0.08)',
+              color: selectedFund === f ? FUND_COLORS[f] : '#6b7280',
+              background: selectedFund === f ? `${FUND_COLORS[f]}22` : 'transparent',
+            }}
+          >
+            {FUND_ICONS[f]} {FUND_LABELS[f]}
+          </button>
+        ))}
+      </div>
+
+      {selectedBar && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-xl border border-white/10 bg-slate-900/95">
+            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+              <div>
+                <div className="text-white font-semibold">{selectedBar.name}</div>
+                <div className="text-xs text-gray-400">
+                  {metricLabel}: <span className="text-amber-300">{metricValue(selectedBar).toFixed(1)}%</span> · Tocchi {selectedBar.touches?.length || 0}
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedBar(null)}
+                className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 text-gray-300"
+              >
+                Chiudi
+              </button>
+            </div>
+            <div className="overflow-auto max-h-[70vh]">
+              <div className="px-4 py-3 border-b border-white/10">
+                <div className="text-[11px] text-gray-300 mb-2">
+                  {metric === 'raw' && 'Calcolo Efficacia %: media semplice delle efficacie per partita filtrata.'}
+                  {metric === 'weighted' && 'Calcolo Efficienza (Contesto) %: media semplice delle efficienze contestualizzate per partita filtrata.'}
+                  {metric === 'avg' && 'Calcolo Valore medio %: somma valori pesati giocatrice / somma valori pesati squadra (filtri attivi).'}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className="text-gray-400 border-b border-white/10">
+                        <th className="text-left py-1.5 px-2">{selectedFund === 'global' ? 'Fondamentale' : 'Partita'}</th>
+                        <th className="text-center py-1.5 px-2">Efficacia %</th>
+                        <th className="text-center py-1.5 px-2">Efficienza %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(selectedBar.metricBreakdown || []).map((b, i) => (
+                        <tr key={`${selectedBar.number}_break_${i}`} className="border-b border-white/[0.04]">
+                          <td className="py-1.5 px-2 text-gray-300">{b.label}</td>
+                          <td className="py-1.5 px-2 text-center text-cyan-300">{b.raw.toFixed(1)}%</td>
+                          <td className="py-1.5 px-2 text-center text-violet-300">{b.weighted.toFixed(1)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-400 border-b border-white/10">
+                    <th className="text-left px-3 py-2">Partita</th>
+                    <th className="text-center px-2 py-2">Set</th>
+                    <th className="text-center px-2 py-2">Punteggio</th>
+                    <th className="text-center px-2 py-2">Fond.</th>
+                    <th className="text-center px-2 py-2">Valore</th>
+                    <th className="text-center px-2 py-2">x Peso</th>
+                    <th className="text-center px-2 py-2">Valore pesato</th>
+                    <th className="text-center px-2 py-2">% su squadra</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(selectedBar.touches || []).map((t, idx) => {
+                    const pct = selectedBar.teamWeightedTotal > 0
+                      ? (t.weightedValue / selectedBar.teamWeightedTotal) * 100
+                      : 0;
+                    return (
+                      <tr key={`${selectedBar.number}_${idx}`} className="border-b border-white/[0.04]">
+                        <td className="px-3 py-1.5 text-gray-300">{t.opponent} · {t.date}</td>
+                        <td className="px-2 py-1.5 text-center text-gray-300">{t.set || '-'}</td>
+                        <td className="px-2 py-1.5 text-center text-gray-400">{t.score}</td>
+                        <td className="px-2 py-1.5 text-center" style={{ color: FUND_COLORS[t.fundamental] || '#9ca3af' }}>
+                          {FUND_LABELS[t.fundamental] || t.fundamental}
+                        </td>
+                        <td className="px-2 py-1.5 text-center text-white font-semibold">{t.rawValue}</td>
+                        <td className="px-2 py-1.5 text-center text-gray-400">{(t.matchWeight * t.fundWeight).toFixed(2)}</td>
+                        <td className="px-2 py-1.5 text-center text-cyan-300">{t.weightedValue.toFixed(2)}</td>
+                        <td className="px-2 py-1.5 text-center text-amber-300">{pct.toFixed(2)}%</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

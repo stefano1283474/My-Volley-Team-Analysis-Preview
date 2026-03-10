@@ -3,8 +3,9 @@ import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend,
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar } from 'recharts';
 import { COLORS } from '../utils/constants';
+import { applyFNCToEfficacy } from '../utils/analyticsEngine';
 
-export default function PlayerCard({ analytics, allPlayers, matches, selectedPlayer, onSelectPlayer }) {
+export default function PlayerCard({ analytics, allPlayers, matches, selectedPlayer, onSelectPlayer, fncConfig, baselines }) {
   const [selectedFund, setSelectedFund] = useState('attack');
 
   if (!analytics) {
@@ -37,14 +38,25 @@ export default function PlayerCard({ analytics, allPlayers, matches, selectedPla
     );
   }
 
-  // Radar data: average raw vs weighted per fundamental
-  const radarData = [
-    { fund: 'Attacco', raw: Math.max(0, (currentPlayer.trends.attack?.rawAvg || 0) * 100), weighted: Math.max(0, (currentPlayer.trends.attack?.weightedAvg || 0) * 100) },
-    { fund: 'Battuta', raw: Math.max(0, (currentPlayer.trends.serve?.rawAvg || 0) * 100), weighted: Math.max(0, (currentPlayer.trends.serve?.weightedAvg || 0) * 100) },
-    { fund: 'Ricezione', raw: Math.max(0, (currentPlayer.trends.reception?.rawAvg || 0) * 100), weighted: Math.max(0, (currentPlayer.trends.reception?.weightedAvg || 0) * 100) },
-    { fund: 'Difesa', raw: Math.max(0, (currentPlayer.trends.defense?.rawAvg || 0) * 100), weighted: Math.max(0, (currentPlayer.trends.defense?.weightedAvg || 0) * 100) },
-    { fund: 'Muro', raw: Math.max(0, (currentPlayer.trends.block?.rawAvg || 0) * 100), weighted: Math.max(0, (currentPlayer.trends.block?.weightedAvg || 0) * 100) },
+  // Radar data: average raw vs weighted per fundamental, with optional FNC normalization
+  const RADAR_FUNDS = [
+    { key: 'attack',    label: 'Attacco' },
+    { key: 'serve',     label: 'Battuta' },
+    { key: 'reception', label: 'Ricezione' },
+    { key: 'defense',   label: 'Difesa' },
+    { key: 'block',     label: 'Muro' },
   ];
+  const radarData = RADAR_FUNDS.map(({ key, label }) => {
+    const rawAvg = currentPlayer.trends[key]?.rawAvg || 0;
+    const weiAvg = currentPlayer.trends[key]?.weightedAvg || 0;
+    const rawFnc = fncConfig && baselines ? applyFNCToEfficacy(rawAvg, key, baselines, fncConfig) : rawAvg;
+    const weiFnc = fncConfig && baselines ? applyFNCToEfficacy(weiAvg, key, baselines, fncConfig) : weiAvg;
+    return {
+      fund: label,
+      raw: Math.max(0, rawFnc * 100),
+      weighted: Math.max(0, weiFnc * 100),
+    };
+  });
 
   // Trend line data — null quando il giocatore non ha azioni in quel fondamentale
   // (null crea un gap nella linea senza connettere i punti non giocati)
@@ -137,9 +149,16 @@ export default function PlayerCard({ analytics, allPlayers, matches, selectedPla
       {/* Radar + Stats */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="glass-card p-5">
-          <h3 className="text-sm font-semibold text-gray-300 mb-3">
-            Profilo: <span className="text-sky-400">Grezzo</span> vs <span className="text-amber-400">Rielaborato</span>
-          </h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-300">
+              Profilo: <span className="text-sky-400">Grezzo</span> vs <span className="text-amber-400">Rielaborato</span>
+            </h3>
+            {fncConfig?.enabled && (
+              <span className="text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                📐 FNC {(fncConfig.weight * 100).toFixed(0)}%
+              </span>
+            )}
+          </div>
           <ResponsiveContainer width="100%" height={280}>
             <RadarChart data={radarData} outerRadius="72%">
               <PolarGrid stroke="rgba(255,255,255,0.08)" />

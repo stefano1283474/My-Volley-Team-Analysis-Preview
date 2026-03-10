@@ -102,6 +102,23 @@ export const DEFAULT_WEIGHTS = {
   chainContext: 0.25,        // How much rally chain context matters
 };
 
+// Default Fundamental Normalization Coefficient (FNC) config
+// The FNC equalizes the intrinsically different scales of each fundamental,
+// so Reception/Defense (high natural range) can be compared with Attack/Serve/Block (low natural range).
+export const DEFAULT_FNC_CONFIG = {
+  enabled: false,   // off by default — does not change existing behaviour
+  weight: 0.6,      // blend factor: 0 = raw scale, 1 = fully normalized scale
+  mode: 'relative', // 'relative' = rescale to same mean | 'zscore' = z-score normalization
+};
+
+// Default profile (always present, not deletable)
+export const DEFAULT_PROFILE = {
+  id: 'default',
+  name: 'Default',
+  matchWeights: { ...DEFAULT_WEIGHTS },
+  fncConfig: { ...DEFAULT_FNC_CONFIG },
+};
+
 // Player roles
 export const ROLES = {
   P1: 'Palleggiatrice 1',

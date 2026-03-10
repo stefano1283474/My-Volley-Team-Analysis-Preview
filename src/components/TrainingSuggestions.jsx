@@ -63,7 +63,7 @@ function suggKey(s) {
 
 // ─── Main component ──────────────────────────────────────────────────────────
 
-export default function TrainingSuggestions({ analytics, matches }) {
+export default function TrainingSuggestions({ analytics, matches, readOnly = false, datasetOwnerUid = '' }) {
   const { user } = useAuth();
 
   const [activeView,    setActiveView]    = useState('all');
@@ -75,24 +75,25 @@ export default function TrainingSuggestions({ analytics, matches }) {
 
   // ─── Load reviews from Firestore on mount ─────────────────────────────────
   useEffect(() => {
-    if (!user) return;
-    loadSuggestionReviews(user.uid)
+    if (!user || !datasetOwnerUid) return;
+    loadSuggestionReviews(datasetOwnerUid)
       .then(data => { setReviews(data); setReviewsLoaded(true); })
       .catch(err => { console.error('[TrainingSuggestions] loadReviews:', err); setReviewsLoaded(true); });
-  }, [user]);
+  }, [user, datasetOwnerUid]);
 
   // ─── Persist reviews to Firestore (debounced 1.5s) ────────────────────────
   const persistReviews = useCallback((nextReviews) => {
-    if (!user || !reviewsLoaded) return;
+    if (!user || !reviewsLoaded || readOnly || !datasetOwnerUid) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveSuggestionReviews(user.uid, nextReviews)
+      saveSuggestionReviews(datasetOwnerUid, nextReviews)
         .catch(err => console.error('[TrainingSuggestions] saveReviews:', err));
     }, 1500);
-  }, [user, reviewsLoaded]);
+  }, [user, reviewsLoaded, readOnly, datasetOwnerUid]);
 
   // ─── Toggle review status (visto / da_valutare / ignorato) ───────────────
   const toggleReview = useCallback((key, status) => {
+    if (readOnly) return;
     setReviews(prev => {
       const current = prev[key];
       const next = current === status ? undefined : status;
@@ -101,7 +102,7 @@ export default function TrainingSuggestions({ analytics, matches }) {
       persistReviews(updated);
       return updated;
     });
-  }, [persistReviews]);
+  }, [persistReviews, readOnly]);
 
   // ─── Empty state ─────────────────────────────────────────────────────────
   if (!analytics || matches.length < 2) {
@@ -164,6 +165,11 @@ export default function TrainingSuggestions({ analytics, matches }) {
           {counts.da_valutare > 0 && <span className="text-amber-400"> · {counts.da_valutare} da vedere</span>}
           {counts.none > 0 && <span className="text-gray-500"> · {counts.none} non visti</span>}
         </p>
+        {readOnly && (
+          <p className="text-[11px] text-sky-300 mt-1">
+            Modalità sola lettura: lo stato di revisione non è modificabile.
+          </p>
+        )}
       </div>
 
       {/* View tabs */}

@@ -10,6 +10,7 @@ import {
   LineChart, Line, ReferenceLine,
 } from 'recharts';
 import { COLORS } from '../utils/constants';
+import { applyFNCToEfficacy } from '../utils/analyticsEngine';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ function findStandingTeamByName(standings, teamName) {
 
 // ─── Main Dashboard component ─────────────────────────────────────────────────
 
-export default function Dashboard({ analytics, matches, standings, weights, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici, ownerTeamName, onOwnerTeamChange }) {
+export default function Dashboard({ analytics, matches, standings, weights, fncConfig, baselines, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici, ownerTeamName, onOwnerTeamChange }) {
   const hasData = !!analytics && matches.length > 0;
 
   // showChart: se dashboardConfig è definito, mostra solo i grafici selezionati
@@ -96,11 +97,21 @@ export default function Dashboard({ analytics, matches, standings, weights, onSe
     return avg;
   }, [sortedMA]);
 
-  const radarData = FUNDS.map(f => ({
-    fund: FUND_LABELS[f],
-    raw: Math.max(0, teamAvg[f].raw * 100),
-    weighted: Math.max(0, teamAvg[f].weighted * 100),
-  }));
+  // FNC-adjusted radar data: when FNC is enabled and baselines are available,
+  // normalize the raw/weighted values so all fundamentals are on the same scale.
+  const radarData = FUNDS.map(f => {
+    const rawVal = teamAvg[f].raw;
+    const weiVal = teamAvg[f].weighted;
+    const rawFnc = fncConfig && baselines ? applyFNCToEfficacy(rawVal, f, baselines, fncConfig) : rawVal;
+    const weiFnc = fncConfig && baselines ? applyFNCToEfficacy(weiVal, f, baselines, fncConfig) : weiVal;
+    return {
+      fund: FUND_LABELS[f],
+      raw: Math.max(0, rawFnc * 100),
+      weighted: Math.max(0, weiFnc * 100),
+      rawOrig: Math.max(0, rawVal * 100),    // keep originals for tooltip
+      weiOrig: Math.max(0, weiVal * 100),
+    };
+  });
 
   const matchBarData = sortedMA.map(ma => {
     const setsWon  = (ma.match.sets || []).filter(s => s.won).length;
@@ -318,9 +329,16 @@ export default function Dashboard({ analytics, matches, standings, weights, onSe
           {/* Team Radar */}
           {showChart('radar_team') && (
             <div className="glass-card p-5">
-              <h3 className="text-sm font-semibold text-gray-300 mb-4">
-                Profilo Squadra: <span className="text-sky-400">Grezzo</span> vs <span className="text-amber-400">Rielaborato</span>
-              </h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-300">
+                  Profilo Squadra: <span className="text-sky-400">Grezzo</span> vs <span className="text-amber-400">Rielaborato</span>
+                </h3>
+                {fncConfig?.enabled && (
+                  <span className="text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                    📐 FNC {fncConfig.mode === 'zscore' ? 'Z-Score' : 'Relativo'} {(fncConfig.weight * 100).toFixed(0)}%
+                  </span>
+                )}
+              </div>
               <ResponsiveContainer width="100%" height={280}>
                 <RadarChart data={radarData} outerRadius="72%">
                   <PolarGrid stroke="rgba(255,255,255,0.08)" />

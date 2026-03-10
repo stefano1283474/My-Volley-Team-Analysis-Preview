@@ -3,7 +3,7 @@
 // Weighting, opponent reconstruction, trends, training suggestions
 // ============================================================================
 
-import { INVERSE_MAP, DEFAULT_WEIGHTS, RESULT_FACTORS, TEAM_MAP, ROLE_CORE_FUNDAMENTALS } from './constants';
+import { INVERSE_MAP, DEFAULT_WEIGHTS, RESULT_FACTORS, TEAM_MAP, ROLE_CORE_FUNDAMENTALS, DEFAULT_FNC_CONFIG } from './constants';
 
 // ─── Reconstruct Opponent Stats from Our Data ──────────────────────────────
 export function reconstructOpponent(match) {
@@ -777,6 +777,133 @@ export function generateMatchReport(match, matchWeight, standings) {
   }
 
   return report;
+}
+
+// ─── Fundamental Normalization Coefficient (FNC) ───────────────────────────
+// The FNC solves the cross-fundamental comparison problem:
+// Reception/Defense naturally have higher efficacy ranges (~0.35-0.75)
+// than Attack/Serve/Block (~0.10-0.50), so a radar chart or priority
+// comparison across fundamentals is misleading without normalization.
+
+/**
+ * Compute per-fundamental baselines (mean + std) from all loaded matches.
+ * These baselines are used by applyFNCToEfficacy for normalization.
+ *
+ * @param {Array} allMatches - array of parsed match objects
+ * @returns {Object} baselines: { attack, serve, reception, defense, block, _global }
+ */
+export function computeFundamentalBaselines(allMatches) {
+  const collections = {
+    attack: [], serve: [], reception: [], defense: [], block: [],
+  };
+
+  for (const match of allMatches) {
+    const { playerStats, playerReception, playerDefense } = match.riepilogo || {};
+    if (!playerStats) continue;
+
+    for (const p of playerStats) {
+      if ((p.attack?.tot || 0) > 0) collections.attack.push(p.attack.efficacy || 0);
+      if ((p.serve?.tot || 0) > 0) collections.serve.push(p.serve.efficacy || 0);
+      const blockTot = (p.block?.kill || 0) + (p.block?.pos || 0) + (p.block?.exc || 0) +
+                       (p.block?.neg || 0) + (p.block?.err || 0);
+      if (blockTot > 0) collections.block.push(p.block?.efficacy || 0);
+    }
+    for (const p of playerReception || []) {
+      if ((p.tot || 0) > 0) collections.reception.push(p.efficacy || 0);
+    }
+    for (const p of playerDefense || []) {
+      if ((p.tot || 0) > 0) collections.defense.push(p.efficacy || 0);
+    }
+  }
+
+  const baselines = {};
+  const allValues = [];
+
+  for (const [fund, vals] of Object.entries(collections)) {
+    if (vals.length === 0) {
+      baselines[fund] = { mean: 0, std: 0.1, count: 0, valid: false };
+      continue;
+    }
+    const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+    const variance = vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length;
+    const std = Math.max(0.01, Math.sqrt(variance));
+    baselines[fund] = { mean, std, count: vals.length, valid: vals.length >= 3 };
+    allValues.push(...vals);
+  }
+
+  // Global stats (pooled across all fundamentals)
+  if (allValues.length > 0) {
+    const globalMean = allValues.reduce((s, v) => s + v, 0) / allValues.length;
+    const globalVariance = allValues.reduce((s, v) => s + (v - globalMean) ** 2, 0) / allValues.length;
+    baselines._global = { mean: globalMean, std: Math.max(0.01, Math.sqrt(globalVariance)) };
+  } else {
+    baselines._global = { mean: 0.30, std: 0.15 };
+  }
+
+  // Mean of per-fundamental means (for relative rescaling anchor)
+  const fundMeans = Object.values(baselines).filter((b, _, arr) => b.valid !== false && b.mean !== undefined && !arr._global).map(b => b.mean);
+  const validFunds = ['attack', 'serve', 'reception', 'defense', 'block'].filter(f => baselines[f]?.valid);
+  const fundMeanValues = validFunds.map(f => baselines[f].mean);
+  baselines._fundMean = fundMeanValues.length > 0
+    ? fundMeanValues.reduce((s, v) => s + v, 0) / fundMeanValues.length
+    : baselines._global.mean;
+
+  return baselines;
+}
+
+/**
+ * Apply the FNC to a raw efficacy value, returning a display-ready value
+ * that can be compared across fundamentals.
+ *
+ * @param {number} rawEfficacy - raw efficacy value
+ * @param {string} fund - 'attack'|'serve'|'reception'|'defense'|'block'
+ * @param {Object} baselines - result of computeFundamentalBaselines
+ * @param {Object} fncConfig - { enabled, weight, mode }
+ * @returns {number} adjusted efficacy for display/comparison
+ */
+export function applyFNCToEfficacy(rawEfficacy, fund, baselines, fncConfig) {
+  const cfg = fncConfig || DEFAULT_FNC_CONFIG;
+  if (!cfg.enabled || !baselines || !baselines[fund]?.valid || cfg.weight === 0) {
+    return rawEfficacy;
+  }
+
+  const { mean: µ_f, std: σ_f } = baselines[fund];
+  const µ_anchor = baselines._fundMean || baselines._global?.mean || 0.30;
+  const σ_global = baselines._global?.std || 0.15;
+  const w = cfg.weight;
+
+  if (cfg.mode === 'zscore') {
+    // Z-score mode: express position relative to the fundamental's distribution,
+    // then rescale to the global distribution for display.
+    // z = (raw - µ_f) / σ_f  →  display = µ_anchor + z × σ_global
+    const z = (rawEfficacy - µ_f) / σ_f;
+    const zClamped = Math.max(-3, Math.min(3, z));
+    const zNormalized = µ_anchor + zClamped * σ_global;
+    return (1 - w) * rawEfficacy + w * zNormalized;
+  } else {
+    // Relative mode: rescale so all fundamentals share the same mean µ_anchor.
+    // rescaledValue = rawEfficacy × (µ_anchor / µ_f)
+    if (µ_f === 0) return rawEfficacy;
+    const K = µ_anchor / µ_f;
+    const rescaled = rawEfficacy * K;
+    return (1 - w) * rawEfficacy + w * rescaled;
+  }
+}
+
+/**
+ * Compute FNC-adjusted z-score for priority weighting in training suggestions.
+ * Returns how many standard deviations the value is from its fundamental mean.
+ * Lower z-score (more negative) = higher training priority.
+ *
+ * @param {number} rawEfficacy
+ * @param {string} fund
+ * @param {Object} baselines
+ * @returns {number} z-score (or 0 if baselines unavailable)
+ */
+export function computeFNCZScore(rawEfficacy, fund, baselines) {
+  if (!baselines?.[fund]?.valid) return 0;
+  const { mean: µ, std: σ } = baselines[fund];
+  return (rawEfficacy - µ) / σ;
 }
 
 // ─── Helper functions ──────────────────────────────────────────────────────
