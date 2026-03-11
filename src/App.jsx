@@ -178,6 +178,15 @@ export default function App() {
   const [sharedAccess, setSharedAccess] = useState(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
+  const [isMobilePortrait, setIsMobilePortrait] = useState(() => {
+    try {
+      return window.matchMedia('(max-width: 768px) and (orientation: portrait)').matches;
+    } catch {
+      return false;
+    }
+  });
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const swipeStartRef = useRef(null);
   const [ownerTeamName, setOwnerTeamName] = useState(() => {
     try { return localStorage.getItem('vpa_owner_team') || ''; } catch { return ''; }
   });
@@ -213,6 +222,70 @@ export default function App() {
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
+
+  useEffect(() => {
+    let mql = null;
+    const updateViewportMode = () => {
+      try {
+        const active = mql?.matches
+          ?? window.matchMedia('(max-width: 768px) and (orientation: portrait)').matches;
+        setIsMobilePortrait(active);
+      } catch {
+        setIsMobilePortrait(false);
+      }
+    };
+    try {
+      mql = window.matchMedia('(max-width: 768px) and (orientation: portrait)');
+      updateViewportMode();
+      if (mql.addEventListener) {
+        mql.addEventListener('change', updateViewportMode);
+      } else if (mql.addListener) {
+        mql.addListener(updateViewportMode);
+      }
+      window.addEventListener('orientationchange', updateViewportMode);
+      window.addEventListener('resize', updateViewportMode);
+    } catch {}
+    return () => {
+      if (mql?.removeEventListener) {
+        mql.removeEventListener('change', updateViewportMode);
+      } else if (mql?.removeListener) {
+        mql.removeListener(updateViewportMode);
+      }
+      window.removeEventListener('orientationchange', updateViewportMode);
+      window.removeEventListener('resize', updateViewportMode);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMobilePortrait) {
+      setIsSidebarOpen(false);
+    }
+  }, [isMobilePortrait]);
+
+  const handleAppTouchStart = useCallback((event) => {
+    if (!isMobilePortrait) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    swipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+  }, [isMobilePortrait]);
+
+  const handleAppTouchEnd = useCallback((event) => {
+    if (!isMobilePortrait) return;
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    const touch = event.changedTouches?.[0];
+    if (!start || !touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    const isHorizontalSwipe = Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) + 20;
+    if (!isHorizontalSwipe) return;
+    if (!isSidebarOpen && start.x <= 32 && dx > 0) {
+      setIsSidebarOpen(true);
+    }
+    if (isSidebarOpen && dx < 0) {
+      setIsSidebarOpen(false);
+    }
+  }, [isMobilePortrait, isSidebarOpen]);
 
   const handleOwnerTeamChange = useCallback((teamName) => {
     const resolved = findStandingTeamName(standings, teamName) || teamName || '';
@@ -589,13 +662,22 @@ export default function App() {
 
   // ─── Main App ─────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col relative" onTouchStart={handleAppTouchStart} onTouchEnd={handleAppTouchEnd}>
       {/* Header */}
       <header
-        className="border-b border-white/5 px-6 py-3 flex items-center justify-between"
+        className="border-b border-white/5 px-3 sm:px-6 py-3 flex items-center justify-between"
         style={{ background: 'linear-gradient(180deg, rgba(17,24,39,0.95), rgba(10,14,26,0.98))' }}
       >
         <div className="flex items-center gap-3">
+          {isMobilePortrait && (
+            <button
+              onClick={() => setIsSidebarOpen(v => !v)}
+              className="w-8 h-8 rounded-lg border border-white/10 bg-white/[0.04] text-gray-200 flex items-center justify-center"
+              title={isSidebarOpen ? 'Chiudi menu' : 'Apri menu'}
+            >
+              {isSidebarOpen ? '✕' : '☰'}
+            </button>
+          )}
           <div className="w-9 h-9 rounded-lg flex items-center justify-center text-lg"
             style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
             🏐
@@ -675,14 +757,28 @@ export default function App() {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
+        {isMobilePortrait && isSidebarOpen && (
+          <button
+            onClick={() => setIsSidebarOpen(false)}
+            className="absolute inset-0 bg-black/45 z-20"
+            aria-label="Chiudi menu laterale"
+          />
+        )}
         {/* Sidebar Navigation */}
-        <nav className="w-48 border-r border-white/5 p-3 flex flex-col gap-1 flex-shrink-0"
+        <nav className={`${isMobilePortrait
+          ? `absolute left-0 top-0 h-full w-64 z-30 transform transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
+          : 'w-48 flex-shrink-0'} border-r border-white/5 p-3 flex flex-col gap-1`}
           style={{ background: 'rgba(17,24,39,0.5)' }}>
           {NAV_ITEMS.map(item => (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => {
+                setActiveTab(item.id);
+                if (isMobilePortrait) {
+                  setIsSidebarOpen(false);
+                }
+              }}
               className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all text-left
                 ${activeTab === item.id
                   ? 'bg-amber-500/10 text-amber-400 font-medium'
@@ -703,7 +799,7 @@ export default function App() {
         </nav>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           {activeTab === 'data' && (
             <DatasetManager
               matches={matches}
