@@ -5,7 +5,7 @@
 //       rally lunghi, analisi rotazionale
 // ============================================================================
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ReferenceLine, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, Legend,
@@ -314,8 +314,11 @@ function FilterEmptyState({ typeFilter }) {
 
 function ChainSuggestionCard({ s }) {
   const [expanded, setExpanded] = useState(false);
+  const [showInlineDetails, setShowInlineDetails] = useState(false);
+  const [selectedOutcomeKey, setSelectedOutcomeKey] = useState('');
   const color = PRIORITY_COLORS[s.priority] || PRIORITY_COLORS[2];
   const chainLabel = CHAIN_TYPE_LABELS[s.chainType] || {};
+  const hasDetails = Object.values(s.chainData?.detailsByOutcome || {}).some(list => Array.isArray(list) && list.length > 0);
 
   return (
     <div className={`rounded-xl p-4 border ${color.border} ${color.bg}`}>
@@ -355,18 +358,52 @@ function ChainSuggestionCard({ s }) {
 
           {/* Chain data detail toggle */}
           {s.chainData && (
-            <button
-              onClick={() => setExpanded(v => !v)}
-              title="Espandi per vedere i dati numerici della catena di gioco alla base di questo segnale"
-              className="mt-2 text-[11px] text-sky-400 hover:text-sky-300 flex items-center gap-1"
-            >
-              <span>{expanded ? '▼' : '▶'}</span>
-              <span>{expanded ? 'Nascondi dettaglio' : 'Vedi dati catena'}</span>
-            </button>
+            <div className="mt-2 flex items-center gap-3 flex-wrap">
+              <button
+                onClick={() => {
+                  setExpanded(v => {
+                    const next = !v;
+                    if (!next) {
+                      setShowInlineDetails(false);
+                      setSelectedOutcomeKey('');
+                    }
+                    return next;
+                  });
+                }}
+                title="Espandi per vedere i dati numerici della catena di gioco alla base di questo segnale"
+                className="text-[11px] text-sky-400 hover:text-sky-300 flex items-center gap-1"
+              >
+                <span>{expanded ? '▼' : '▶'}</span>
+                <span>{expanded ? 'Nascondi dettaglio' : 'Vedi dati catena'}</span>
+              </button>
+              {hasDetails && (
+                <button
+                  onClick={() => {
+                    setExpanded(true);
+                    setShowInlineDetails(v => !v);
+                    setSelectedOutcomeKey('');
+                  }}
+                  className="text-[11px] text-sky-400 hover:text-sky-300 flex items-center gap-1"
+                >
+                  <span>{showInlineDetails ? '▼' : '▶'}</span>
+                  <span>{showInlineDetails ? 'Nascondi dettagli' : 'Dettagli'}</span>
+                </button>
+              )}
+            </div>
           )}
 
           {expanded && s.chainData && (
-            <ChainDataDetail cd={s.chainData} chainType={s.chainType} />
+            <ChainDataDetail
+              cd={s.chainData}
+              chainType={s.chainType}
+              showDetails={showInlineDetails}
+              selectedOutcomeKey={selectedOutcomeKey}
+              onSelectOutcomeKey={(key) => {
+                setExpanded(true);
+                setShowInlineDetails(true);
+                setSelectedOutcomeKey(key);
+              }}
+            />
           )}
         </div>
       </div>
@@ -374,25 +411,72 @@ function ChainSuggestionCard({ s }) {
   );
 }
 
-function ChainDataDetail({ cd, chainType }) {
+function ChainDataDetail({ cd, chainType, showDetails = false, selectedOutcomeKey = '', onSelectOutcomeKey = null }) {
+  const detailRefs = useRef({});
+  useEffect(() => {
+    if (chainType !== 'r_to_a' && chainType !== 'd_to_a') return;
+    if (!showDetails || !selectedOutcomeKey) return;
+    const el = detailRefs.current[selectedOutcomeKey];
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [chainType, showDetails, selectedOutcomeKey]);
+
   if (chainType === 'r_to_a' || chainType === 'd_to_a') {
     const entries = Object.entries(cd.values || {}).sort(([a], [b]) => b.localeCompare(a));
     const tot = cd.total || 1;
+    const detailsByOutcome = cd.detailsByOutcome || {};
+
     return (
       <div className="mt-2 pt-2 border-t border-white/5">
         <p className="text-[10px] text-gray-500 mb-1">{cd.label} — distribuzione ({tot} attacchi)</p>
         <div className="flex gap-2 flex-wrap">
           {entries.map(([aKey, cnt]) => (
-            <div key={aKey} className="text-center">
+            <button
+              key={aKey}
+              type="button"
+              onClick={() => onSelectOutcomeKey && onSelectOutcomeKey(aKey)}
+              className="text-center"
+              style={{ outline: 'none' }}
+              disabled={!detailsByOutcome[aKey]?.length}
+              title={detailsByOutcome[aKey]?.length ? `Apri dettagli ${aKey}` : `Nessun dettaglio ${aKey}`}
+            >
               <div className={`text-xs px-2 py-0.5 rounded font-semibold ${cellHeatColor(
                 cd.label?.split('→')[0] || 'R5', aKey, cnt, tot
-              )}`}>
+              )} ${selectedOutcomeKey === aKey ? 'ring-1 ring-sky-400/60' : ''} ${detailsByOutcome[aKey]?.length ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}>
                 {aKey}: {cnt}
               </div>
               <div className="text-[9px] text-gray-600">{Math.round(cnt/tot*100)}%</div>
-            </div>
+            </button>
           ))}
         </div>
+        {showDetails && (
+          <div className="mt-2 space-y-2">
+            {entries.map(([aKey]) => {
+              const details = detailsByOutcome[aKey] || [];
+              if (!details.length) return null;
+              return (
+                <div
+                  key={aKey}
+                  ref={(el) => { if (el) detailRefs.current[aKey] = el; }}
+                  className={`rounded-lg border bg-black/20 overflow-hidden ${selectedOutcomeKey === aKey ? 'border-sky-400/60 ring-1 ring-sky-400/30' : 'border-white/10'}`}
+                >
+                  <div className="px-2 py-1 text-[10px] font-semibold text-gray-300 bg-white/[0.03] border-b border-white/10">
+                    {aKey} · {details.length} rally
+                  </div>
+                  <div className="max-h-44 overflow-y-auto divide-y divide-white/5">
+                    {details.map((d, idx) => (
+                      <div key={`${aKey}-${idx}`} className="px-2 py-1.5 text-[10px] text-gray-300">
+                        <p className="text-gray-400">{d.match} · Set {d.set || '-'} · {d.score}</p>
+                        <p className="text-gray-500">{d.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }

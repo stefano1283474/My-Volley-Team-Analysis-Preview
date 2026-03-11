@@ -1144,6 +1144,29 @@ function _getRoleLabel(roleCode) {
   return labels[roleCode] || '';
 }
 
+function _formatChainAction(action) {
+  if (!action) return '';
+  if (action.type === 'opponent_error') return 'Errore avversario';
+  if (action.type !== 'action') return '';
+  const fundMap = { r: 'R', d: 'D', a: 'A', b: 'B', m: 'M' };
+  const fund = fundMap[action.fundamental] || String(action.fundamental || '').toUpperCase();
+  const player = action.player ? `#${action.player}` : '';
+  return `${fund}${action.value}${player ? ` ${player}` : ''}`.trim();
+}
+
+function _buildChainDescription(quartine = [], inputKey = '', outputKey = '') {
+  const seq = quartine.map(_formatChainAction).filter(Boolean).join(' → ');
+  const pair = [inputKey, outputKey].filter(Boolean).join(' → ');
+  if (pair && seq) return `${pair} · ${seq}`;
+  return pair || seq || 'Sequenza non disponibile';
+}
+
+function _buildMatchLabel(match) {
+  const opponent = match?.metadata?.opponent || 'Avversario';
+  const date = match?.metadata?.date || '';
+  return date ? `${opponent} (${date})` : opponent;
+}
+
 // ─── 1. R/D → A Conversion Matrix per player ─────────────────────────────
 // Constructs the conversion matrix (input quality → attack quality) from rally quartine.
 // Side-out (phase='r'): tracks R→A pairs. Transition (phase='b'): tracks D→A pairs.
@@ -1155,7 +1178,9 @@ export function analyzeRDtoAConversions(allMatches, roster = []) {
       players[pNum] = {
         name: _getPlayerName(pNum, roster),
         sideOut: { R3: {}, R4: {}, R5: {} },
+        sideOutDetails: { R3: [], R4: [], R5: [] },
         transition: { D3: {}, D4: {}, D5: {} },
+        transitionDetails: { D3: [], D4: [], D5: [] },
         totalAttacks: 0,
         itaPositive: 0,
         itaNegative: 0,
@@ -1183,6 +1208,14 @@ export function analyzeRDtoAConversions(allMatches, roster = []) {
               if (players[next.player].sideOut[rKey] !== undefined) {
                 const aKey = `A${next.value}`;
                 players[next.player].sideOut[rKey][aKey] = (players[next.player].sideOut[rKey][aKey] || 0) + 1;
+                players[next.player].sideOutDetails[rKey].push({
+                  sourceKey: rKey,
+                  outcomeKey: aKey,
+                  match: _buildMatchLabel(match),
+                  set: rally.set || null,
+                  score: `${rally.ourScore ?? 0}-${rally.theirScore ?? 0}`,
+                  description: _buildChainDescription(quartine, rKey, aKey),
+                });
               }
               break;
             }
@@ -1206,6 +1239,14 @@ export function analyzeRDtoAConversions(allMatches, roster = []) {
               if (players[next.player].transition[dKey] !== undefined) {
                 const aKey = `A${next.value}`;
                 players[next.player].transition[dKey][aKey] = (players[next.player].transition[dKey][aKey] || 0) + 1;
+                players[next.player].transitionDetails[dKey].push({
+                  sourceKey: dKey,
+                  outcomeKey: aKey,
+                  match: _buildMatchLabel(match),
+                  set: rally.set || null,
+                  score: `${rally.ourScore ?? 0}-${rally.theirScore ?? 0}`,
+                  description: _buildChainDescription(quartine, dKey, aKey),
+                });
               }
               break;
             }
@@ -1507,7 +1548,18 @@ export function generateChainSuggestions(chainData, roster = []) {
           fundamental: 'attack', isCore: true, chainType: 'r_to_a',
           message: `${pd.name} (${role || '?'}): spreca il ${Math.round(r5waste/r5tot*100)}% delle ricezioni perfette (R5) in attacchi poco efficaci (A1/A2). Su ${r5tot} ricezioni R5, ${r5waste} si sono concluse in errore o freeball. La qualità dell'alzata c'è, ma non viene sfruttata.`,
           action: `Analizzare il timing sull'alzata alta: su R5 la palleggiatrice offre le opzioni migliori. Drill: ricezione R5 simulata → attacco variato (diagonale stretta, palla corta, cambio di direzione). Analisi video su queste situazioni specifiche.`,
-          chainData: { label: 'R5→A', values: r5, total: r5tot, wastePct: r5waste / r5tot },
+          chainData: {
+            label: 'R5→A',
+            values: r5,
+            total: r5tot,
+            wastePct: r5waste / r5tot,
+            detailsByOutcome: (pd.sideOutDetails?.R5 || []).reduce((acc, item) => {
+              const key = item.outcomeKey || 'A?';
+              if (!acc[key]) acc[key] = [];
+              acc[key].push(item);
+              return acc;
+            }, {}),
+          },
         });
       }
 
@@ -1522,7 +1574,18 @@ export function generateChainSuggestions(chainData, roster = []) {
           fundamental: 'attack', isCore: true, chainType: 'r_to_a',
           message: `${pd.name} (${role || '?'}): trasforma il ${Math.round(r3pos/r3tot*100)}% delle ricezioni da bagher (R3) in attacchi efficaci (A4/A5) — ${r3pos} su ${r3tot}. Punto di forza nascosto: mantiene efficacia anche su palla difficile.`,
           action: `Valorizzare in situazioni di R3 squadra: è la giocatrice che ha dimostrato di saperle gestire meglio. Mantenere il focus attuale.`,
-          chainData: { label: 'R3→A', values: r3, total: r3tot, posPct: r3pos / r3tot },
+          chainData: {
+            label: 'R3→A',
+            values: r3,
+            total: r3tot,
+            posPct: r3pos / r3tot,
+            detailsByOutcome: (pd.sideOutDetails?.R3 || []).reduce((acc, item) => {
+              const key = item.outcomeKey || 'A?';
+              if (!acc[key]) acc[key] = [];
+              acc[key].push(item);
+              return acc;
+            }, {}),
+          },
         });
       }
 
@@ -1537,7 +1600,18 @@ export function generateChainSuggestions(chainData, roster = []) {
           fundamental: 'attack', isCore: true, chainType: 'd_to_a',
           message: `${pd.name} (${role || '?'}): in transizione, spreca il ${Math.round(d5waste/d5tot*100)}% delle difese di qualità (D5) in attacchi poco efficaci (A1/A2). La difesa è ottima ma l'attacco successivo non rende. Problema di rincorsa o timing da posizione a rete.`,
           action: `Drill di transizione: partenza da rete dopo muro (tocco o no), rincorsa corta su alzata alta. Esercizi 6vs6 con break-point: chi difende poi attacca immediatamente.`,
-          chainData: { label: 'D5→A', values: d5, total: d5tot, wastePct: d5waste / d5tot },
+          chainData: {
+            label: 'D5→A',
+            values: d5,
+            total: d5tot,
+            wastePct: d5waste / d5tot,
+            detailsByOutcome: (pd.transitionDetails?.D5 || []).reduce((acc, item) => {
+              const key = item.outcomeKey || 'A?';
+              if (!acc[key]) acc[key] = [];
+              acc[key].push(item);
+              return acc;
+            }, {}),
+          },
         });
       }
 
@@ -1552,7 +1626,18 @@ export function generateChainSuggestions(chainData, roster = []) {
           fundamental: 'attack', isCore: true, chainType: 'd_to_a',
           message: `${pd.name} (${role || '?'}): eccellente in transizione difficile — trasforma il ${Math.round(d3pos/d3tot*100)}% delle difese da bagher (D3) in attacchi positivi (A4/A5). Attaccante affidabile anche nei break-point più difficili.`,
           action: `Consolidare. Privilegiare l'alzata verso questa giocatrice nei break-point da D3 di squadra.`,
-          chainData: { label: 'D3→A', values: d3, total: d3tot, posPct: d3pos / d3tot },
+          chainData: {
+            label: 'D3→A',
+            values: d3,
+            total: d3tot,
+            posPct: d3pos / d3tot,
+            detailsByOutcome: (pd.transitionDetails?.D3 || []).reduce((acc, item) => {
+              const key = item.outcomeKey || 'A?';
+              if (!acc[key]) acc[key] = [];
+              acc[key].push(item);
+              return acc;
+            }, {}),
+          },
         });
       }
     }
