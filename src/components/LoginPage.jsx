@@ -69,7 +69,7 @@ export default function LoginPage() {
           }}
         >
           <p className="text-sm text-gray-400 text-center">
-            Accedi con il tuo account Google per sincronizzare i dati su Firebase.
+            Accedi con il tuo account Google per sincronizzare i dati su Database in Cloud.
           </p>
 
           {/* Google Sign-In Button */}
@@ -110,7 +110,7 @@ export default function LoginPage() {
 
         {/* Footer note */}
         <p className="text-[11px] text-gray-600 text-center px-4">
-          I dati vengono archiviati esclusivamente nel tuo account Firebase.
+          I dati vengono archiviati esclusivamente nel tuo Database in Cloud.
           Solo tu puoi accedervi.
         </p>
       </div>

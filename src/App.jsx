@@ -324,7 +324,7 @@ export default function App() {
 
     const loadData = async () => {
       setIsLoading(true);
-      setLoadingMsg('Caricamento dati da Firestore…');
+      setLoadingMsg('Caricamento dati da Database in Cloud…');
       try {
         let ownerUid = user.uid;
         if (isSharedMode) {
@@ -375,8 +375,8 @@ export default function App() {
         }
         setLoadingMsg(
           loadedMatches.length > 0
-            ? `${loadedMatches.length} partite caricate da Firestore`
-            : 'Nessun dato su Firestore. Carica i file scout per iniziare.'
+            ? `${loadedMatches.length} partite caricate da Database in Cloud`
+            : 'Nessun dato su Database in Cloud. Carica i file scout per iniziare.'
         );
       } catch (err) {
         if (!cancelled) {
@@ -482,9 +482,9 @@ export default function App() {
           });
           const st = computeStandings(cal);
 
-          setLoadingMsg('Salvataggio calendario su Firestore…');
+          setLoadingMsg('Salvataggio calendario su Database in Cloud…');
           updateProgress(i, {
-            phase: 'Salvataggio Firestore',
+            phase: 'Salvataggio Database in Cloud',
             progress: 85,
             detail: `Scrittura calendario e ${st.length} squadre`,
           });
@@ -509,9 +509,9 @@ export default function App() {
           });
           const match = parseMatchFile(buffer, file.name);
 
-          setLoadingMsg(`Salvataggio ${file.name} su Firestore…`);
+          setLoadingMsg(`Salvataggio ${file.name} su Database in Cloud…`);
           updateProgress(i, {
-            phase: 'Salvataggio Firestore',
+            phase: 'Salvataggio Database in Cloud',
             progress: 80,
             detail: `vs ${match.metadata.opponent || 'N/D'} · ${match.metadata.date || 'Data N/D'}`,
           });
@@ -534,7 +534,7 @@ export default function App() {
             detail: `Partita salvata: ${match.metadata.opponent || 'N/D'}`,
           });
 
-          setLoadingMsg(`✓ ${file.name} → Firestore (${match.metadata.opponent}, ${match.metadata.date})`);
+          setLoadingMsg(`✓ ${file.name} → Database in Cloud (${match.metadata.opponent}, ${match.metadata.date})`);
         } else {
           throw new Error(`Formato non supportato: .${ext}`);
         }
@@ -712,32 +712,25 @@ export default function App() {
         </div>
 
         {/* Utente loggato */}
-        <div className="flex items-center gap-3">
-          {user.photoURL && (
-            <img
-              src={user.photoURL}
-              alt={user.displayName}
-              className="w-7 h-7 rounded-full ring-1 ring-white/20"
-            />
-          )}
-          <div className="hidden sm:block text-right">
-            <p className="text-xs font-medium text-gray-300">{user.displayName}</p>
-            <p className="text-[10px] text-gray-600">Firebase · Google</p>
-          </div>
+        <div className="flex items-center gap-2">
           <div className="relative" ref={userMenuRef}>
             <button
               onClick={() => setUserMenuOpen(v => !v)}
-              className="text-[11px] text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-white/5"
+              className="w-8 h-8 rounded-full ring-1 ring-white/20 overflow-hidden bg-white/[0.06] text-gray-200 flex items-center justify-center"
               title="Menu utente"
             >
-              ⋮
+              {user.photoURL ? (
+                <img src={user.photoURL} alt={user.displayName || 'Account'} className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-xs font-semibold">{(user.displayName || user.email || 'U').slice(0, 1).toUpperCase()}</span>
+              )}
             </button>
             {userMenuOpen && (
               <div className="absolute right-0 top-8 w-64 rounded-lg border border-white/10 bg-slate-900/95 shadow-xl backdrop-blur-sm overflow-hidden">
                 <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
                   <p className="text-[11px] font-medium text-gray-200 truncate">{user.displayName || 'Account Google'}</p>
                   <p className="text-[10px] text-gray-500 truncate">{user.email || 'Email non disponibile'}</p>
-                  <p className="text-[10px] text-sky-400/80 mt-0.5">Accesso con account Google</p>
+                  <p className="text-[10px] text-sky-400/80 mt-0.5">Database in Cloud</p>
                 </div>
                 <button
                   onClick={handleShareOnWhatsApp}
@@ -789,11 +782,11 @@ export default function App() {
             </button>
           ))}
 
-          {/* Firebase badge in sidebar */}
+          {/* Cloud database badge in sidebar */}
           <div className="mt-auto pt-4 px-2">
             <div className="flex items-center gap-1.5 text-[10px] text-gray-600">
               <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-              Firestore sync attivo
+              Database in Cloud attivo
             </div>
           </div>
         </nav>

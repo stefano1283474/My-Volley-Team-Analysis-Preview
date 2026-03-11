@@ -103,16 +103,16 @@ export default function DatasetManager({
         <h2 className="text-xl font-bold text-white mb-1">Gestione Dati</h2>
         <p className="text-sm text-gray-400">
           Carica i file scout (.xlsm/.xlsx) e il calendario (.csv). I dati vengono
-          salvati automaticamente su <span className="text-amber-400 font-medium">Firebase Firestore</span> e
+          salvati automaticamente su <span className="text-amber-400 font-medium">Database in Cloud</span> e
           sono disponibili da qualsiasi dispositivo.
         </p>
       </div>
 
-      {/* Firestore status badge */}
+      {/* Cloud database status badge */}
       <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-[11px]"
         style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.15)' }}>
         <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-        <span className="text-green-400 font-medium">Firestore sincronizzato</span>
+        <span className="text-green-400 font-medium">Database in Cloud sincronizzato</span>
         <span className="text-gray-500 ml-1">— nessun dato viene salvato in locale</span>
       </div>
 
@@ -229,7 +229,7 @@ export default function DatasetManager({
         </div>
       ) : (
         <div className="glass-card p-4 text-xs text-sky-300 border border-sky-500/20">
-          Modalità sola lettura: upload, cancellazione e salvataggi su Firestore sono disabilitati.
+          Modalità sola lettura: upload, cancellazione e salvataggi su Database in Cloud sono disabilitati.
         </div>
       )}
 
@@ -284,11 +284,11 @@ export default function DatasetManager({
       <div className="glass-card p-5">
         <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
           <span className="text-amber-400">⚡</span>
-          Partite su Firestore ({matches.length})
+          Partite su Database in Cloud ({matches.length})
         </h3>
         {matches.length === 0 ? (
           <p className="text-xs text-gray-500 py-4 text-center">
-            Nessuna partita su Firestore. Carica un file .xlsm o .xlsx per iniziare.
+            Nessuna partita su Database in Cloud. Carica un file .xlsm o .xlsx per iniziare.
           </p>
         ) : (
           <div className="space-y-2">
@@ -318,13 +318,13 @@ export default function DatasetManager({
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-[10px] text-gray-600">{m.rallies?.length || 0} rally</span>
-                      {/* Firestore badge */}
+                      {/* Cloud database badge */}
                       <span className="text-[9px] text-green-600 font-mono">FS</span>
                       {!readOnly && (
                         <button
                           onClick={() => onDelete(m.id)}
                           className="text-xs text-gray-500 hover:text-red-400 transition-colors px-2 py-1"
-                          title="Elimina da Firestore"
+                          title="Elimina da Database in Cloud"
                         >
                           ✕
                         </button>

@@ -136,7 +136,7 @@ export async function loadCalendar(userId) {
 
 // ─── Suggestion reviews (coach annotations) ──────────────────────────────────
 
-const REVIEWS_DOC_ID = '__suggestion_reviews__';
+const REVIEWS_DOC_ID = 'suggestion_reviews';
 
 /**
  * Salva le revisioni dell'allenatore su Firestore.

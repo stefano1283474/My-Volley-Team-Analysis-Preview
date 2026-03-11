@@ -14,13 +14,17 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
     )].sort((a, b) => a.localeCompare(b))
   ), [matchAnalytics]);
   const [selectedScoutOpponent, setSelectedScoutOpponent] = useState('');
+  const [selectedScoutMatchId, setSelectedScoutMatchId] = useState('');
   const activeScoutOpponent = opponents.includes(selectedScoutOpponent) ? selectedScoutOpponent : (opponents[0] || '');
   const selectedOpponentMatches = useMemo(() => (
     (matchAnalytics || [])
       .filter(ma => (ma?.match?.metadata?.opponent || '') === activeScoutOpponent)
       .sort((a, b) => (b.match.metadata?.date || '').localeCompare(a.match.metadata?.date || ''))
   ), [matchAnalytics, activeScoutOpponent]);
-  const selectedOpponentMA = selectedOpponentMatches[0] || null;
+  const activeScoutMatchId = selectedOpponentMatches.some(ma => ma?.match?.id === selectedScoutMatchId)
+    ? selectedScoutMatchId
+    : (selectedOpponentMatches[0]?.match?.id || '');
+  const selectedOpponentMA = selectedOpponentMatches.find(ma => ma?.match?.id === activeScoutMatchId) || null;
 
   if (!analytics || matches.length === 0) {
     return <EmptyState message="Carica almeno una partita per vedere il report." />;
@@ -36,6 +40,10 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
           matchAnalytics={matchAnalytics}
           selectedOpponent={activeScoutOpponent}
           onSelectOpponent={setSelectedScoutOpponent}
+          selectedMatchId={activeScoutMatchId}
+          onSelectMatchId={setSelectedScoutMatchId}
+          selectedMatchMA={selectedOpponentMA}
+          selectedOpponentMatches={selectedOpponentMatches}
         />
         <OpponentSelectedDetailsPanel
           ma={selectedOpponentMA}
@@ -439,8 +447,135 @@ function computeAggregatedScout(matchAnalytics) {
   return agg;
 }
 
-function AggregatedScoutPanel({ matchAnalytics, selectedOpponent, onSelectOpponent }) {
+function roundValue(value) {
+  return Number.isFinite(value) ? +value.toFixed(1) : null;
+}
+
+function avgValue(values = []) {
+  if (!values.length) return null;
+  return values.reduce((s, v) => s + v, 0) / values.length;
+}
+
+function computeTeamFundAverages(matchAnalytics) {
+  const acc = {
+    serve: { efficacy: [], efficiency: [] },
+    attack: { efficacy: [], efficiency: [] },
+    defense: { efficacy: [], efficiency: [] },
+    reception: { efficacy: [], efficiency: [] },
+    block: { efficacy: [], efficiency: [] },
+  };
+  for (const ma of matchAnalytics || []) {
+    const team = ma?.match?.riepilogo?.team;
+    if (!team) continue;
+    const blockTotal = (team.block?.kill || 0) + (team.block?.pos || 0) + (team.block?.exc || 0) + (team.block?.neg || 0) + (team.block?.err || 0);
+    const mappings = [
+      ['serve', team.serve, team.serve?.tot || 0],
+      ['attack', team.attack, team.attack?.tot || 0],
+      ['defense', team.defense, team.defense?.tot || 0],
+      ['reception', team.reception, team.reception?.tot || 0],
+      ['block', team.block, blockTotal],
+    ];
+    for (const [key, data, total] of mappings) {
+      if (!data || total <= 0) continue;
+      if (Number.isFinite(data.efficacy)) acc[key].efficacy.push(data.efficacy * 100);
+      if (Number.isFinite(data.efficiency)) acc[key].efficiency.push(data.efficiency * 100);
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(acc).map(([k, v]) => [k, {
+      efficacy: roundValue(avgValue(v.efficacy)),
+      efficiency: roundValue(avgValue(v.efficiency)),
+    }])
+  );
+}
+
+function getMatchTeamValue(selectedMatchMA, key, metric) {
+  const team = selectedMatchMA?.match?.riepilogo?.team;
+  const data = team?.[key];
+  if (!data || !Number.isFinite(data[metric])) return null;
+  return roundValue(data[metric] * 100);
+}
+
+function buildPlayerCatalog(matchAnalytics) {
+  const map = new Map();
+  for (const ma of matchAnalytics || []) {
+    for (const p of ma?.playerStats || []) {
+      if (!p?.number || map.has(p.number)) continue;
+      map.set(p.number, { number: p.number, name: p.name || `#${p.number}` });
+    }
+  }
+  return [...map.values()].sort((a, b) => a.number.localeCompare(b.number));
+}
+
+function hasFundData(playerStats, key, metric) {
+  return !!playerStats?.raw?.[key] && playerStats.raw[key].tot > 0 && Number.isFinite(playerStats.raw[key][metric]);
+}
+
+function buildPlayerSeries(matchAnalytics, selectedMatchMA, playerNumber) {
+  const fundRows = [
+    { key: 'serve', label: 'Battuta' },
+    { key: 'attack', label: 'Attacco' },
+    { key: 'defense', label: 'Difesa' },
+    { key: 'reception', label: 'Ricezione' },
+    { key: 'block', label: 'Muro' },
+  ];
+  const byDateDesc = [...(matchAnalytics || [])].sort((a, b) => (b?.match?.metadata?.date || '').localeCompare(a?.match?.metadata?.date || ''));
+  const selectedPlayerStats = (selectedMatchMA?.playerStats || []).find(p => p.number === playerNumber) || null;
+  return fundRows.map(({ key, label }) => {
+    const matchEfficacy = hasFundData(selectedPlayerStats, key, 'efficacy')
+      ? selectedPlayerStats.raw[key].efficacy * 100
+      : null;
+    const matchEfficiency = hasFundData(selectedPlayerStats, key, 'efficiency')
+      ? selectedPlayerStats.raw[key].efficiency * 100
+      : null;
+    const allEfficacy = [];
+    const last3Efficacy = [];
+    const allEfficiency = [];
+    const last3Efficiency = [];
+    for (const ma of byDateDesc) {
+      const ps = (ma?.playerStats || []).find(p => p.number === playerNumber);
+      if (hasFundData(ps, key, 'efficacy')) {
+        const val = ps.raw[key].efficacy * 100;
+        allEfficacy.push(val);
+        if (last3Efficacy.length < 3) last3Efficacy.push(val);
+      }
+      if (hasFundData(ps, key, 'efficiency')) {
+        const val = ps.raw[key].efficiency * 100;
+        allEfficiency.push(val);
+        if (last3Efficiency.length < 3) last3Efficiency.push(val);
+      }
+    }
+    return {
+      fund: label,
+      matchEfficacy: roundValue(matchEfficacy),
+      avgAllEfficacy: roundValue(avgValue(allEfficacy)),
+      avgLast3Efficacy: roundValue(avgValue(last3Efficacy)),
+      matchEfficiency: roundValue(matchEfficiency),
+      avgAllEfficiency: roundValue(avgValue(allEfficiency)),
+      avgLast3Efficiency: roundValue(avgValue(last3Efficiency)),
+    };
+  });
+}
+
+function AggregatedScoutPanel({
+  matchAnalytics,
+  selectedOpponent,
+  onSelectOpponent,
+  selectedMatchId,
+  onSelectMatchId,
+  selectedMatchMA,
+  selectedOpponentMatches = [],
+}) {
+  const [lineMode, setLineMode] = useState('efficacia');
+  const [selectedPlayerNumber, setSelectedPlayerNumber] = useState('');
   const agg = useMemo(() => computeAggregatedScout(matchAnalytics), [matchAnalytics]);
+  const seasonTeamAvg = useMemo(() => computeTeamFundAverages(matchAnalytics), [matchAnalytics]);
+  const playersCatalog = useMemo(() => buildPlayerCatalog(matchAnalytics), [matchAnalytics]);
+  const playersInSelectedMatch = useMemo(() => (
+    new Set((selectedMatchMA?.playerStats || [])
+      .filter(p => ['serve', 'attack', 'defense', 'reception', 'block'].some(f => (p?.raw?.[f]?.tot || 0) > 0))
+      .map(p => p.number))
+  ), [selectedMatchMA]);
   const opponents = useMemo(() => (
     [...new Set(
       (matchAnalytics || [])
@@ -457,6 +592,14 @@ function AggregatedScoutPanel({ matchAnalytics, selectedOpponent, onSelectOppone
     return computeAggregatedScout(filtered);
   }, [matchAnalytics, activeOpponent]);
   const cardsAgg = selectedOppAgg || agg;
+  const activePlayerNumber = playersCatalog.some(p => p.number === selectedPlayerNumber)
+    ? selectedPlayerNumber
+    : (playersCatalog[0]?.number || '');
+  const playerSeries = useMemo(
+    () => buildPlayerSeries(matchAnalytics, selectedMatchMA, activePlayerNumber),
+    [matchAnalytics, selectedMatchMA, activePlayerNumber]
+  );
+  const activePlayer = playersCatalog.find(p => p.number === activePlayerNumber) || null;
 
   if (agg.matchCount === 0) return null;
 
@@ -468,18 +611,69 @@ function AggregatedScoutPanel({ matchAnalytics, selectedOpponent, onSelectOppone
           <span className="text-sm font-semibold text-gray-300">Scout Dedotto Avversario — Media Stagione</span>
           <span className="text-[10px] text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">{agg.matchCount} partite</span>
         </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setLineMode('efficacia')}
+            className={`text-[10px] px-2 py-1 rounded border ${lineMode === 'efficacia' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
+          >
+            Efficacia
+          </button>
+          <button
+            onClick={() => setLineMode('efficienza')}
+            className={`text-[10px] px-2 py-1 rounded border ${lineMode === 'efficienza' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
+          >
+            Efficienza
+          </button>
+          <button
+            onClick={() => setLineMode('medie')}
+            className={`text-[10px] px-2 py-1 rounded border ${lineMode === 'medie' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
+          >
+            Valori medi
+          </button>
+        </div>
       </div>
 
       <div className="px-5 pb-5 border-t border-white/5">
         <p className="text-[10px] text-gray-500 mt-3 mb-3">
           Dati aggregati di tutte le partite — usa come riferimento per confrontare la singola partita.
         </p>
+        {selectedOpponentMatches.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {selectedOpponentMatches.map(ma => {
+              const id = ma?.match?.id || '';
+              const date = ma?.match?.metadata?.date || 'Data N/D';
+              const homeAway = ma?.match?.metadata?.homeAway || '';
+              return (
+                <button
+                  key={id}
+                  onClick={() => onSelectMatchId(id)}
+                  className={`text-[10px] px-2.5 py-1 rounded-full border transition-all ${
+                    selectedMatchId === id
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                      : 'bg-white/[0.03] text-gray-400 border-white/10 hover:text-gray-200'
+                  }`}
+                >
+                  {date}{homeAway ? ` · ${homeAway}` : ''}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <OpponentScoutComparisonChart
           seasonAgg={agg}
           opponents={opponents}
           activeOpponent={activeOpponent}
           onSelectOpponent={onSelectOpponent}
           selectedOppAgg={selectedOppAgg}
+          selectedMatchMA={selectedMatchMA}
+          seasonTeamAvg={seasonTeamAvg}
+          lineMode={lineMode}
+          activePlayer={activePlayer}
+          playerSeries={playerSeries}
+          playersCatalog={playersCatalog}
+          activePlayerNumber={activePlayerNumber}
+          onSelectPlayerNumber={setSelectedPlayerNumber}
+          playersInSelectedMatch={playersInSelectedMatch}
         />
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <DetailedOppStatCard title="Battuta" data={cardsAgg.serve} type="serve" />
@@ -610,63 +804,129 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
   );
 }
 
-function OpponentScoutComparisonChart({ seasonAgg, opponents, activeOpponent, onSelectOpponent, selectedOppAgg }) {
-  const chartData = useMemo(() => {
-    if (!selectedOppAgg || !seasonAgg) return [];
-    return [
-      { fund: 'Battuta', opp: (selectedOppAgg.serve?.efficacy || 0) * 100, avg: (seasonAgg.serve?.efficacy || 0) * 100 },
-      { fund: 'Attacco', opp: (selectedOppAgg.attack?.efficacy || 0) * 100, avg: (seasonAgg.attack?.efficacy || 0) * 100 },
-      { fund: 'Difesa', opp: (selectedOppAgg.defense?.efficacy || 0) * 100, avg: (seasonAgg.defense?.efficacy || 0) * 100 },
-      { fund: 'Ricezione', opp: (selectedOppAgg.reception?.efficacy || 0) * 100, avg: (seasonAgg.reception?.efficacy || 0) * 100 },
-    ].map(r => ({ ...r, opp: +r.opp.toFixed(1), avg: +r.avg.toFixed(1) }));
-  }, [selectedOppAgg, seasonAgg]);
+function OpponentScoutComparisonChart({
+  opponents,
+  activeOpponent,
+  onSelectOpponent,
+  lineMode = 'efficacia',
+  activePlayer,
+  playerSeries = [],
+  playersCatalog = [],
+  activePlayerNumber = '',
+  onSelectPlayerNumber,
+  playersInSelectedMatch = new Set(),
+}) {
+  const chartData = useMemo(() => (
+    (playerSeries || []).map(r => ({
+      fund: r.fund,
+      matchEfficacy: r.matchEfficacy,
+      avgAllEfficacy: r.avgAllEfficacy,
+      avgLast3Efficacy: r.avgLast3Efficacy,
+      matchEfficiency: r.matchEfficiency,
+      avgAllEfficiency: r.avgAllEfficiency,
+      avgLast3Efficiency: r.avgLast3Efficiency,
+    }))
+  ), [playerSeries]);
+  if (!chartData.length) return null;
 
-  if (!opponents.length || !chartData.length) return null;
+  const modeTitle = {
+    efficacia: 'Confronto atleta (efficacia)',
+    efficienza: 'Confronto atleta (efficienza)',
+    medie: 'Confronto atleta (valori medi)',
+  }[lineMode] || 'Confronto atleta';
 
   return (
     <div className="glass-card p-4 mb-4">
       <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
         <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wide">
-          Confronto Scout Avversario vs Media Avversari
+          {modeTitle}
         </h4>
       </div>
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-          <XAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 10 }} />
-          <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
-          <Tooltip
-            contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
-            formatter={(v, n) => [`${Number(v).toFixed(1)}%`, n === 'opp' ? activeOpponent : 'Media avversari']}
-          />
-          <Legend
-            verticalAlign="top"
-            align="right"
-            height={28}
-            wrapperStyle={{ fontSize: 11 }}
-            formatter={(v) => (v === 'opp' ? activeOpponent : 'Media avversari')}
-          />
-          <Line
-            type="monotone"
-            dataKey="opp"
-            stroke="#a855f7"
-            strokeWidth={2.3}
-            dot={{ r: 3.5, fill: '#a855f7' }}
-            activeDot={{ r: 5 }}
-            name="opp"
-          />
-          <Line
-            type="monotone"
-            dataKey="avg"
-            stroke="#94a3b8"
-            strokeWidth={2}
-            strokeDasharray="5 3"
-            dot={{ r: 3, fill: '#94a3b8' }}
-            activeDot={{ r: 4.5 }}
-            name="avg"
-          />
-        </LineChart>
-      </ResponsiveContainer>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_220px] gap-3 items-start">
+        <div>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <XAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 10 }} />
+              <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
+              <Tooltip
+                contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
+                formatter={(v, n) => [v === null || v === undefined ? 'N/D' : `${Number(v).toFixed(1)}%`, ({
+                  matchEfficacy: 'Atleta · gara selezionata (efficacia)',
+                  avgAllEfficacy: 'Atleta · media assoluta (efficacia)',
+                  avgLast3Efficacy: 'Atleta · media ultime 3 (efficacia)',
+                  matchEfficiency: 'Atleta · gara selezionata (efficienza)',
+                  avgAllEfficiency: 'Atleta · media assoluta (efficienza)',
+                  avgLast3Efficiency: 'Atleta · media ultime 3 (efficienza)',
+                }[n] || n)]}
+              />
+              <Legend
+                verticalAlign="top"
+                align="right"
+                height={28}
+                wrapperStyle={{ fontSize: 11 }}
+                formatter={(v) => ({
+                  matchEfficacy: 'Atleta · gara selezionata',
+                  avgAllEfficacy: 'Atleta · media assoluta',
+                  avgLast3Efficacy: 'Atleta · media ultime 3',
+                  matchEfficiency: 'Atleta · gara selezionata',
+                  avgAllEfficiency: 'Atleta · media assoluta',
+                  avgLast3Efficiency: 'Atleta · media ultime 3',
+                }[v] || v)}
+              />
+              {lineMode === 'efficacia' && (
+                <>
+                  <Line type="monotone" dataKey="matchEfficacy" stroke="#f59e0b" strokeWidth={2.2} dot={{ r: 3.5, fill: '#f59e0b' }} activeDot={{ r: 5 }} name="matchEfficacy" />
+                  <Line type="monotone" dataKey="avgAllEfficacy" stroke="#a855f7" strokeWidth={2} dot={{ r: 3.2, fill: '#a855f7' }} activeDot={{ r: 4.5 }} name="avgAllEfficacy" />
+                  <Line type="monotone" dataKey="avgLast3Efficacy" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#94a3b8' }} activeDot={{ r: 4.5 }} name="avgLast3Efficacy" />
+                </>
+              )}
+              {lineMode === 'efficienza' && (
+                <>
+                  <Line type="monotone" dataKey="matchEfficiency" stroke="#22d3ee" strokeWidth={2.2} dot={{ r: 3.5, fill: '#22d3ee' }} activeDot={{ r: 5 }} name="matchEfficiency" />
+                  <Line type="monotone" dataKey="avgAllEfficiency" stroke="#10b981" strokeWidth={2} dot={{ r: 3.2, fill: '#10b981' }} activeDot={{ r: 4.5 }} name="avgAllEfficiency" />
+                  <Line type="monotone" dataKey="avgLast3Efficiency" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#94a3b8' }} activeDot={{ r: 4.5 }} name="avgLast3Efficiency" />
+                </>
+              )}
+              {lineMode === 'medie' && (
+                <>
+                  <Line type="monotone" dataKey="avgAllEfficacy" stroke="#a855f7" strokeWidth={2} dot={{ r: 3.2, fill: '#a855f7' }} activeDot={{ r: 4.5 }} name="avgAllEfficacy" />
+                  <Line type="monotone" dataKey="avgLast3Efficacy" stroke="#c084fc" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#c084fc' }} activeDot={{ r: 4.5 }} name="avgLast3Efficacy" />
+                  <Line type="monotone" dataKey="avgAllEfficiency" stroke="#10b981" strokeWidth={2} dot={{ r: 3.2, fill: '#10b981' }} activeDot={{ r: 4.5 }} name="avgAllEfficiency" />
+                  <Line type="monotone" dataKey="avgLast3Efficiency" stroke="#6ee7b7" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#6ee7b7' }} activeDot={{ r: 4.5 }} name="avgLast3Efficiency" />
+                </>
+              )}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="glass-card p-2 h-fit">
+          <p className="text-[10px] text-gray-500 mb-2">
+            {activePlayer ? `${activePlayer.name} (#${activePlayer.number})` : 'Nessuna atleta selezionata'}
+          </p>
+          <div className="flex flex-col gap-1 max-h-56 overflow-y-auto pr-1">
+            {playersCatalog.map(p => {
+              const isActive = p.number === activePlayerNumber;
+              const inMatch = playersInSelectedMatch.has(p.number);
+              return (
+                <button
+                  key={p.number}
+                  onClick={() => onSelectPlayerNumber && onSelectPlayerNumber(p.number)}
+                  className={`text-[10px] px-2 py-1 rounded border transition-all text-left ${
+                    isActive
+                      ? 'bg-sky-500/20 text-sky-300 border-sky-400/40'
+                      : inMatch
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-400/30'
+                        : 'bg-white/[0.03] text-gray-500 border-white/10'
+                  }`}
+                >
+                  #{p.number} {p.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
       <div className="flex flex-wrap gap-1.5 mt-2">
         {opponents.map(o => (
           <button
