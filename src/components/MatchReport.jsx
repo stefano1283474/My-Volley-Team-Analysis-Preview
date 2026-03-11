@@ -3,6 +3,9 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, LineChart, Line } from 'recharts';
 import { COLORS } from '../utils/constants';
 
+const ALL_OPPONENTS_ID = '__all_opponents__';
+const ALL_PLAYERS_ID = '__all_players__';
+
 export default function MatchReport({ analytics, matches, standings, selectedMatch, onSelectMatch, weights }) {
   const [activeSet, setActiveSet] = useState(null);
   const matchAnalytics = analytics?.matchAnalytics || [];
@@ -15,10 +18,16 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
   ), [matchAnalytics]);
   const [selectedScoutOpponent, setSelectedScoutOpponent] = useState('');
   const [selectedScoutMatchId, setSelectedScoutMatchId] = useState('');
-  const activeScoutOpponent = opponents.includes(selectedScoutOpponent) ? selectedScoutOpponent : (opponents[0] || '');
+  const activeScoutOpponent = (
+    selectedScoutOpponent === ALL_OPPONENTS_ID || opponents.includes(selectedScoutOpponent)
+  ) ? selectedScoutOpponent : (opponents[0] || ALL_OPPONENTS_ID);
   const selectedOpponentMatches = useMemo(() => (
     (matchAnalytics || [])
-      .filter(ma => (ma?.match?.metadata?.opponent || '') === activeScoutOpponent)
+      .filter(ma => (
+        activeScoutOpponent === ALL_OPPONENTS_ID
+          ? true
+          : (ma?.match?.metadata?.opponent || '') === activeScoutOpponent
+      ))
       .sort((a, b) => (b.match.metadata?.date || '').localeCompare(a.match.metadata?.date || ''))
   ), [matchAnalytics, activeScoutOpponent]);
   const activeScoutMatchId = selectedOpponentMatches.some(ma => ma?.match?.id === selectedScoutMatchId)
@@ -583,23 +592,30 @@ function AggregatedScoutPanel({
         .filter(Boolean)
     )].sort((a, b) => a.localeCompare(b))
   ), [matchAnalytics]);
-  const activeOpponent = opponents.includes(selectedOpponent) ? selectedOpponent : (opponents[0] || '');
+  const activeOpponent = (
+    selectedOpponent === ALL_OPPONENTS_ID || opponents.includes(selectedOpponent)
+  ) ? selectedOpponent : (opponents[0] || ALL_OPPONENTS_ID);
   const selectedOppAgg = useMemo(() => {
     if (!activeOpponent) return null;
+    if (activeOpponent === ALL_OPPONENTS_ID) return agg;
     const filtered = (matchAnalytics || []).filter(
       ma => (ma?.match?.metadata?.opponent || '') === activeOpponent
     );
     return computeAggregatedScout(filtered);
-  }, [matchAnalytics, activeOpponent]);
+  }, [matchAnalytics, activeOpponent, agg]);
   const cardsAgg = selectedOppAgg || agg;
-  const activePlayerNumber = playersCatalog.some(p => p.number === selectedPlayerNumber)
+  const activePlayerNumber = (
+    selectedPlayerNumber === ALL_PLAYERS_ID || playersCatalog.some(p => p.number === selectedPlayerNumber)
+  )
     ? selectedPlayerNumber
-    : (playersCatalog[0]?.number || '');
+    : (playersCatalog[0]?.number || ALL_PLAYERS_ID);
   const playerSeries = useMemo(
-    () => buildPlayerSeries(matchAnalytics, selectedMatchMA, activePlayerNumber),
+    () => (activePlayerNumber === ALL_PLAYERS_ID ? [] : buildPlayerSeries(matchAnalytics, selectedMatchMA, activePlayerNumber)),
     [matchAnalytics, selectedMatchMA, activePlayerNumber]
   );
-  const activePlayer = playersCatalog.find(p => p.number === activePlayerNumber) || null;
+  const activePlayer = activePlayerNumber === ALL_PLAYERS_ID
+    ? null
+    : (playersCatalog.find(p => p.number === activePlayerNumber) || null);
 
   if (agg.matchCount === 0) return null;
 
@@ -805,6 +821,8 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
 }
 
 function OpponentScoutComparisonChart({
+  seasonAgg,
+  selectedOppAgg,
   opponents,
   activeOpponent,
   onSelectOpponent,
@@ -816,17 +834,49 @@ function OpponentScoutComparisonChart({
   onSelectPlayerNumber,
   playersInSelectedMatch = new Set(),
 }) {
+  const metricKey = lineMode === 'efficienza' ? 'efficiency' : 'efficacy';
+  const selectedOppName = activeOpponent === ALL_OPPONENTS_ID ? 'Tutte le squadre' : activeOpponent;
+  const getFundMetric = (fundData) => {
+    if (!fundData) return null;
+    if (lineMode === 'medie') {
+      const e1 = Number.isFinite(fundData.efficacy) ? fundData.efficacy * 100 : null;
+      const e2 = Number.isFinite(fundData.efficiency) ? fundData.efficiency * 100 : null;
+      if (e1 === null && e2 === null) return null;
+      if (e1 === null) return roundValue(e2);
+      if (e2 === null) return roundValue(e1);
+      return roundValue((e1 + e2) / 2);
+    }
+    return Number.isFinite(fundData[metricKey]) ? roundValue(fundData[metricKey] * 100) : null;
+  };
+
+  const playerLineDataByFund = Object.fromEntries(
+    (playerSeries || []).map(row => [row.fund, {
+      match: lineMode === 'efficienza'
+        ? row.matchEfficiency
+        : lineMode === 'medie'
+          ? roundValue(avgValue([row.matchEfficacy, row.matchEfficiency].filter(v => Number.isFinite(v))))
+          : row.matchEfficacy,
+      last3: lineMode === 'efficienza'
+        ? row.avgLast3Efficiency
+        : lineMode === 'medie'
+          ? roundValue(avgValue([row.avgLast3Efficacy, row.avgLast3Efficiency].filter(v => Number.isFinite(v))))
+          : row.avgLast3Efficacy,
+    }])
+  );
+
   const chartData = useMemo(() => (
-    (playerSeries || []).map(r => ({
-      fund: r.fund,
-      matchEfficacy: r.matchEfficacy,
-      avgAllEfficacy: r.avgAllEfficacy,
-      avgLast3Efficacy: r.avgLast3Efficacy,
-      matchEfficiency: r.matchEfficiency,
-      avgAllEfficiency: r.avgAllEfficiency,
-      avgLast3Efficiency: r.avgLast3Efficiency,
+    [
+      { fund: 'Battuta', oppSel: getFundMetric(selectedOppAgg?.serve), oppAll: getFundMetric(seasonAgg?.serve) },
+      { fund: 'Attacco', oppSel: getFundMetric(selectedOppAgg?.attack), oppAll: getFundMetric(seasonAgg?.attack) },
+      { fund: 'Difesa', oppSel: getFundMetric(selectedOppAgg?.defense), oppAll: getFundMetric(seasonAgg?.defense) },
+      { fund: 'Ricezione', oppSel: getFundMetric(selectedOppAgg?.reception), oppAll: getFundMetric(seasonAgg?.reception) },
+      { fund: 'Muro', oppSel: getFundMetric(selectedOppAgg?.block), oppAll: getFundMetric(seasonAgg?.block) },
+    ].map(row => ({
+      ...row,
+      playerMatch: playerLineDataByFund[row.fund]?.match ?? null,
+      playerLast3: playerLineDataByFund[row.fund]?.last3 ?? null,
     }))
-  ), [playerSeries]);
+  ), [selectedOppAgg, seasonAgg, playerLineDataByFund, lineMode]);
   if (!chartData.length) return null;
 
   const modeTitle = {
@@ -843,7 +893,7 @@ function OpponentScoutComparisonChart({
         </h4>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_220px] gap-3 items-start">
+      <div className="grid grid-cols-[minmax(0,1fr)_70px] sm:grid-cols-[minmax(0,1fr)_78px] lg:grid-cols-[minmax(0,1fr)_96px] gap-1.5 items-start">
         <div>
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={chartData}>
@@ -853,12 +903,10 @@ function OpponentScoutComparisonChart({
               <Tooltip
                 contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
                 formatter={(v, n) => [v === null || v === undefined ? 'N/D' : `${Number(v).toFixed(1)}%`, ({
-                  matchEfficacy: 'Atleta · gara selezionata (efficacia)',
-                  avgAllEfficacy: 'Atleta · media assoluta (efficacia)',
-                  avgLast3Efficacy: 'Atleta · media ultime 3 (efficacia)',
-                  matchEfficiency: 'Atleta · gara selezionata (efficienza)',
-                  avgAllEfficiency: 'Atleta · media assoluta (efficienza)',
-                  avgLast3Efficiency: 'Atleta · media ultime 3 (efficienza)',
+                  oppSel: `Media ${selectedOppName}`,
+                  oppAll: 'Media tutte le squadre',
+                  playerMatch: 'Media giocatrice in questa partita',
+                  playerLast3: 'Media ultime 3 gare giocatrice',
                 }[n] || n)]}
               />
               <Legend
@@ -867,52 +915,45 @@ function OpponentScoutComparisonChart({
                 height={28}
                 wrapperStyle={{ fontSize: 11 }}
                 formatter={(v) => ({
-                  matchEfficacy: 'Atleta · gara selezionata',
-                  avgAllEfficacy: 'Atleta · media assoluta',
-                  avgLast3Efficacy: 'Atleta · media ultime 3',
-                  matchEfficiency: 'Atleta · gara selezionata',
-                  avgAllEfficiency: 'Atleta · media assoluta',
-                  avgLast3Efficiency: 'Atleta · media ultime 3',
+                  oppSel: `Media ${selectedOppName}`,
+                  oppAll: 'Media tutte le squadre',
+                  playerMatch: 'Media giocatrice in questa partita',
+                  playerLast3: 'Media ultime 3 gare giocatrice',
                 }[v] || v)}
               />
-              {lineMode === 'efficacia' && (
-                <>
-                  <Line type="monotone" dataKey="matchEfficacy" stroke="#f59e0b" strokeWidth={2.2} dot={{ r: 3.5, fill: '#f59e0b' }} activeDot={{ r: 5 }} name="matchEfficacy" />
-                  <Line type="monotone" dataKey="avgAllEfficacy" stroke="#a855f7" strokeWidth={2} dot={{ r: 3.2, fill: '#a855f7' }} activeDot={{ r: 4.5 }} name="avgAllEfficacy" />
-                  <Line type="monotone" dataKey="avgLast3Efficacy" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#94a3b8' }} activeDot={{ r: 4.5 }} name="avgLast3Efficacy" />
-                </>
+              <Line type="monotone" dataKey="oppSel" stroke="#a855f7" strokeWidth={2.2} dot={{ r: 3.2, fill: '#a855f7' }} activeDot={{ r: 4.5 }} name="oppSel" />
+              <Line type="monotone" dataKey="oppAll" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#94a3b8' }} activeDot={{ r: 4.5 }} name="oppAll" />
+              {activePlayerNumber !== ALL_PLAYERS_ID && (
+                <Line type="monotone" dataKey="playerMatch" stroke="#f59e0b" strokeWidth={2.2} dot={{ r: 3.3, fill: '#f59e0b' }} activeDot={{ r: 5 }} name="playerMatch" />
               )}
-              {lineMode === 'efficienza' && (
-                <>
-                  <Line type="monotone" dataKey="matchEfficiency" stroke="#22d3ee" strokeWidth={2.2} dot={{ r: 3.5, fill: '#22d3ee' }} activeDot={{ r: 5 }} name="matchEfficiency" />
-                  <Line type="monotone" dataKey="avgAllEfficiency" stroke="#10b981" strokeWidth={2} dot={{ r: 3.2, fill: '#10b981' }} activeDot={{ r: 4.5 }} name="avgAllEfficiency" />
-                  <Line type="monotone" dataKey="avgLast3Efficiency" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#94a3b8' }} activeDot={{ r: 4.5 }} name="avgLast3Efficiency" />
-                </>
-              )}
-              {lineMode === 'medie' && (
-                <>
-                  <Line type="monotone" dataKey="avgAllEfficacy" stroke="#a855f7" strokeWidth={2} dot={{ r: 3.2, fill: '#a855f7' }} activeDot={{ r: 4.5 }} name="avgAllEfficacy" />
-                  <Line type="monotone" dataKey="avgLast3Efficacy" stroke="#c084fc" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#c084fc' }} activeDot={{ r: 4.5 }} name="avgLast3Efficacy" />
-                  <Line type="monotone" dataKey="avgAllEfficiency" stroke="#10b981" strokeWidth={2} dot={{ r: 3.2, fill: '#10b981' }} activeDot={{ r: 4.5 }} name="avgAllEfficiency" />
-                  <Line type="monotone" dataKey="avgLast3Efficiency" stroke="#6ee7b7" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#6ee7b7' }} activeDot={{ r: 4.5 }} name="avgLast3Efficiency" />
-                </>
+              {activePlayerNumber !== ALL_PLAYERS_ID && (
+                <Line type="monotone" dataKey="playerLast3" stroke="#22d3ee" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#22d3ee' }} activeDot={{ r: 4.5 }} name="playerLast3" />
               )}
             </LineChart>
           </ResponsiveContainer>
         </div>
-        <div className="glass-card p-2 h-fit">
-          <p className="text-[10px] text-gray-500 mb-2">
-            {activePlayer ? `${activePlayer.name} (#${activePlayer.number})` : 'Nessuna atleta selezionata'}
+        <div className="glass-card p-1 h-fit">
+          <p className="text-[8px] text-gray-500 mb-1 truncate">
+            {activePlayer
+              ? `${activePlayer.number} ${(activePlayer.name || '').trim().split(/\s+/)[0].slice(0, 10)}`
+              : 'Tutte le giocatrici'}
           </p>
-          <div className="flex flex-col gap-1 max-h-56 overflow-y-auto pr-1">
+          <div className="flex flex-col items-start gap-0.5 max-h-56 overflow-y-auto pr-0.5">
+            <button
+              onClick={() => onSelectPlayerNumber && onSelectPlayerNumber(ALL_PLAYERS_ID)}
+              className={`w-[7ch] max-w-[7ch] text-[9px] px-1 py-0.5 rounded border transition-all text-left whitespace-nowrap overflow-x-auto overflow-y-hidden ${activePlayerNumber === ALL_PLAYERS_ID ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
+            >
+              <span className="inline-block min-w-max">Tutte le giocatrici</span>
+            </button>
             {playersCatalog.map(p => {
               const isActive = p.number === activePlayerNumber;
               const inMatch = playersInSelectedMatch.has(p.number);
+              const nick = (p.name || '').trim().split(/\s+/)[0].slice(0, 10);
               return (
                 <button
                   key={p.number}
                   onClick={() => onSelectPlayerNumber && onSelectPlayerNumber(p.number)}
-                  className={`text-[10px] px-2 py-1 rounded border transition-all text-left ${
+                  className={`w-[7ch] max-w-[7ch] text-[9px] px-1 py-0.5 rounded border transition-all text-left whitespace-nowrap overflow-x-auto overflow-y-hidden ${
                     isActive
                       ? 'bg-sky-500/20 text-sky-300 border-sky-400/40'
                       : inMatch
@@ -920,7 +961,7 @@ function OpponentScoutComparisonChart({
                         : 'bg-white/[0.03] text-gray-500 border-white/10'
                   }`}
                 >
-                  #{p.number} {p.name}
+                  <span className="inline-block min-w-max">{p.number} {nick}</span>
                 </button>
               );
             })}
@@ -928,6 +969,16 @@ function OpponentScoutComparisonChart({
         </div>
       </div>
       <div className="flex flex-wrap gap-1.5 mt-2">
+        <button
+          onClick={() => onSelectOpponent(ALL_OPPONENTS_ID)}
+          className={`text-[10px] px-2.5 py-1 rounded-full border transition-all ${
+            activeOpponent === ALL_OPPONENTS_ID
+              ? 'bg-violet-500/20 text-violet-300 border-violet-400/40'
+              : 'bg-white/[0.03] text-gray-400 border-white/10 hover:text-gray-200'
+          }`}
+        >
+          Tutte le squadre
+        </button>
         {opponents.map(o => (
           <button
             key={o}
