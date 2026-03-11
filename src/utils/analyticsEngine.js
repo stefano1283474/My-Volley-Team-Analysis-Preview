@@ -1119,3 +1119,545 @@ function getTargetRolesForFundamental(fund) {
   };
   return targetMap[fund] || 'tutte le giocatrici coinvolte';
 }
+
+// ============================================================================
+// CHAIN ANALYTICS — Analisi Sequenze di Gioco
+// Funzioni per estrarre KPI avanzati dalle quartine dei rally
+// ============================================================================
+
+function _getPlayerName(playerNumber, roster) {
+  const p = roster.find(r => r.number === playerNumber);
+  if (!p) return `#${playerNumber}`;
+  return (p.nickname && p.nickname.trim()) ? p.nickname.trim()
+    : (p.surname && p.surname.trim()) ? p.surname.trim()
+    : `#${playerNumber}`;
+}
+
+function _getRoleLabel(roleCode) {
+  const labels = {
+    M1: 'Schiacciatrice', M2: 'Schiacciatrice',
+    C1: 'Centrale', C2: 'Centrale',
+    O: 'Opposto',
+    P1: 'Palleggiatrice', P2: 'Palleggiatrice',
+    L1: 'Libero', L2: 'Libero',
+  };
+  return labels[roleCode] || '';
+}
+
+// ─── 1. R/D → A Conversion Matrix per player ─────────────────────────────
+// Constructs the conversion matrix (input quality → attack quality) from rally quartine.
+// Side-out (phase='r'): tracks R→A pairs. Transition (phase='b'): tracks D→A pairs.
+export function analyzeRDtoAConversions(allMatches, roster = []) {
+  const players = {};
+
+  function ensure(pNum) {
+    if (!players[pNum]) {
+      players[pNum] = {
+        name: _getPlayerName(pNum, roster),
+        sideOut: { R3: {}, R4: {}, R5: {} },
+        transition: { D3: {}, D4: {}, D5: {} },
+        totalAttacks: 0,
+        itaPositive: 0,
+        itaNegative: 0,
+        itaNet: 0,
+      };
+    }
+  }
+
+  for (const match of allMatches) {
+    for (const rally of match.rallies || []) {
+      const { quartine, phase } = rally;
+      if (!quartine || quartine.length < 2) continue;
+
+      // SIDE-OUT (phase='r'): find first R token → next A token (first attacker)
+      if (phase === 'r') {
+        for (let i = 0; i < quartine.length - 1; i++) {
+          const curr = quartine[i];
+          if (curr.type !== 'action' || curr.fundamental !== 'r' || !curr.value || curr.value < 3) continue;
+          // Find next A in sequence
+          for (let j = i + 1; j < quartine.length; j++) {
+            const next = quartine[j];
+            if (next.type === 'action' && next.fundamental === 'a' && next.player && next.value) {
+              ensure(next.player);
+              const rKey = `R${curr.value}`;
+              if (players[next.player].sideOut[rKey] !== undefined) {
+                const aKey = `A${next.value}`;
+                players[next.player].sideOut[rKey][aKey] = (players[next.player].sideOut[rKey][aKey] || 0) + 1;
+              }
+              break;
+            }
+          }
+          break; // only process first R per rally
+        }
+      }
+
+      // TRANSITION (phase='b'): find D token → next A token
+      if (phase === 'b') {
+        let foundD = false;
+        for (let i = 0; i < quartine.length - 1; i++) {
+          const curr = quartine[i];
+          if (curr.type !== 'action' || curr.fundamental !== 'd' || !curr.value || curr.value < 3) continue;
+          foundD = true;
+          for (let j = i + 1; j < quartine.length; j++) {
+            const next = quartine[j];
+            if (next.type === 'action' && next.fundamental === 'a' && next.player && next.value) {
+              ensure(next.player);
+              const dKey = `D${curr.value}`;
+              if (players[next.player].transition[dKey] !== undefined) {
+                const aKey = `A${next.value}`;
+                players[next.player].transition[dKey][aKey] = (players[next.player].transition[dKey][aKey] || 0) + 1;
+              }
+              break;
+            }
+          }
+          if (foundD) break; // only first D per rally
+        }
+      }
+    }
+  }
+
+  // Compute ITA scores per player
+  for (const pNum of Object.keys(players)) {
+    const p = players[pNum];
+    let positive = 0, negative = 0, total = 0;
+
+    for (const rKey of ['R3', 'R4', 'R5']) {
+      for (const [aKey, cnt] of Object.entries(p.sideOut[rKey])) {
+        total += cnt;
+        if (rKey === 'R3' && (aKey === 'A4' || aKey === 'A5')) positive += cnt;
+        if (rKey === 'R5' && (aKey === 'A1' || aKey === 'A2')) negative += cnt;
+      }
+    }
+    for (const dKey of ['D3', 'D4', 'D5']) {
+      for (const [aKey, cnt] of Object.entries(p.transition[dKey])) {
+        total += cnt;
+        if (dKey === 'D3' && (aKey === 'A4' || aKey === 'A5')) positive += cnt;
+        if (dKey === 'D5' && (aKey === 'A1' || aKey === 'A2')) negative += cnt;
+      }
+    }
+
+    p.itaPositive = positive;
+    p.itaNegative = negative;
+    p.totalAttacks = total;
+    p.itaNet = total > 0 ? (positive - negative) / total : 0;
+  }
+
+  return players;
+}
+
+// ─── 2. Side-out vs Transition attack efficiency per player ───────────────
+export function analyzeSideOutVsTransition(allMatches, roster = []) {
+  const players = {};
+
+  function ensure(pNum) {
+    if (!players[pNum]) {
+      players[pNum] = {
+        name: _getPlayerName(pNum, roster),
+        sideOut:    { total: 0, effSum: 0, pts: 0 },
+        transition: { total: 0, effSum: 0, pts: 0 },
+        totalAttacks: 0,
+      };
+    }
+  }
+
+  for (const match of allMatches) {
+    for (const rally of match.rallies || []) {
+      const { quartine, phase } = rally;
+      if (!quartine) continue;
+
+      for (let i = 0; i < quartine.length; i++) {
+        const action = quartine[i];
+        if (action.type !== 'action' || action.fundamental !== 'a' || !action.player || !action.value) continue;
+
+        const pNum = action.player;
+        ensure(pNum);
+        const v = action.value;
+
+        if (phase === 'r') {
+          // Side-out: attack following reception
+          players[pNum].sideOut.total++;
+          players[pNum].sideOut.effSum += v;
+          if (v >= 4) players[pNum].sideOut.pts++;
+        } else if (phase === 'b') {
+          // Transition: check if there's a D action before this A in the same rally
+          const hasPriorD = quartine.slice(0, i).some(q => q.type === 'action' && q.fundamental === 'd');
+          if (hasPriorD) {
+            players[pNum].transition.total++;
+            players[pNum].transition.effSum += v;
+            if (v >= 4) players[pNum].transition.pts++;
+          } else {
+            // Freeball / direct attack in break-point: classify with side-out
+            players[pNum].sideOut.total++;
+            players[pNum].sideOut.effSum += v;
+            if (v >= 4) players[pNum].sideOut.pts++;
+          }
+        }
+      }
+    }
+  }
+
+  // Compute final metrics
+  for (const pNum of Object.keys(players)) {
+    const p = players[pNum];
+    p.sideOut.efficacy    = p.sideOut.total    > 0 ? p.sideOut.effSum    / (p.sideOut.total    * 5) : null;
+    p.transition.efficacy = p.transition.total > 0 ? p.transition.effSum / (p.transition.total * 5) : null;
+    p.sideOut.posPct    = p.sideOut.total    > 0 ? p.sideOut.pts    / p.sideOut.total    : null;
+    p.transition.posPct = p.transition.total > 0 ? p.transition.pts / p.transition.total : null;
+    p.totalAttacks = p.sideOut.total + p.transition.total;
+
+    if (p.sideOut.efficacy !== null && p.transition.efficacy !== null) {
+      p.gap = p.sideOut.efficacy - p.transition.efficacy;
+    } else {
+      p.gap = null;
+    }
+  }
+
+  return players;
+}
+
+// ─── 3. Serve → Defense chain quality ────────────────────────────────────
+// For phase='b' rallies: group by our serve quality (B1-B5),
+// then measure the subsequent defense (D) quality.
+export function analyzeServeDefenseChain(allMatches) {
+  const byServe = {};
+  for (let v = 1; v <= 5; v++) {
+    byServe[`B${v}`] = { total: 0, defTotal: 0, defPos: 0 };
+  }
+
+  for (const match of allMatches) {
+    for (const rally of match.rallies || []) {
+      const { quartine, phase } = rally;
+      if (phase !== 'b' || !quartine || quartine.length === 0) continue;
+
+      // Find first B token (our serve)
+      const serveAction = quartine.find(q => q.type === 'action' && q.fundamental === 'b');
+      if (!serveAction || !serveAction.value) continue;
+
+      const bKey = `B${serveAction.value}`;
+      if (!byServe[bKey]) continue;
+      byServe[bKey].total++;
+
+      // Find next D (our defense after opponent attacks)
+      const serveIdx = quartine.indexOf(serveAction);
+      const defAction = quartine.slice(serveIdx + 1).find(q => q.type === 'action' && q.fundamental === 'd');
+      if (defAction && defAction.value) {
+        byServe[bKey].defTotal++;
+        if (defAction.value >= 4) byServe[bKey].defPos++;
+      }
+    }
+  }
+
+  // Compute percentages
+  for (const key of Object.keys(byServe)) {
+    const s = byServe[key];
+    s.defPosPct       = s.defTotal > 0 ? s.defPos    / s.defTotal : null;
+    s.defReachedPct   = s.total    > 0 ? s.defTotal  / s.total    : null;
+  }
+
+  // Score: quality of defense on aggressive serves (B4+B5)
+  const b45DefTotal = (byServe['B4']?.defTotal || 0) + (byServe['B5']?.defTotal || 0);
+  const b45DefPos   = (byServe['B4']?.defPos   || 0) + (byServe['B5']?.defPos   || 0);
+  const goodServeDefenseScore = b45DefTotal > 0 ? b45DefPos / b45DefTotal : null;
+
+  return { byServe, goodServeDefenseScore };
+}
+
+// ─── 4. Attack performance by rally length ────────────────────────────────
+// short: 1-2 actions, medium: 3-4, long: 5+
+export function analyzeRallyLengthPerformance(allMatches, roster = []) {
+  const playerMap = {};
+  const team = { short: {t:0,p:0}, medium: {t:0,p:0}, long: {t:0,p:0} };
+
+  function ensure(pNum) {
+    if (!playerMap[pNum]) {
+      playerMap[pNum] = {
+        name: _getPlayerName(pNum, roster),
+        short:  { t: 0, p: 0 },
+        medium: { t: 0, p: 0 },
+        long:   { t: 0, p: 0 },
+      };
+    }
+  }
+
+  for (const match of allMatches) {
+    for (const rally of match.rallies || []) {
+      const { quartine } = rally;
+      if (!quartine) continue;
+
+      const actionCount = quartine.filter(q => q.type === 'action').length;
+      const cat = actionCount <= 2 ? 'short' : actionCount <= 4 ? 'medium' : 'long';
+
+      for (const action of quartine) {
+        if (action.type !== 'action' || action.fundamental !== 'a' || !action.player || !action.value) continue;
+        const pNum = action.player;
+        ensure(pNum);
+        const good = action.value >= 4 ? 1 : 0;
+        playerMap[pNum][cat].t++;
+        playerMap[pNum][cat].p += good;
+        team[cat].t++;
+        team[cat].p += good;
+      }
+    }
+  }
+
+  function finalize(obj) {
+    return {
+      short:  { total: obj.short.t,  pts: obj.short.p,  pct: obj.short.t  > 0 ? obj.short.p  / obj.short.t  : null },
+      medium: { total: obj.medium.t, pts: obj.medium.p, pct: obj.medium.t > 0 ? obj.medium.p / obj.medium.t : null },
+      long:   { total: obj.long.t,   pts: obj.long.p,   pct: obj.long.t   > 0 ? obj.long.p   / obj.long.t   : null },
+    };
+  }
+
+  const players = {};
+  for (const [pNum, raw] of Object.entries(playerMap)) {
+    const fin = finalize(raw);
+    const drop = (fin.medium.pct !== null && fin.long.pct !== null) ? fin.medium.pct - fin.long.pct : null;
+    players[pNum] = { name: raw.name, ...fin, drop };
+  }
+
+  return { players, team: finalize(team) };
+}
+
+// ─── 5. Rotational chain analysis ─────────────────────────────────────────
+// Per rotation: side-out%, break-point%, transition (D→A in phase='b')%
+export function analyzeRotationalChains(allMatches) {
+  const rotations = {};
+
+  function ensure(rot) {
+    const k = `R${rot}`;
+    if (!rotations[k]) {
+      rotations[k] = {
+        rotation: rot,
+        sideOut:    { total: 0, won: 0 },
+        breakPoint: { total: 0, won: 0 },
+        transition: { total: 0, won: 0 },
+      };
+    }
+    return k;
+  }
+
+  for (const match of allMatches) {
+    for (const rally of match.rallies || []) {
+      const { quartine, phase, rotation, isPoint } = rally;
+      if (!rotation || !quartine) continue;
+
+      const k = ensure(rotation);
+
+      if (phase === 'r') {
+        rotations[k].sideOut.total++;
+        if (isPoint) rotations[k].sideOut.won++;
+      } else if (phase === 'b') {
+        rotations[k].breakPoint.total++;
+        if (isPoint) rotations[k].breakPoint.won++;
+
+        // Transition: phase='b' rally that contains a D followed by an A
+        const hasTransition = quartine.some((q, i) =>
+          q.type === 'action' && q.fundamental === 'd' &&
+          quartine.slice(i + 1).some(q2 => q2.type === 'action' && q2.fundamental === 'a')
+        );
+        if (hasTransition) {
+          rotations[k].transition.total++;
+          if (isPoint) rotations[k].transition.won++;
+        }
+      }
+    }
+  }
+
+  // Compute percentages
+  for (const k of Object.keys(rotations)) {
+    const r = rotations[k];
+    r.sideOut.pct    = r.sideOut.total    > 0 ? r.sideOut.won    / r.sideOut.total    : null;
+    r.breakPoint.pct = r.breakPoint.total > 0 ? r.breakPoint.won / r.breakPoint.total : null;
+    r.transition.pct = r.transition.total > 0 ? r.transition.won / r.transition.total : null;
+  }
+
+  const validRots = Object.values(rotations).filter(r => r.sideOut.total >= 5);
+  const avgSideOut    = validRots.length > 0 ? avg(validRots.map(r => r.sideOut.pct).filter(v => v !== null)) : null;
+  const avgBreakPoint = validRots.length > 0 ? avg(validRots.map(r => r.breakPoint.pct).filter(v => v !== null)) : null;
+
+  return { rotations, avgSideOut, avgBreakPoint };
+}
+
+// ─── 6. Generate chain-based training suggestions ─────────────────────────
+export function generateChainSuggestions(chainData, roster = []) {
+  const sugg = [];
+  const { rdToA, sideOutVsTransition, serveDefense, rallyLength, rotationalChains } = chainData || {};
+
+  const playerRoleMap = {};
+  for (const p of roster) {
+    if (p.number && p.role) playerRoleMap[p.number] = p.role.trim();
+  }
+
+  const MIN_ATT = 8; // minimum attacks for meaningful analysis
+
+  // ── R/D → A conversions ──────────────────────────────────────────────────
+  if (rdToA) {
+    for (const [pNum, pd] of Object.entries(rdToA)) {
+      if (pd.totalAttacks < MIN_ATT) continue;
+      const role = _getRoleLabel(playerRoleMap[pNum]);
+
+      // R5 waste: perfect reception → bad attack
+      const r5 = pd.sideOut['R5'] || {};
+      const r5tot   = Object.values(r5).reduce((s, v) => s + v, 0);
+      const r5waste = (r5['A1'] || 0) + (r5['A2'] || 0);
+      if (r5tot >= 5 && r5waste / r5tot > 0.30) {
+        sugg.push({
+          type: 'r_to_a_waste', priority: 4, isChainSuggestion: true,
+          player: pd.name, playerNumber: pNum, role, roleCode: playerRoleMap[pNum],
+          fundamental: 'attack', isCore: true, chainType: 'r_to_a',
+          message: `${pd.name} (${role || '?'}): spreca il ${Math.round(r5waste/r5tot*100)}% delle ricezioni perfette (R5) in attacchi poco efficaci (A1/A2). Su ${r5tot} ricezioni R5, ${r5waste} si sono concluse in errore o freeball. La qualità dell'alzata c'è, ma non viene sfruttata.`,
+          action: `Analizzare il timing sull'alzata alta: su R5 la palleggiatrice offre le opzioni migliori. Drill: ricezione R5 simulata → attacco variato (diagonale stretta, palla corta, cambio di direzione). Analisi video su queste situazioni specifiche.`,
+          chainData: { label: 'R5→A', values: r5, total: r5tot, wastePct: r5waste / r5tot },
+        });
+      }
+
+      // R3 transformer: bagher reception → good attack (positive signal)
+      const r3 = pd.sideOut['R3'] || {};
+      const r3tot = Object.values(r3).reduce((s, v) => s + v, 0);
+      const r3pos = (r3['A4'] || 0) + (r3['A5'] || 0);
+      if (r3tot >= 5 && r3pos / r3tot > 0.35) {
+        sugg.push({
+          type: 'r3_to_a_transformer', priority: 1, isChainSuggestion: true,
+          player: pd.name, playerNumber: pNum, role, roleCode: playerRoleMap[pNum],
+          fundamental: 'attack', isCore: true, chainType: 'r_to_a',
+          message: `${pd.name} (${role || '?'}): trasforma il ${Math.round(r3pos/r3tot*100)}% delle ricezioni da bagher (R3) in attacchi efficaci (A4/A5) — ${r3pos} su ${r3tot}. Punto di forza nascosto: mantiene efficacia anche su palla difficile.`,
+          action: `Valorizzare in situazioni di R3 squadra: è la giocatrice che ha dimostrato di saperle gestire meglio. Mantenere il focus attuale.`,
+          chainData: { label: 'R3→A', values: r3, total: r3tot, posPct: r3pos / r3tot },
+        });
+      }
+
+      // D5 waste: perfect defense → bad attack
+      const d5 = pd.transition['D5'] || {};
+      const d5tot   = Object.values(d5).reduce((s, v) => s + v, 0);
+      const d5waste = (d5['A1'] || 0) + (d5['A2'] || 0);
+      if (d5tot >= 4 && d5waste / d5tot > 0.35) {
+        sugg.push({
+          type: 'd_to_a_waste', priority: 4, isChainSuggestion: true,
+          player: pd.name, playerNumber: pNum, role, roleCode: playerRoleMap[pNum],
+          fundamental: 'attack', isCore: true, chainType: 'd_to_a',
+          message: `${pd.name} (${role || '?'}): in transizione, spreca il ${Math.round(d5waste/d5tot*100)}% delle difese di qualità (D5) in attacchi poco efficaci (A1/A2). La difesa è ottima ma l'attacco successivo non rende. Problema di rincorsa o timing da posizione a rete.`,
+          action: `Drill di transizione: partenza da rete dopo muro (tocco o no), rincorsa corta su alzata alta. Esercizi 6vs6 con break-point: chi difende poi attacca immediatamente.`,
+          chainData: { label: 'D5→A', values: d5, total: d5tot, wastePct: d5waste / d5tot },
+        });
+      }
+
+      // D3 transformer in transition (positive)
+      const d3 = pd.transition['D3'] || {};
+      const d3tot = Object.values(d3).reduce((s, v) => s + v, 0);
+      const d3pos = (d3['A4'] || 0) + (d3['A5'] || 0);
+      if (d3tot >= 4 && d3pos / d3tot > 0.35) {
+        sugg.push({
+          type: 'd3_to_a_transformer', priority: 1, isChainSuggestion: true,
+          player: pd.name, playerNumber: pNum, role, roleCode: playerRoleMap[pNum],
+          fundamental: 'attack', isCore: true, chainType: 'd_to_a',
+          message: `${pd.name} (${role || '?'}): eccellente in transizione difficile — trasforma il ${Math.round(d3pos/d3tot*100)}% delle difese da bagher (D3) in attacchi positivi (A4/A5). Attaccante affidabile anche nei break-point più difficili.`,
+          action: `Consolidare. Privilegiare l'alzata verso questa giocatrice nei break-point da D3 di squadra.`,
+          chainData: { label: 'D3→A', values: d3, total: d3tot, posPct: d3pos / d3tot },
+        });
+      }
+    }
+  }
+
+  // ── Side-out vs Transition gap ────────────────────────────────────────────
+  if (sideOutVsTransition) {
+    for (const [pNum, pd] of Object.entries(sideOutVsTransition)) {
+      if (pd.totalAttacks < MIN_ATT) continue;
+      if (pd.sideOut.total < 5 || pd.transition.total < 5) continue;
+      if (pd.gap === null) continue;
+      const role = _getRoleLabel(playerRoleMap[pNum]);
+
+      if (pd.gap > 0.20) {
+        const prio = pd.gap > 0.30 ? 4 : 3;
+        sugg.push({
+          type: 'side_out_vs_transition_gap', priority: prio, isChainSuggestion: true,
+          player: pd.name, playerNumber: pNum, role, roleCode: playerRoleMap[pNum],
+          fundamental: 'attack', isCore: true, chainType: 'transition_gap',
+          message: `${pd.name} (${role || '?'}): efficacia in side-out ${Math.round((pd.sideOut.efficacy||0)*100)}% vs transizione ${Math.round((pd.transition.efficacy||0)*100)}% — gap di ${Math.round(pd.gap*100)} punti percentuali. Attacca bene da ricezione ma fatica quando parte da rete o da difesa corta.`,
+          action: `Drill di transizione specifici: partenza da rete, rincorsa corta su palla alta e media. 6vs6 con focus break-point: chi difende poi attacca immediatamente. Automatizzare il primo passo di rincorsa dalla posizione a rete.`,
+          chainData: { sideOut: pd.sideOut, transition: pd.transition, gap: pd.gap },
+        });
+      } else if (pd.gap < -0.15) {
+        sugg.push({
+          type: 'transition_stronger', priority: 1, isChainSuggestion: true,
+          player: pd.name, playerNumber: pNum, role, roleCode: playerRoleMap[pNum],
+          fundamental: 'attack', isCore: true, chainType: 'transition_gap',
+          message: `${pd.name} (${role || '?'}): più efficace in transizione (${Math.round((pd.transition.efficacy||0)*100)}%) che in side-out (${Math.round((pd.sideOut.efficacy||0)*100)}%). Attaccante da break-point: rende meglio partendo da rete o da difesa.`,
+          action: `Valorizzare nei momenti di break-point. Analizzare perché il side-out è meno efficace: timing con la palleggiatrice? Scelta di colpo su alzata alta?`,
+          chainData: { sideOut: pd.sideOut, transition: pd.transition, gap: pd.gap },
+        });
+      }
+    }
+  }
+
+  // ── Serve → Defense chain ─────────────────────────────────────────────────
+  if (serveDefense) {
+    const b45tot = (serveDefense.byServe['B4']?.defTotal || 0) + (serveDefense.byServe['B5']?.defTotal || 0);
+    if (b45tot >= 8 && serveDefense.goodServeDefenseScore !== null && serveDefense.goodServeDefenseScore < 0.40) {
+      sugg.push({
+        type: 'serve_defense_break', priority: 3, isChainSuggestion: true,
+        fundamental: 'defense', chainType: 'serve_defense',
+        message: `Squadra: dopo battute aggressive (B4/B5), la difesa successiva è positiva (D4/D5) solo nel ${Math.round(serveDefense.goodServeDefenseScore*100)}% dei casi. Le nostre buone battute non si traducono in un vantaggio difensivo.`,
+        action: `Lavorare sul posizionamento difensivo post-battuta: su B4/B5 l'avversario riceve male e attacca in modo obbligato. Il sistema difensivo deve essere già orientato prima che l'attacco parta. Drill: battuta + lettura immediata e posizionamento.`,
+        chainData: { byServe: serveDefense.byServe, score: serveDefense.goodServeDefenseScore },
+      });
+    }
+  }
+
+  // ── Rally length fatigue ──────────────────────────────────────────────────
+  if (rallyLength) {
+    // Team level
+    const t = rallyLength.team;
+    if (t.long.total >= 6 && t.medium.pct !== null && t.long.pct !== null && (t.medium.pct - t.long.pct) > 0.18) {
+      sugg.push({
+        type: 'rally_length_fatigue_team', priority: 3, isChainSuggestion: true,
+        fundamental: 'attack', chainType: 'rally_length',
+        message: `Squadra: efficacia attacco cala dal ${Math.round(t.medium.pct*100)}% (rally 3-4 azioni) al ${Math.round(t.long.pct*100)}% (rally lunghi 5+ azioni). Calo di ${Math.round((t.medium.pct - t.long.pct)*100)} punti percentuali nei rally prolungati.`,
+        action: `Inserire drill di rally lungo (regola: punto solo dopo 5+ scambi). Aumentare la durata degli scambi in allenamento per simulare la pressione fisica e mentale dei rally prolungati.`,
+        chainData: { team: t },
+      });
+    }
+    // Per player
+    for (const [pNum, pd] of Object.entries(rallyLength.players || {})) {
+      if (!pd.long || pd.long.total < 5 || pd.medium.total < 5) continue;
+      if (pd.drop === null || pd.drop < 0.25) continue;
+      const role = _getRoleLabel(playerRoleMap[pNum]);
+      sugg.push({
+        type: 'rally_length_fatigue', priority: 3, isChainSuggestion: true,
+        player: pd.name, playerNumber: pNum, role, roleCode: playerRoleMap[pNum],
+        fundamental: 'attack', isCore: true, chainType: 'rally_length',
+        message: `${pd.name} (${role || '?'}): calo del ${Math.round(pd.drop*100)}% nei rally lunghi (5+ azioni: ${Math.round(pd.long.pct*100)}% vs rally medi: ${Math.round(pd.medium.pct*100)}%). Segnale di calo fisico o mentale nei rally prolungati.`,
+        action: `Drill di resistenza: attacchi ripetuti in serie, mantenimento della tecnica sotto fatica. Situazioni simulate di rally lungo con questa giocatrice come terminale finale.`,
+        chainData: { short: pd.short, medium: pd.medium, long: pd.long, drop: pd.drop },
+      });
+    }
+  }
+
+  // ── Rotational chain weaknesses ───────────────────────────────────────────
+  if (rotationalChains) {
+    const { rotations, avgSideOut } = rotationalChains;
+    if (avgSideOut !== null) {
+      for (const [, rot] of Object.entries(rotations)) {
+        if (rot.sideOut.total < 8 || rot.sideOut.pct === null) continue;
+        if (rot.sideOut.pct < avgSideOut - 0.14) {
+          sugg.push({
+            type: 'rotation_chain_weakness', priority: 4, isChainSuggestion: true,
+            fundamental: 'attack', chainType: 'rotation', rotation: rot.rotation,
+            message: `Rotazione ${rot.rotation}: side-out al ${Math.round(rot.sideOut.pct*100)}% vs media squadra ${Math.round(avgSideOut*100)}%. In questa rotazione facciamo significativamente più fatica a chiudere il punto da ricezione.`,
+            action: `Drill di side-out specifici per rotazione ${rot.rotation}: partire dalla configurazione reale in campo, simulare le battute più ricevute in quella posizione, lavorare sulla catena ricezione → alzata → attacco con le giocatrici effettivamente coinvolte.`,
+            chainData: { rotation: rot.rotation, sideOut: rot.sideOut, avgSideOut },
+          });
+        }
+      }
+    }
+  }
+
+  // Sort: priority desc
+  sugg.sort((a, b) => {
+    if (b.priority !== a.priority) return b.priority - a.priority;
+    if (a.isCore && !b.isCore) return -1;
+    if (!a.isCore && b.isCore) return 1;
+    return 0;
+  });
+
+  return sugg;
+}

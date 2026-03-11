@@ -11,6 +11,8 @@ import {
   computeWeightedPlayerStats, computePlayerTrends, generateTrainingSuggestions,
   analyzeRallyChains, generateMatchReport, findOpponentStanding,
   computeFundamentalBaselines,
+  analyzeRDtoAConversions, analyzeSideOutVsTransition, analyzeServeDefenseChain,
+  analyzeRallyLengthPerformance, analyzeRotationalChains, generateChainSuggestions,
 } from './utils/analyticsEngine';
 import { APP_NAME, APP_VERSION, DEFAULT_WEIGHTS, DEFAULT_FNC_CONFIG, DEFAULT_PROFILE, TEAM_MAP, FUNDAMENTALS, COLORS, SCALE_DESCRIPTIONS } from './utils/constants';
 import {
@@ -34,6 +36,7 @@ import WeightAdjuster from './components/WeightAdjuster';
 import ConfigPanel from './components/ConfigPanel';
 import DatasetManager from './components/DatasetManager';
 import TrainingSuggestions from './components/TrainingSuggestions';
+import SequenceAnalysis from './components/SequenceAnalysis';
 import TeamTrends from './components/TeamTrends';
 import RotationAnalysis from './components/RotationAnalysis';
 import AttackAnalysis from './components/AttackAnalysis';
@@ -50,6 +53,7 @@ const NAV_ITEMS = [
   { id: 'rotations', label: 'Rotazioni',       icon: '⟳' },
   { id: 'attack',    label: 'Analisi attacco', icon: '⚔' },
   { id: 'training',  label: 'Allenamento',     icon: '⚙' },
+  { id: 'sequences', label: 'Coach Brain',      icon: '🧠' },
   { id: 'data',      label: 'Dati',            icon: '☰' },
   { id: 'config',    label: 'Config',          icon: '🔧' },
   { id: 'glossary',  label: 'Glossario',       icon: '📖' },
@@ -535,7 +539,17 @@ export default function App() {
     }));
     const suggestions = generateTrainingSuggestions(playerTrends, teamStats, roster);
 
-    return { matchAnalytics, playerTrends, suggestions };
+    // ─── Chain / sequence analytics (new Analisi Sequenze section) ───────────
+    const chainData = {
+      rdToA:             analyzeRDtoAConversions(matches, roster),
+      sideOutVsTransition: analyzeSideOutVsTransition(matches, roster),
+      serveDefense:      analyzeServeDefenseChain(matches),
+      rallyLength:       analyzeRallyLengthPerformance(matches, roster),
+      rotationalChains:  analyzeRotationalChains(matches),
+    };
+    const chainSuggestions = generateChainSuggestions(chainData, roster);
+
+    return { matchAnalytics, playerTrends, suggestions, chainData, chainSuggestions };
   // fncConfig intentionally NOT in deps: FNC is applied at display-time in components,
   // not recalculated in the engine (baselines are separate, weights trigger re-compute)
   }, [matches, standings, weights]);
@@ -803,6 +817,14 @@ export default function App() {
               onProfileDelete={handleProfileDelete}
               onProfileReset={handleProfileReset}
               hasUnsavedChanges={hasUnsavedChanges}
+            />
+          )}
+
+          {activeTab === 'sequences' && (
+            <SequenceAnalysis
+              chainData={analytics?.chainData}
+              chainSuggestions={analytics?.chainSuggestions}
+              matches={matches}
             />
           )}
 
