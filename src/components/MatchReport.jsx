@@ -58,6 +58,8 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
           ma={selectedOpponentMA}
           allMatchesVsOpponent={selectedOpponentMatches}
           onSelectMatch={onSelectMatch}
+          matchAnalytics={matchAnalytics}
+          selectedOpponent={activeScoutOpponent}
         />
       </div>
     );
@@ -576,15 +578,7 @@ function AggregatedScoutPanel({
   selectedOpponentMatches = [],
 }) {
   const [lineMode, setLineMode] = useState('efficacia');
-  const [selectedPlayerNumber, setSelectedPlayerNumber] = useState('');
   const agg = useMemo(() => computeAggregatedScout(matchAnalytics), [matchAnalytics]);
-  const seasonTeamAvg = useMemo(() => computeTeamFundAverages(matchAnalytics), [matchAnalytics]);
-  const playersCatalog = useMemo(() => buildPlayerCatalog(matchAnalytics), [matchAnalytics]);
-  const playersInSelectedMatch = useMemo(() => (
-    new Set((selectedMatchMA?.playerStats || [])
-      .filter(p => ['serve', 'attack', 'defense', 'reception', 'block'].some(f => (p?.raw?.[f]?.tot || 0) > 0))
-      .map(p => p.number))
-  ), [selectedMatchMA]);
   const opponents = useMemo(() => (
     [...new Set(
       (matchAnalytics || [])
@@ -604,18 +598,6 @@ function AggregatedScoutPanel({
     return computeAggregatedScout(filtered);
   }, [matchAnalytics, activeOpponent, agg]);
   const cardsAgg = selectedOppAgg || agg;
-  const activePlayerNumber = (
-    selectedPlayerNumber === ALL_PLAYERS_ID || playersCatalog.some(p => p.number === selectedPlayerNumber)
-  )
-    ? selectedPlayerNumber
-    : (playersCatalog[0]?.number || ALL_PLAYERS_ID);
-  const playerSeries = useMemo(
-    () => (activePlayerNumber === ALL_PLAYERS_ID ? [] : buildPlayerSeries(matchAnalytics, selectedMatchMA, activePlayerNumber)),
-    [matchAnalytics, selectedMatchMA, activePlayerNumber]
-  );
-  const activePlayer = activePlayerNumber === ALL_PLAYERS_ID
-    ? null
-    : (playersCatalog.find(p => p.number === activePlayerNumber) || null);
 
   if (agg.matchCount === 0) return null;
 
@@ -681,15 +663,7 @@ function AggregatedScoutPanel({
           activeOpponent={activeOpponent}
           onSelectOpponent={onSelectOpponent}
           selectedOppAgg={selectedOppAgg}
-          selectedMatchMA={selectedMatchMA}
-          seasonTeamAvg={seasonTeamAvg}
           lineMode={lineMode}
-          activePlayer={activePlayer}
-          playerSeries={playerSeries}
-          playersCatalog={playersCatalog}
-          activePlayerNumber={activePlayerNumber}
-          onSelectPlayerNumber={setSelectedPlayerNumber}
-          playersInSelectedMatch={playersInSelectedMatch}
         />
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <DetailedOppStatCard title="Battuta" data={cardsAgg.serve} type="serve" />
@@ -702,8 +676,10 @@ function AggregatedScoutPanel({
   );
 }
 
-function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectMatch }) {
+function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectMatch, matchAnalytics = [], selectedOpponent = '' }) {
   if (!ma) return null;
+  const [playerLineMode, setPlayerLineMode] = useState('efficacia');
+  const [selectedPlayerNumber, setSelectedPlayerNumber] = useState('');
   const { match, matchWeight, report, fundWeights } = ma;
   const setsWon = (match.sets || []).filter(s => s.won).length;
   const setsLost = (match.sets || []).filter(s => !s.won).length;
@@ -718,6 +694,74 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
     }[key] || key,
     contribution: val?.contribution || 0,
   }));
+  const seasonOppAgg = useMemo(() => computeAggregatedScout(matchAnalytics), [matchAnalytics]);
+  const selectedOppAgg = useMemo(() => {
+    if (!selectedOpponent || selectedOpponent === ALL_OPPONENTS_ID) return seasonOppAgg;
+    return computeAggregatedScout((matchAnalytics || []).filter(
+      item => (item?.match?.metadata?.opponent || '') === selectedOpponent
+    ));
+  }, [matchAnalytics, selectedOpponent, seasonOppAgg]);
+  const selectedOppName = selectedOpponent === ALL_OPPONENTS_ID || !selectedOpponent
+    ? 'Tutte le squadre'
+    : selectedOpponent;
+  const fundRows = [
+    { key: 'serve', label: 'Battuta' },
+    { key: 'attack', label: 'Attacco' },
+    { key: 'defense', label: 'Difesa' },
+    { key: 'reception', label: 'Ricezione' },
+    { key: 'block', label: 'Muro' },
+  ];
+  const getAggValue = (agg, key) => {
+    const fund = agg?.[key];
+    if (!fund) return null;
+    if (playerLineMode === 'medie') {
+      const values = [];
+      if (Number.isFinite(fund.efficacy)) values.push(fund.efficacy * 100);
+      if (Number.isFinite(fund.efficiency)) values.push(fund.efficiency * 100);
+      return values.length ? roundValue(avgValue(values)) : null;
+    }
+    const metric = playerLineMode === 'efficienza' ? fund.efficiency : fund.efficacy;
+    return Number.isFinite(metric) ? roundValue(metric * 100) : null;
+  };
+  const playerCharts = useMemo(() => (
+    (ma?.playerStats || [])
+      .filter(p => ['serve', 'attack', 'defense', 'reception', 'block'].some(f => (p?.raw?.[f]?.tot || 0) > 0))
+      .map(p => {
+        const baseSeries = buildPlayerSeries(matchAnalytics, ma, p.number);
+        return {
+          player: p,
+          data: fundRows.map(({ key, label }) => {
+            const row = baseSeries.find(r => r.fund === label) || {};
+            const matchVal = playerLineMode === 'efficienza'
+              ? row.matchEfficiency
+              : playerLineMode === 'medie'
+                ? roundValue(avgValue([row.matchEfficacy, row.matchEfficiency].filter(v => Number.isFinite(v))))
+                : row.matchEfficacy;
+            const last3Val = playerLineMode === 'efficienza'
+              ? row.avgLast3Efficiency
+              : playerLineMode === 'medie'
+                ? roundValue(avgValue([row.avgLast3Efficacy, row.avgLast3Efficiency].filter(v => Number.isFinite(v))))
+                : row.avgLast3Efficacy;
+            return {
+              fund: label,
+              oppSel: getAggValue(selectedOppAgg, key),
+              oppAll: getAggValue(seasonOppAgg, key),
+              playerMatch: matchVal,
+              playerLast3: last3Val,
+            };
+          }),
+        };
+      })
+  ), [ma, matchAnalytics, playerLineMode, selectedOppAgg, seasonOppAgg]);
+  const playerOptions = playerCharts.map(item => ({
+    number: item.player.number,
+    nick: (item.player.name || '').trim().split(/\s+/)[0].slice(0, 10),
+    data: item.data,
+  }));
+  const activePlayerNumber = playerOptions.some(p => p.number === selectedPlayerNumber)
+    ? selectedPlayerNumber
+    : (playerOptions[0]?.number || '');
+  const activePlayerData = playerOptions.find(p => p.number === activePlayerNumber) || null;
 
   return (
     <div className="glass-card p-4 space-y-4">
@@ -816,6 +860,58 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
           </div>
         </div>
       </div>
+
+      <div className="glass-card p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <h4 className="text-sm font-semibold text-gray-300">Confronto per Giocatrice</h4>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPlayerLineMode('efficacia')} className={`text-[10px] px-2 py-1 rounded border ${playerLineMode === 'efficacia' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}>Efficacia</button>
+            <button onClick={() => setPlayerLineMode('efficienza')} className={`text-[10px] px-2 py-1 rounded border ${playerLineMode === 'efficienza' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}>Efficienza</button>
+            <button onClick={() => setPlayerLineMode('medie')} className={`text-[10px] px-2 py-1 rounded border ${playerLineMode === 'medie' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}>Valori medi</button>
+          </div>
+        </div>
+        <div className="glass-card p-3">
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {playerOptions.map(p => (
+              <button
+                key={p.number}
+                onClick={() => setSelectedPlayerNumber(p.number)}
+                className={`text-[10px] px-2 py-1 rounded-full border transition-all ${
+                  p.number === activePlayerNumber
+                    ? 'bg-sky-500/20 text-sky-300 border-sky-400/40'
+                    : 'bg-white/[0.03] text-gray-400 border-white/10 hover:text-gray-200'
+                }`}
+              >
+                {p.number} {p.nick}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-300 mb-2 font-semibold">
+            {activePlayerData ? `${activePlayerData.number} ${activePlayerData.nick}` : 'Nessuna giocatrice'}
+          </p>
+          <ResponsiveContainer width="100%" height={210}>
+            <LineChart data={activePlayerData?.data || []}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <XAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 10 }} />
+              <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
+              <Tooltip
+                contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
+                formatter={(v, n) => [v === null || v === undefined ? 'N/D' : `${Number(v).toFixed(1)}%`, ({
+                  oppSel: `Media ${selectedOppName}`,
+                  oppAll: 'Media tutte le squadre',
+                  playerMatch: 'Media giocatrice in questa partita',
+                  playerLast3: 'Media ultime 3 gare giocatrice',
+                }[n] || n)]}
+              />
+              <Legend wrapperStyle={{ fontSize: 10 }} />
+              <Line type="monotone" dataKey="oppSel" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="oppSel" />
+              <Line type="monotone" dataKey="oppAll" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3 }} name="oppAll" />
+              <Line type="monotone" dataKey="playerMatch" stroke="#f59e0b" strokeWidth={2.2} dot={{ r: 3.2 }} name="playerMatch" />
+              <Line type="monotone" dataKey="playerLast3" stroke="#22d3ee" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3 }} name="playerLast3" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
     </div>
   );
 }
@@ -827,12 +923,6 @@ function OpponentScoutComparisonChart({
   activeOpponent,
   onSelectOpponent,
   lineMode = 'efficacia',
-  activePlayer,
-  playerSeries = [],
-  playersCatalog = [],
-  activePlayerNumber = '',
-  onSelectPlayerNumber,
-  playersInSelectedMatch = new Set(),
 }) {
   const metricKey = lineMode === 'efficienza' ? 'efficiency' : 'efficacy';
   const selectedOppName = activeOpponent === ALL_OPPONENTS_ID ? 'Tutte le squadre' : activeOpponent;
@@ -849,21 +939,6 @@ function OpponentScoutComparisonChart({
     return Number.isFinite(fundData[metricKey]) ? roundValue(fundData[metricKey] * 100) : null;
   };
 
-  const playerLineDataByFund = Object.fromEntries(
-    (playerSeries || []).map(row => [row.fund, {
-      match: lineMode === 'efficienza'
-        ? row.matchEfficiency
-        : lineMode === 'medie'
-          ? roundValue(avgValue([row.matchEfficacy, row.matchEfficiency].filter(v => Number.isFinite(v))))
-          : row.matchEfficacy,
-      last3: lineMode === 'efficienza'
-        ? row.avgLast3Efficiency
-        : lineMode === 'medie'
-          ? roundValue(avgValue([row.avgLast3Efficacy, row.avgLast3Efficiency].filter(v => Number.isFinite(v))))
-          : row.avgLast3Efficacy,
-    }])
-  );
-
   const chartData = useMemo(() => (
     [
       { fund: 'Battuta', oppSel: getFundMetric(selectedOppAgg?.serve), oppAll: getFundMetric(seasonAgg?.serve) },
@@ -871,19 +946,15 @@ function OpponentScoutComparisonChart({
       { fund: 'Difesa', oppSel: getFundMetric(selectedOppAgg?.defense), oppAll: getFundMetric(seasonAgg?.defense) },
       { fund: 'Ricezione', oppSel: getFundMetric(selectedOppAgg?.reception), oppAll: getFundMetric(seasonAgg?.reception) },
       { fund: 'Muro', oppSel: getFundMetric(selectedOppAgg?.block), oppAll: getFundMetric(seasonAgg?.block) },
-    ].map(row => ({
-      ...row,
-      playerMatch: playerLineDataByFund[row.fund]?.match ?? null,
-      playerLast3: playerLineDataByFund[row.fund]?.last3 ?? null,
-    }))
-  ), [selectedOppAgg, seasonAgg, playerLineDataByFund, lineMode]);
+    ]
+  ), [selectedOppAgg, seasonAgg, lineMode]);
   if (!chartData.length) return null;
 
   const modeTitle = {
-    efficacia: 'Confronto atleta (efficacia)',
-    efficienza: 'Confronto atleta (efficienza)',
-    medie: 'Confronto atleta (valori medi)',
-  }[lineMode] || 'Confronto atleta';
+    efficacia: 'Confronto squadre (efficacia)',
+    efficienza: 'Confronto squadre (efficienza)',
+    medie: 'Confronto squadre (valori medi)',
+  }[lineMode] || 'Confronto squadre';
 
   return (
     <div className="glass-card p-4 mb-4">
@@ -893,81 +964,32 @@ function OpponentScoutComparisonChart({
         </h4>
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)_70px] sm:grid-cols-[minmax(0,1fr)_78px] lg:grid-cols-[minmax(0,1fr)_96px] gap-1.5 items-start">
-        <div>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
-              <Tooltip
-                contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
-                formatter={(v, n) => [v === null || v === undefined ? 'N/D' : `${Number(v).toFixed(1)}%`, ({
-                  oppSel: `Media ${selectedOppName}`,
-                  oppAll: 'Media tutte le squadre',
-                  playerMatch: 'Media giocatrice in questa partita',
-                  playerLast3: 'Media ultime 3 gare giocatrice',
-                }[n] || n)]}
-              />
-              <Legend
-                verticalAlign="top"
-                align="right"
-                height={28}
-                wrapperStyle={{ fontSize: 11 }}
-                formatter={(v) => ({
-                  oppSel: `Media ${selectedOppName}`,
-                  oppAll: 'Media tutte le squadre',
-                  playerMatch: 'Media giocatrice in questa partita',
-                  playerLast3: 'Media ultime 3 gare giocatrice',
-                }[v] || v)}
-              />
-              <Line type="monotone" dataKey="oppSel" stroke="#a855f7" strokeWidth={2.2} dot={{ r: 3.2, fill: '#a855f7' }} activeDot={{ r: 4.5 }} name="oppSel" />
-              <Line type="monotone" dataKey="oppAll" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#94a3b8' }} activeDot={{ r: 4.5 }} name="oppAll" />
-              {activePlayerNumber !== ALL_PLAYERS_ID && (
-                <Line type="monotone" dataKey="playerMatch" stroke="#f59e0b" strokeWidth={2.2} dot={{ r: 3.3, fill: '#f59e0b' }} activeDot={{ r: 5 }} name="playerMatch" />
-              )}
-              {activePlayerNumber !== ALL_PLAYERS_ID && (
-                <Line type="monotone" dataKey="playerLast3" stroke="#22d3ee" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#22d3ee' }} activeDot={{ r: 4.5 }} name="playerLast3" />
-              )}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="glass-card p-1 h-fit">
-          <p className="text-[8px] text-gray-500 mb-1 truncate">
-            {activePlayer
-              ? `${activePlayer.number} ${(activePlayer.name || '').trim().split(/\s+/)[0].slice(0, 10)}`
-              : 'Tutte le giocatrici'}
-          </p>
-          <div className="flex flex-col items-start gap-0.5 max-h-56 overflow-y-auto pr-0.5">
-            <button
-              onClick={() => onSelectPlayerNumber && onSelectPlayerNumber(ALL_PLAYERS_ID)}
-              className={`w-[7ch] max-w-[7ch] text-[9px] px-1 py-0.5 rounded border transition-all text-left whitespace-nowrap overflow-x-auto overflow-y-hidden ${activePlayerNumber === ALL_PLAYERS_ID ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
-            >
-              <span className="inline-block min-w-max">Tutte le giocatrici</span>
-            </button>
-            {playersCatalog.map(p => {
-              const isActive = p.number === activePlayerNumber;
-              const inMatch = playersInSelectedMatch.has(p.number);
-              const nick = (p.name || '').trim().split(/\s+/)[0].slice(0, 10);
-              return (
-                <button
-                  key={p.number}
-                  onClick={() => onSelectPlayerNumber && onSelectPlayerNumber(p.number)}
-                  className={`w-[7ch] max-w-[7ch] text-[9px] px-1 py-0.5 rounded border transition-all text-left whitespace-nowrap overflow-x-auto overflow-y-hidden ${
-                    isActive
-                      ? 'bg-sky-500/20 text-sky-300 border-sky-400/40'
-                      : inMatch
-                        ? 'bg-amber-500/15 text-amber-300 border-amber-400/30'
-                        : 'bg-white/[0.03] text-gray-500 border-white/10'
-                  }`}
-                >
-                  <span className="inline-block min-w-max">{p.number} {nick}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
+      <ResponsiveContainer width="100%" height={240}>
+        <LineChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+          <XAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 10 }} />
+          <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
+          <Tooltip
+            contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
+            formatter={(v, n) => [v === null || v === undefined ? 'N/D' : `${Number(v).toFixed(1)}%`, ({
+              oppSel: `Media ${selectedOppName}`,
+              oppAll: 'Media tutte le squadre',
+            }[n] || n)]}
+          />
+          <Legend
+            verticalAlign="top"
+            align="right"
+            height={28}
+            wrapperStyle={{ fontSize: 11 }}
+            formatter={(v) => ({
+              oppSel: `Media ${selectedOppName}`,
+              oppAll: 'Media tutte le squadre',
+            }[v] || v)}
+          />
+          <Line type="monotone" dataKey="oppSel" stroke="#a855f7" strokeWidth={2.2} dot={{ r: 3.2, fill: '#a855f7' }} activeDot={{ r: 4.5 }} name="oppSel" />
+          <Line type="monotone" dataKey="oppAll" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#94a3b8' }} activeDot={{ r: 4.5 }} name="oppAll" />
+        </LineChart>
+      </ResponsiveContainer>
       <div className="flex flex-wrap gap-1.5 mt-2">
         <button
           onClick={() => onSelectOpponent(ALL_OPPONENTS_ID)}
