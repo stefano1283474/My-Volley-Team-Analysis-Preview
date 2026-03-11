@@ -64,7 +64,7 @@ function findStandingTeamByName(standings, teamName) {
 
 // ─── Main Dashboard component ─────────────────────────────────────────────────
 
-export default function Dashboard({ analytics, matches, standings, weights, fncConfig, baselines, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici, ownerTeamName, onOwnerTeamChange }) {
+export default function Dashboard({ analytics, matches, standings, weights, fncConfig, baselines, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici, ownerTeamName, onOwnerTeamChange, dataMode = 'raw' }) {
   const hasData = !!analytics && matches.length > 0;
 
   // showChart: se dashboardConfig è definito, mostra solo i grafici selezionati
@@ -183,9 +183,11 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
         overallWeighted: Object.values(p.trends).reduce((s, t) => s + t.weightedAvg, 0) / 5,
         overallRaw:      Object.values(p.trends).reduce((s, t) => s + t.rawAvg, 0) / 5,
       }))
-      .sort((a, b) => b.overallWeighted - a.overallWeighted)
+      .sort((a, b) => dataMode === 'raw'
+        ? b.overallRaw - a.overallRaw
+        : b.overallWeighted - a.overallWeighted)
       .slice(0, 6);
-  }, [playerTrends]);
+  }, [playerTrends, dataMode]);
 
   const inferredOwnerTeam = useMemo(() => {
     const selected = findStandingTeamByName(standings, ownerTeamName);
@@ -316,6 +318,7 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
           fundTrendData={fundTrendData}
           playerList={playerList}
           playerTrends={playerTrends}
+          dataMode={dataMode}
         />
       )}
 
@@ -492,7 +495,7 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
 
 // ─── Trend Section ────────────────────────────────────────────────────────────
 
-function TrendSection({ sortedMA, teamTrendData, fundTrendData, playerList, playerTrends }) {
+function TrendSection({ sortedMA, teamTrendData, fundTrendData, playerList, playerTrends, dataMode = 'raw' }) {
   const [activeTab, setActiveTab] = useState('team'); // 'team' | 'fundamental' | 'player'
 
   const tabs = [
@@ -530,13 +533,14 @@ function TrendSection({ sortedMA, teamTrendData, fundTrendData, playerList, play
       </div>
 
       {/* Tab content */}
-      {activeTab === 'team' && <TeamTrendChart data={teamTrendData} />}
-      {activeTab === 'fundamental' && <FundTrendChart data={fundTrendData} />}
+      {activeTab === 'team' && <TeamTrendChart data={teamTrendData} dataMode={dataMode} />}
+      {activeTab === 'fundamental' && <FundTrendChart data={fundTrendData} dataMode={dataMode} />}
       {activeTab === 'player' && (
         <PlayerTrendChart
           playerList={playerList}
           playerTrends={playerTrends}
           sortedMA={sortedMA}
+          dataMode={dataMode}
         />
       )}
     </div>
@@ -545,21 +549,20 @@ function TrendSection({ sortedMA, teamTrendData, fundTrendData, playerList, play
 
 // ─── Team Overall Trend Chart ─────────────────────────────────────────────────
 
-function TeamTrendChart({ data }) {
+function TeamTrendChart({ data, dataMode = 'raw' }) {
   if (!data || data.length < 2) {
     return <EmptyChart label="Servono almeno 2 partite per il grafico di andamento." />;
   }
-  const avgRaw = data.reduce((s, d) => s + d.raw, 0) / data.length;
+  const activeKey = dataMode === 'weighted' ? 'weighted' : 'raw';
+  const activeColor = dataMode === 'weighted' ? COLORS.weighted : COLORS.raw;
+  const activeLabel = dataMode === 'weighted' ? 'Rielaborato (×peso partita)' : 'Grezzo';
+  const avg = data.reduce((s, d) => s + (d[activeKey] || 0), 0) / data.length;
   return (
     <div>
       <div className="flex flex-wrap items-center gap-4 mb-3 text-[11px] text-gray-400">
         <span className="flex items-center gap-1.5">
-          <span className="inline-block w-4 h-0.5 rounded" style={{ background: COLORS.raw }} />
-          Grezzo
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block w-4 h-0.5 rounded" style={{ background: COLORS.weighted }} />
-          Rielaborato (×peso partita)
+          <span className="inline-block w-4 h-0.5 rounded" style={{ background: activeColor }} />
+          {activeLabel}
         </span>
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-4 border-t border-dashed border-gray-500" />
@@ -574,12 +577,10 @@ function TeamTrendChart({ data }) {
             tickFormatter={v => `${v.toFixed(0)}%`} />
           <Tooltip contentStyle={CHART_TOOLTIP_STYLE}
             formatter={(val, name) => [`${val.toFixed(1)}%`, name]} />
-          <ReferenceLine y={avgRaw} stroke="rgba(148,163,184,0.3)" strokeDasharray="4 4"
-            label={{ value: `media ${avgRaw.toFixed(1)}%`, fill: '#6b7280', fontSize: 9, position: 'insideTopRight' }} />
-          <Line type="monotone" dataKey="raw" name="Grezzo" stroke={COLORS.raw}
-            strokeWidth={2.5} dot={{ r: 4, fill: COLORS.raw }} activeDot={{ r: 6 }} />
-          <Line type="monotone" dataKey="weighted" name="Rielaborato" stroke={COLORS.weighted}
-            strokeWidth={2} strokeDasharray="6 3" dot={{ r: 3, fill: COLORS.weighted }} activeDot={{ r: 5 }} />
+          <ReferenceLine y={avg} stroke="rgba(148,163,184,0.3)" strokeDasharray="4 4"
+            label={{ value: `media ${avg.toFixed(1)}%`, fill: '#6b7280', fontSize: 9, position: 'insideTopRight' }} />
+          <Line type="monotone" dataKey={activeKey} name={activeLabel} stroke={activeColor}
+            strokeWidth={2.5} dot={{ r: 4, fill: activeColor }} activeDot={{ r: 6 }} />
         </LineChart>
       </ResponsiveContainer>
     </div>
@@ -588,7 +589,7 @@ function TeamTrendChart({ data }) {
 
 // ─── Per-Fundamental Trend Chart ─────────────────────────────────────────────
 
-function FundTrendChart({ data }) {
+function FundTrendChart({ data, dataMode = 'raw' }) {
   const [visibleFunds, setVisibleFunds] = useState(new Set(FUNDS));
 
   const toggleFund = (f) =>
@@ -663,7 +664,7 @@ function FundTrendChart({ data }) {
 
 // ─── Per-Player Trend Chart ───────────────────────────────────────────────────
 
-function PlayerTrendChart({ playerList, playerTrends, sortedMA }) {
+function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw' }) {
   const [selectedNum,   setSelectedNum]   = useState(() => playerList[0]?.number || null);
   const [selectedFund,  setSelectedFund]  = useState('attack');
   const [roleFilter,    setRoleFilter]    = useState('all');
@@ -687,9 +688,13 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA }) {
     if (!fundData || !fundData.matchLabels) return [];
 
     return fundData.matchLabels.map((ml, i) => {
-      const ma       = sortedMA.find(m => m.match.id === ml.matchId);
-      const teamEff  = (ma?.match.riepilogo?.team?.[selectedFund]?.efficacy || 0) * 100;
-      const playerEff = (fundData.raw[i] || 0) * 100;
+      const ma          = sortedMA.find(m => m.match.id === ml.matchId);
+      const teamEff     = (ma?.match.riepilogo?.team?.[selectedFund]?.efficacy || 0) * 100;
+      const rawEff      = (fundData.raw[i] || 0) * 100;
+      const matchWeight = ma?.matchWeight?.final || 1;
+      const playerEff   = dataMode === 'weighted'
+        ? rawEff * matchWeight
+        : rawEff;
       return {
         label:  (ml.opponent || '').substring(0, 10),
         player: +playerEff.toFixed(1),
@@ -699,8 +704,12 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA }) {
   }, [effectiveNum, selectedFund, playerTrends, sortedMA]);
 
   const selectedPlayerData = effectiveNum ? playerTrends[effectiveNum] : null;
-  const playerAvg  = selectedPlayerData?.trends[selectedFund]?.rawAvg  ?? 0;
-  const playerTrnd = selectedPlayerData?.trends[selectedFund]?.rawTrend ?? 'stable';
+  const playerAvg  = dataMode === 'weighted'
+    ? (selectedPlayerData?.trends[selectedFund]?.weightedAvg  ?? 0)
+    : (selectedPlayerData?.trends[selectedFund]?.rawAvg       ?? 0);
+  const playerTrnd = dataMode === 'weighted'
+    ? (selectedPlayerData?.trends[selectedFund]?.weightedTrend ?? 'stable')
+    : (selectedPlayerData?.trends[selectedFund]?.rawTrend      ?? 'stable');
 
   return (
     <div className="space-y-3">

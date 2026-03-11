@@ -63,7 +63,7 @@ function suggKey(s) {
 
 // ─── Main component ──────────────────────────────────────────────────────────
 
-export default function TrainingSuggestions({ analytics, matches, readOnly = false, datasetOwnerUid = '' }) {
+export default function TrainingSuggestions({ analytics, matches, readOnly = false, datasetOwnerUid = '', dataMode = 'raw' }) {
   const { user } = useAuth();
 
   const [activeView,    setActiveView]    = useState('all');
@@ -168,6 +168,11 @@ export default function TrainingSuggestions({ analytics, matches, readOnly = fal
         {readOnly && (
           <p className="text-[11px] text-sky-300 mt-1">
             Modalità sola lettura: lo stato di revisione non è modificabile.
+          </p>
+        )}
+        {dataMode === 'weighted' && (
+          <p className="text-[11px] text-amber-400/70 mt-1">
+            ⚖ I suggerimenti sono generati dall'analisi pesata: i trend e le soglie tengono conto del contesto delle partite.
           </p>
         )}
       </div>

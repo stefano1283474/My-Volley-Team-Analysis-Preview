@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { COLORS } from '../utils/constants';
 
-export default function RotationAnalysis({ analytics, matches, allPlayers }) {
+export default function RotationAnalysis({ analytics, matches, allPlayers, dataMode = 'raw' }) {
   const [viewMode, setViewMode] = useState('match');       // 'match' | 'aggregate'
   const [selectedMatchIdx, setSelectedMatchIdx] = useState(-1); // -1 = last match
 
@@ -110,6 +110,11 @@ export default function RotationAnalysis({ analytics, matches, allPlayers }) {
               ? `Aggregato su ${matches.length} partite`
               : `vs ${selectedMA?.match.metadata?.opponent || 'N/D'} — ${selectedMA?.match.metadata?.date || ''}`}
           </p>
+          {dataMode === 'weighted' && (
+            <p className="text-[10px] text-amber-400/70 mt-0.5">
+              ⚖ I dati di rotazione (SO%/BP%) sono conteggi evento e non variano con la pesatura.
+            </p>
+          )}
         </div>
         <div className="flex gap-1">
           <button

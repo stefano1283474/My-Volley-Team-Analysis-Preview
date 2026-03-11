@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, LineChart, Line } from 'recharts';
 import { COLORS } from '../utils/constants';
@@ -6,7 +6,7 @@ import { COLORS } from '../utils/constants';
 const ALL_OPPONENTS_ID = '__all_opponents__';
 const ALL_PLAYERS_ID = '__all_players__';
 
-export default function MatchReport({ analytics, matches, standings, selectedMatch, onSelectMatch, weights }) {
+export default function MatchReport({ analytics, matches, standings, selectedMatch, onSelectMatch, weights, dataMode = 'raw' }) {
   const [activeSet, setActiveSet] = useState(null);
   const matchAnalytics = analytics?.matchAnalytics || [];
   const opponents = useMemo(() => (
@@ -53,6 +53,7 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
           onSelectMatchId={setSelectedScoutMatchId}
           selectedMatchMA={selectedOpponentMA}
           selectedOpponentMatches={selectedOpponentMatches}
+          dataMode={dataMode}
         />
         <OpponentSelectedDetailsPanel
           ma={selectedOpponentMA}
@@ -60,6 +61,7 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
           onSelectMatch={onSelectMatch}
           matchAnalytics={matchAnalytics}
           selectedOpponent={activeScoutOpponent}
+          dataMode={dataMode}
         />
       </div>
     );
@@ -445,15 +447,28 @@ function computeAggregatedScout(matchAnalytics) {
     }
   }
 
-  // Add computed efficacy
+  // Add computed efficacy and efficiency
+  // efficacy  = (val5 - val1) / total              → solo eccellente vs errore
+  // efficiency = (val5 + val4 - val1) / total      → include positivo (come analyticsEngine)
   const t = agg.serve.total;
-  agg.serve.efficacy = t > 0 ? (agg.serve.val5 - agg.serve.val1) / t : 0;
+  agg.serve.efficacy   = t > 0 ? (agg.serve.val5 - agg.serve.val1) / t : 0;
+  agg.serve.efficiency = t > 0 ? (agg.serve.val5 + agg.serve.val4 - agg.serve.val1) / t : 0;
+
   const ta = agg.attack.total;
-  agg.attack.efficacy = ta > 0 ? (agg.attack.val5 - agg.attack.val1) / ta : 0;
+  agg.attack.efficacy   = ta > 0 ? (agg.attack.val5 - agg.attack.val1) / ta : 0;
+  agg.attack.efficiency = ta > 0 ? (agg.attack.val5 + agg.attack.val4 - agg.attack.val1) / ta : 0;
+
+  // defense/reception: val4 e val5 sono aggregati in val4+5 → efficiency = (val4+5 - val1) / total
   const td = agg.defense.total;
-  agg.defense.efficacy = td > 0 ? (agg.defense['val4+5'] - agg.defense.val1) / td : 0;
+  agg.defense.efficacy   = td > 0 ? (agg.defense['val4+5'] - agg.defense.val1) / td : 0;
+  agg.defense.efficiency = td > 0 ? (agg.defense['val4+5'] - agg.defense.val1) / td : 0;
+
   const tr = agg.reception.total;
-  agg.reception.efficacy = tr > 0 ? (agg.reception['val4+5'] - agg.reception.val1) / tr : 0;
+  agg.reception.efficacy   = tr > 0 ? (agg.reception['val4+5'] - agg.reception.val1) / tr : 0;
+  agg.reception.efficiency = tr > 0 ? (agg.reception['val4+5'] - agg.reception.val1) / tr : 0;
+
+  // block: not currently deduced from opponent, leave as undefined
+  agg.block = { efficacy: null, efficiency: null };
 
   return agg;
 }
@@ -576,8 +591,12 @@ function AggregatedScoutPanel({
   onSelectMatchId,
   selectedMatchMA,
   selectedOpponentMatches = [],
+  dataMode = 'raw',
 }) {
   const [lineMode, setLineMode] = useState('efficacia');
+  // Nota: dataMode (grezzi/pesati) NON influisce sulla modalità del grafico avversario.
+  // I dati avversari sono sempre dati grezzi dedotti dallo scout; la scelta Efficacia/Efficienza/
+  // Valori medi è indipendente e controllata dai pulsanti manuali.
   const agg = useMemo(() => computeAggregatedScout(matchAnalytics), [matchAnalytics]);
   const opponents = useMemo(() => (
     [...new Set(
@@ -604,10 +623,17 @@ function AggregatedScoutPanel({
   return (
     <div className="glass-card overflow-hidden">
       <div className="w-full flex items-center justify-between px-5 py-3">
-        <div className="flex items-center gap-2">
-          <span className="text-purple-400 text-sm">●</span>
-          <span className="text-sm font-semibold text-gray-300">Scout Dedotto Avversario — Media Stagione</span>
-          <span className="text-[10px] text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">{agg.matchCount} partite</span>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-purple-400 text-sm">●</span>
+            <span className="text-sm font-semibold text-gray-300">Avversario</span>
+            <span className="text-[10px] text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">{agg.matchCount} partite</span>
+          </div>
+          {selectedMatchMA?.match?.metadata?.date && (
+            <div className="mt-1.5 text-sm font-semibold text-gray-300">
+              {selectedMatchMA.match.metadata.date}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -635,28 +661,6 @@ function AggregatedScoutPanel({
         <p className="text-[10px] text-gray-500 mt-3 mb-3">
           Dati aggregati di tutte le partite — usa come riferimento per confrontare la singola partita.
         </p>
-        {selectedOpponentMatches.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-3">
-            {selectedOpponentMatches.map(ma => {
-              const id = ma?.match?.id || '';
-              const date = ma?.match?.metadata?.date || 'Data N/D';
-              const homeAway = ma?.match?.metadata?.homeAway || '';
-              return (
-                <button
-                  key={id}
-                  onClick={() => onSelectMatchId(id)}
-                  className={`text-[10px] px-2.5 py-1 rounded-full border transition-all ${
-                    selectedMatchId === id
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
-                      : 'bg-white/[0.03] text-gray-400 border-white/10 hover:text-gray-200'
-                  }`}
-                >
-                  {date}{homeAway ? ` · ${homeAway}` : ''}
-                </button>
-              );
-            })}
-          </div>
-        )}
         <OpponentScoutComparisonChart
           seasonAgg={agg}
           opponents={opponents}
@@ -676,9 +680,10 @@ function AggregatedScoutPanel({
   );
 }
 
-function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectMatch, matchAnalytics = [], selectedOpponent = '' }) {
+function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectMatch, matchAnalytics = [], selectedOpponent = '', dataMode = 'raw' }) {
   if (!ma) return null;
   const [playerLineMode, setPlayerLineMode] = useState('efficacia');
+  // Nota: dataMode non influisce sul grafico giocatrici avversarie (dati sempre grezzi da scout).
   const [selectedPlayerNumber, setSelectedPlayerNumber] = useState('');
   const { match, matchWeight, report, fundWeights } = ma;
   const setsWon = (match.sets || []).filter(s => s.won).length;

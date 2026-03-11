@@ -80,7 +80,7 @@ const CATEGORIES = [
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function ChartsExplorer({
-  analytics, matches, standings, dashboardConfig, onConfigChange, onSelectPlayer,
+  analytics, matches, standings, dashboardConfig, onConfigChange, onSelectPlayer, dataMode = 'raw',
 }) {
   const [activeCategory, setActiveCategory] = useState('all');
 
@@ -363,6 +363,7 @@ function ChartRenderer({ chartId, props }) {
           playerTrends={playerTrends}
           rosterRoleMap={rosterRoleMap}
           matchAnalytics={sortedMA}
+          dataMode={dataMode}
         />
       );
     }
@@ -499,7 +500,7 @@ function ExTrendSection({ sortedMA, teamTrendData, fundTrendData, playerList, pl
 
 // ─── New: Player Ranking Chart ────────────────────────────────────────────────
 
-function PlayerRankingChart({ fund, playerTrends, rosterRoleMap, matchAnalytics = [] }) {
+function PlayerRankingChart({ fund, playerTrends, rosterRoleMap, matchAnalytics = [], dataMode = 'raw' }) {
   const [metric,     setMetric]     = useState('avg');
   const [roleFilter, setRoleFilter] = useState('all');
   const [selectedFund, setSelectedFund] = useState(fund || 'global');
@@ -508,6 +509,10 @@ function PlayerRankingChart({ fund, playerTrends, rosterRoleMap, matchAnalytics 
   useEffect(() => {
     setSelectedFund(fund || 'global');
   }, [fund]);
+
+  useEffect(() => {
+    setMetric(dataMode === 'weighted' ? 'weighted' : 'raw');
+  }, [dataMode]);
 
   const touchAggregation = useMemo(() => {
     const activeFunds = selectedFund === 'global' ? FUNDS : [selectedFund];

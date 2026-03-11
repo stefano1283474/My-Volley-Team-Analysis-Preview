@@ -88,6 +88,7 @@ export default function App() {
   const [calendar, setCalendar]           = useState([]);
   const [standings, setStandings]         = useState([]);
   const [weights, setWeights]             = useState(DEFAULT_WEIGHTS);
+  const [dataMode, setDataMode]           = useState('raw');
 
   // ── FNC & Profile state ──────────────────────────────────────────────────
   const [fncConfig, setFncConfig] = useState(() => {
@@ -662,11 +663,11 @@ export default function App() {
 
   // ─── Main App ─────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen flex flex-col relative" onTouchStart={handleAppTouchStart} onTouchEnd={handleAppTouchEnd}>
-      {/* Header */}
+    <div className="h-screen flex flex-col overflow-hidden relative" onTouchStart={handleAppTouchStart} onTouchEnd={handleAppTouchEnd}>
+      {/* Header — sticky TopAppBar */}
       <header
-        className="border-b border-white/5 px-3 sm:px-6 py-3 flex items-center justify-between"
-        style={{ background: 'linear-gradient(180deg, rgba(17,24,39,0.95), rgba(10,14,26,0.98))' }}
+        className="sticky top-0 z-50 flex-shrink-0 border-b border-white/5 px-3 sm:px-6 py-3 flex items-center justify-between"
+        style={{ background: 'linear-gradient(180deg, rgba(17,24,39,0.97), rgba(10,14,26,0.99))', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       >
         <div className="flex items-center gap-3">
           {isMobilePortrait && (
@@ -713,6 +714,30 @@ export default function App() {
 
         {/* Utente loggato */}
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 p-0.5 rounded-lg border border-white/10 bg-white/[0.03]">
+            <button
+              onClick={() => setDataMode('raw')}
+              className={`text-[10px] px-2 py-1 rounded-md transition-all ${
+                dataMode === 'raw'
+                  ? 'bg-sky-500/20 text-sky-300'
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+              title="Usa dati grezzi"
+            >
+              Grezzi
+            </button>
+            <button
+              onClick={() => setDataMode('weighted')}
+              className={`text-[10px] px-2 py-1 rounded-md transition-all ${
+                dataMode === 'weighted'
+                  ? 'bg-amber-500/20 text-amber-300'
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+              title="Usa dati pesati"
+            >
+              Pesati
+            </button>
+          </div>
           <div className="relative" ref={userMenuRef}>
             <button
               onClick={() => setUserMenuOpen(v => !v)}
@@ -818,6 +843,7 @@ export default function App() {
               matches={matches}
               standings={standings}
               weights={weights}
+              dataMode={dataMode}
               fncConfig={fncConfig}
               baselines={baselines}
               onSelectMatch={(m) => { setSelectedMatch(m); setActiveTab('matches'); }}
@@ -834,6 +860,7 @@ export default function App() {
               analytics={analytics}
               matches={matches}
               standings={standings}
+              dataMode={dataMode}
               dashboardConfig={dashboardConfig}
               onConfigChange={handleDashboardConfigChange}
               onSelectPlayer={(p) => { setSelectedPlayer(p); setActiveTab('players'); }}
@@ -845,6 +872,7 @@ export default function App() {
               analytics={analytics}
               matches={matches}
               standings={standings}
+              dataMode={dataMode}
               selectedMatch={selectedMatch}
               onSelectMatch={setSelectedMatch}
               weights={weights}
@@ -856,6 +884,7 @@ export default function App() {
               analytics={analytics}
               allPlayers={allPlayers}
               matches={matches}
+              dataMode={dataMode}
               selectedPlayer={selectedPlayer}
               onSelectPlayer={setSelectedPlayer}
               fncConfig={fncConfig}
@@ -868,6 +897,7 @@ export default function App() {
               analytics={analytics}
               matches={matches}
               standings={standings}
+              dataMode={dataMode}
             />
           )}
 
@@ -876,6 +906,7 @@ export default function App() {
               analytics={analytics}
               matches={matches}
               allPlayers={allPlayers}
+              dataMode={dataMode}
             />
           )}
 
@@ -884,6 +915,7 @@ export default function App() {
               analytics={analytics}
               matches={matches}
               allPlayers={allPlayers}
+              dataMode={dataMode}
             />
           )}
 
@@ -891,6 +923,7 @@ export default function App() {
             <TrainingSuggestions
               analytics={analytics}
               matches={matches}
+              dataMode={dataMode}
               readOnly={!canEditDataset}
               datasetOwnerUid={dataOwnerUid}
             />
@@ -919,6 +952,7 @@ export default function App() {
               chainData={analytics?.chainData}
               chainSuggestions={analytics?.chainSuggestions}
               matches={matches}
+              dataMode={dataMode}
             />
           )}
 

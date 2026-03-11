@@ -112,7 +112,7 @@ function cellColor(aq, value) {
   return 'text-gray-300';
 }
 
-export default function AttackAnalysis({ analytics, matches, allPlayers }) {
+export default function AttackAnalysis({ analytics, matches, allPlayers, dataMode = 'raw' }) {
   const [convPlayerFilter, setConvPlayerFilter] = useState(null);
   const [trendTouchKey, setTrendTouchKey] = useState('R5');
   const [hoveredSeriesKey, setHoveredSeriesKey] = useState('');
@@ -234,6 +234,11 @@ export default function AttackAnalysis({ analytics, matches, allPlayers }) {
         <p className="text-sm text-gray-400">
           Conversione da ricezione/difesa ad attacco efficace e andamento nel tempo.
         </p>
+        {dataMode === 'weighted' && (
+          <p className="text-[10px] text-amber-400/70 mt-0.5">
+            ⚖ I dati di conversione R/D→A sono conteggi evento e non variano con la pesatura.
+          </p>
+        )}
       </div>
 
       <div className="glass-card p-5">

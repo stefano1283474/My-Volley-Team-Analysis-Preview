@@ -5,7 +5,7 @@ import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend,
 import { COLORS } from '../utils/constants';
 import { applyFNCToEfficacy } from '../utils/analyticsEngine';
 
-export default function PlayerCard({ analytics, allPlayers, matches, selectedPlayer, onSelectPlayer, fncConfig, baselines }) {
+export default function PlayerCard({ analytics, allPlayers, matches, selectedPlayer, onSelectPlayer, fncConfig, baselines, dataMode = 'raw' }) {
   const [selectedFund, setSelectedFund] = useState('attack');
 
   if (!analytics) {
@@ -245,8 +245,12 @@ export default function PlayerCard({ analytics, allPlayers, matches, selectedPla
             <XAxis dataKey="match" tick={{ fill: '#9ca3af', fontSize: 10 }} />
             <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={['auto', 'auto']} />
             <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }} />
-            <Line type="monotone" dataKey="raw" name="Grezzo" stroke={COLORS.raw} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
-            <Line type="monotone" dataKey="weighted" name="Rielaborato" stroke={COLORS.weighted} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+            {dataMode !== 'weighted' && (
+              <Line type="monotone" dataKey="raw" name="Grezzo" stroke={COLORS.raw} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+            )}
+            {dataMode !== 'raw' && (
+              <Line type="monotone" dataKey="weighted" name="Rielaborato" stroke={COLORS.weighted} strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+            )}
             <Legend wrapperStyle={{ fontSize: 11 }} />
           </LineChart>
         </ResponsiveContainer>

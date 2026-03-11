@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
   AreaChart, Area } from 'recharts';
 import { COLORS } from '../utils/constants';
 
-export default function TeamTrends({ analytics, matches, standings }) {
+export default function TeamTrends({ analytics, matches, standings, dataMode = 'raw' }) {
   if (!analytics || matches.length < 2) {
     return (
       <div className="max-w-5xl mx-auto">
@@ -66,7 +66,10 @@ export default function TeamTrends({ analytics, matches, standings }) {
       {/* Power Index */}
       <div className="glass-card p-5">
         <h3 className="text-sm font-semibold text-gray-300 mb-4">
-          Indice di Forza Squadra: <span className="text-sky-400">Dato</span> vs <span className="text-amber-400">Contestualizzato</span>
+          Indice di Forza Squadra:{' '}
+          {dataMode === 'weighted'
+            ? <span className="text-amber-400">Contestualizzato</span>
+            : <span className="text-sky-400">Dato Grezzo</span>}
         </h3>
         <ResponsiveContainer width="100%" height={250}>
           <AreaChart data={powerData}>
@@ -74,23 +77,28 @@ export default function TeamTrends({ analytics, matches, standings }) {
             <XAxis dataKey="label" tick={{ fill: '#9ca3af', fontSize: 10 }} />
             <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} />
             <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }} />
-            <Area type="monotone" dataKey="powerRaw" name="Dato" stroke={COLORS.raw} fill={COLORS.raw} fillOpacity={0.1} strokeWidth={2} />
-            <Area type="monotone" dataKey="powerWeighted" name="Contestualizzato" stroke={COLORS.weighted} fill={COLORS.weighted} fillOpacity={0.1} strokeWidth={2} />
+            {dataMode !== 'weighted' && (
+              <Area type="monotone" dataKey="powerRaw" name="Dato" stroke={COLORS.raw} fill={COLORS.raw} fillOpacity={0.1} strokeWidth={2} />
+            )}
+            {dataMode !== 'raw' && (
+              <Area type="monotone" dataKey="powerWeighted" name="Contestualizzato" stroke={COLORS.weighted} fill={COLORS.weighted} fillOpacity={0.1} strokeWidth={2} />
+            )}
             <Legend wrapperStyle={{ fontSize: 11 }} />
           </AreaChart>
         </ResponsiveContainer>
         <p className="text-[10px] text-gray-500 mt-2">
-          Se il dato contestualizzato sale ma il dato è stabile → stai migliorando davvero (nonostante avversari più forti).
-          Se il dato sale ma il contestualizzato scende → il miglioramento è illusorio (avversari più deboli).
+          {dataMode === 'weighted'
+            ? 'Dato contestualizzato: tiene conto della forza degli avversari affrontati e dei pesi dei fondamentali.'
+            : 'Dato grezzo: efficacia media della squadra sui fondamentali, senza pesatura del contesto.'}
         </p>
       </div>
 
       {/* Per-fundamental trends */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <FundTrendChart data={timelineData} rawKey="attRaw" weiKey="attWei" title="Attacco" color="#f43f5e" />
-        <FundTrendChart data={timelineData} rawKey="serRaw" weiKey="serWei" title="Battuta" color="#8b5cf6" />
-        <FundTrendChart data={timelineData} rawKey="recRaw" weiKey="recWei" title="Ricezione" color="#0ea5e9" />
-        <FundTrendChart data={timelineData} rawKey="defRaw" weiKey="defWei" title="Difesa" color="#10b981" />
+        <FundTrendChart data={timelineData} rawKey="attRaw" weiKey="attWei" title="Attacco" color="#f43f5e" dataMode={dataMode} />
+        <FundTrendChart data={timelineData} rawKey="serRaw" weiKey="serWei" title="Battuta" color="#8b5cf6" dataMode={dataMode} />
+        <FundTrendChart data={timelineData} rawKey="recRaw" weiKey="recWei" title="Ricezione" color="#0ea5e9" dataMode={dataMode} />
+        <FundTrendChart data={timelineData} rawKey="defRaw" weiKey="defWei" title="Difesa" color="#10b981" dataMode={dataMode} />
       </div>
 
       {/* Side-out and Break trends */}
@@ -129,7 +137,10 @@ export default function TeamTrends({ analytics, matches, standings }) {
   );
 }
 
-function FundTrendChart({ data, rawKey, weiKey, title, color }) {
+function FundTrendChart({ data, rawKey, weiKey, title, color, dataMode = 'raw' }) {
+  const activeKey   = dataMode === 'weighted' ? weiKey : rawKey;
+  const activeName  = dataMode === 'weighted' ? 'Contestualizzato' : 'Dato';
+  const activeColor = dataMode === 'weighted' ? color : COLORS.raw;
   return (
     <div className="glass-card p-4">
       <h4 className="text-xs font-semibold mb-3" style={{ color }}>
@@ -141,8 +152,7 @@ function FundTrendChart({ data, rawKey, weiKey, title, color }) {
           <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 8 }} />
           <YAxis tick={{ fill: '#6b7280', fontSize: 8 }} />
           <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 10 }} />
-          <Line type="monotone" dataKey={rawKey} name="Dato" stroke={COLORS.raw} strokeWidth={1.5} dot={{ r: 2 }} opacity={0.5} />
-          <Line type="monotone" dataKey={weiKey} name="Contestualizzato" stroke={color} strokeWidth={2} dot={{ r: 3 }} />
+          <Line type="monotone" dataKey={activeKey} name={activeName} stroke={activeColor} strokeWidth={2} dot={{ r: 3 }} />
         </LineChart>
       </ResponsiveContainer>
     </div>

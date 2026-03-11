@@ -83,7 +83,7 @@ function totalInMatrix(m) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function SequenceAnalysis({ chainData, chainSuggestions, matches }) {
+export default function SequenceAnalysis({ chainData, chainSuggestions, matches, dataMode = 'raw' }) {
   const [activeTab, setActiveTab] = useState('suggestions');
 
   if (!chainData || matches.length < 2) {
@@ -119,6 +119,11 @@ export default function SequenceAnalysis({ chainData, chainSuggestions, matches 
           {' · '}
           <span className="text-green-400">{suggestions.filter(s => s.priority === 1).length} punti di forza</span>
         </p>
+        {dataMode === 'weighted' && (
+          <p className="text-[10px] text-amber-400/70 mt-0.5">
+            ⚖ Le catene di gioco sono analisi evento: i percentuali non variano con la pesatura del contesto.
+          </p>
+        )}
         <p className="text-[11px] text-gray-600 mt-0.5">
           KPI basati su R→A (side-out), D→A (transizione), catena battuta→difesa, rally lunghi e analisi per rotazione.
         </p>
