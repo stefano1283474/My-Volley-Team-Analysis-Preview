@@ -339,7 +339,7 @@ export default function App() {
 
   const handleShareOnWhatsApp = useCallback(async () => {
     let url = shareUrl;
-    if (!url && canEditDataset) {
+    if (canEditDataset) {
       const created = await handleCreateShareLink();
       if (created?.token) {
         url = `${window.location.origin}${window.location.pathname}?share=${created.token}`;
@@ -651,7 +651,12 @@ export default function App() {
               ⋮
             </button>
             {userMenuOpen && (
-              <div className="absolute right-0 top-8 w-52 rounded-lg border border-white/10 bg-slate-900/95 shadow-xl backdrop-blur-sm overflow-hidden">
+              <div className="absolute right-0 top-8 w-64 rounded-lg border border-white/10 bg-slate-900/95 shadow-xl backdrop-blur-sm overflow-hidden">
+                <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
+                  <p className="text-[11px] font-medium text-gray-200 truncate">{user.displayName || 'Account Google'}</p>
+                  <p className="text-[10px] text-gray-500 truncate">{user.email || 'Email non disponibile'}</p>
+                  <p className="text-[10px] text-sky-400/80 mt-0.5">Accesso con account Google</p>
+                </div>
                 <button
                   onClick={handleShareOnWhatsApp}
                   className="w-full text-left px-3 py-2 text-xs text-green-300 hover:bg-green-500/10 transition-colors"

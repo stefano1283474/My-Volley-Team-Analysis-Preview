@@ -173,19 +173,30 @@ export async function getOrCreateShareLink(ownerUid, ownerEmail) {
   const snap = await getDoc(ref);
   if (snap.exists()) {
     const data = snap.data();
-    if (data.shareToken) {
-      await setDoc(shareTokenDocRef(data.shareToken), sanitize({
-        ownerUid,
-        enabled: data.enabled !== false,
-        updatedAt: serverTimestamp(),
-      }), { merge: true });
-    }
+    const token = data.shareToken || crypto.randomUUID().replace(/-/g, '');
+    const normalizedOwnerUid = data.ownerUid || ownerUid;
+    const normalizedOwnerEmail = normalizeEmail(data.ownerEmail || ownerEmail);
+    const enabled = data.enabled !== false;
+    const normalizedEmails = normalizeAllowedEmails(data.allowedEmails || []);
+    await setDoc(ref, sanitize({
+      ownerUid: normalizedOwnerUid,
+      shareToken: token,
+      ownerEmail: normalizedOwnerEmail,
+      allowedEmails: normalizedEmails,
+      enabled,
+      updatedAt: serverTimestamp(),
+    }), { merge: true });
+    await setDoc(shareTokenDocRef(token), sanitize({
+      ownerUid: normalizedOwnerUid,
+      enabled,
+      updatedAt: serverTimestamp(),
+    }), { merge: true });
     return {
-      token: data.shareToken,
-      ownerUid: data.ownerUid,
-      ownerEmail: data.ownerEmail || '',
-      allowedEmails: normalizeAllowedEmails(data.allowedEmails || []),
-      enabled: data.enabled !== false,
+      token,
+      ownerUid: normalizedOwnerUid,
+      ownerEmail: normalizedOwnerEmail,
+      allowedEmails: normalizedEmails,
+      enabled,
     };
   }
 
@@ -214,9 +225,10 @@ export async function loadShareLinkForOwner(ownerUid) {
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
   const data = snap.data();
+  const token = data.shareToken || '';
   return {
-    token: data.shareToken,
-    ownerUid: data.ownerUid,
+    token,
+    ownerUid: data.ownerUid || ownerUid,
     ownerEmail: data.ownerEmail || '',
     allowedEmails: normalizeAllowedEmails(data.allowedEmails || []),
     enabled: data.enabled !== false,
@@ -228,24 +240,30 @@ export async function updateShareAllowedEmails(token, ownerUid, allowedEmails = 
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error('Link di condivisione non trovato');
   const current = snap.data();
-  if (current.ownerUid !== ownerUid || current.shareToken !== token) throw new Error('Non autorizzato');
+  const currentOwnerUid = current.ownerUid || ownerUid;
+  const currentToken = current.shareToken || token;
+  if (currentOwnerUid !== ownerUid || currentToken !== token) throw new Error('Non autorizzato');
   const normalizedEmails = normalizeAllowedEmails(allowedEmails);
+  const enabled = current.enabled !== false;
   await setDoc(ref, sanitize({
     ...current,
+    ownerUid: currentOwnerUid,
+    shareToken: currentToken,
     allowedEmails: normalizedEmails,
+    enabled,
     updatedAt: serverTimestamp(),
   }), { merge: true });
-  await setDoc(shareTokenDocRef(token), sanitize({
-    ownerUid,
-    enabled: current.enabled !== false,
+  await setDoc(shareTokenDocRef(currentToken), sanitize({
+    ownerUid: currentOwnerUid,
+    enabled,
     updatedAt: serverTimestamp(),
   }), { merge: true });
   return {
-    token,
-    ownerUid,
+    token: currentToken,
+    ownerUid: currentOwnerUid,
     ownerEmail: current.ownerEmail || '',
     allowedEmails: normalizedEmails,
-    enabled: current.enabled !== false,
+    enabled,
   };
 }
 
@@ -258,7 +276,8 @@ export async function resolveSharedAccess(token, user) {
     return { granted: false, reason: 'not_found' };
   }
   const tokenData = tokenSnap.data();
-  if (!tokenData.enabled || !tokenData.ownerUid) {
+  const tokenEnabled = tokenData.enabled !== false;
+  if (!tokenEnabled || !tokenData.ownerUid) {
     return { granted: false, reason: 'disabled' };
   }
   const snap = await getDoc(shareAccessDocRef(tokenData.ownerUid));
@@ -266,22 +285,33 @@ export async function resolveSharedAccess(token, user) {
     return { granted: false, reason: 'not_found' };
   }
   const data = snap.data();
-  if (!data.enabled) {
+  const shareEnabled = data.enabled !== false;
+  if (!shareEnabled) {
+    return { granted: false, reason: 'disabled' };
+  }
+  const resolvedOwnerUid = data.ownerUid || tokenData.ownerUid;
+  if (!resolvedOwnerUid) {
     return { granted: false, reason: 'disabled' };
   }
   const viewerEmail = normalizeEmail(user.email);
-  const isOwner = data.ownerUid === user.uid;
+  const isOwner = resolvedOwnerUid === user.uid;
   const allowedEmails = normalizeAllowedEmails(data.allowedEmails || []);
-  const isAllowedViewer = allowedEmails.includes(viewerEmail);
+
+  // allowedEmails vuoto = link pubblico: chiunque abbia il link può accedere.
+  // allowedEmails non vuoto = accesso ristretto alla lista.
+  const isPublicLink = allowedEmails.length === 0;
+  const isAllowedViewer = isPublicLink || allowedEmails.includes(viewerEmail);
+
   if (!isOwner && !isAllowedViewer) {
-    return { granted: false, reason: 'forbidden', ownerUid: data.ownerUid, ownerEmail: data.ownerEmail || '' };
+    return { granted: false, reason: 'forbidden', ownerUid: resolvedOwnerUid, ownerEmail: data.ownerEmail || '' };
   }
   return {
     granted: true,
-    ownerUid: data.ownerUid,
+    ownerUid: resolvedOwnerUid,
     ownerEmail: data.ownerEmail || '',
     token,
     isOwner,
     allowedEmails,
+    isPublicLink,
   };
 }
