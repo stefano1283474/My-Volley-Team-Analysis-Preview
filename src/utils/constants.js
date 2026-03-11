@@ -2,9 +2,11 @@
 // VOLLEY PERFORMANCE ANALYZER — Constants & Configuration
 // ============================================================================
 
+import pkg from '../../package.json';
+
 // Team name mapping: sheet name → CSV official name
 export const APP_NAME = 'My Volley Team Analysis';
-export const APP_VERSION = '1.0';
+export const APP_VERSION = pkg?.version || '0.0.0';
 
 export const TEAM_MAP = {
   'Cagliero': 'G.S. CAGLIERO',
