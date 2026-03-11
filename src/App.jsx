@@ -769,7 +769,7 @@ export default function App() {
         <nav className={`${isMobilePortrait
           ? `absolute left-0 top-0 h-full w-64 z-30 transform transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
           : 'w-48 flex-shrink-0'} border-r border-white/5 p-3 flex flex-col gap-1`}
-          style={{ background: 'rgba(17,24,39,0.5)' }}>
+          style={{ background: isMobilePortrait ? 'rgba(2,6,23,0.96)' : 'rgba(17,24,39,0.5)' }}>
           {NAV_ITEMS.map(item => (
             <button
               key={item.id}
