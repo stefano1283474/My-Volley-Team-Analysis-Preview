@@ -3,7 +3,7 @@
 // I dati vengono salvati/letti esclusivamente da Firestore.
 // ============================================================================
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 
 export default function DatasetManager({
   matches, calendar, standings,
@@ -15,6 +15,7 @@ export default function DatasetManager({
   onCreateShareLink,
   onUpdateShareReaders,
   onUpload, onDelete,
+  onClearArchive,
   isLoading,
   uploadProgress = [],
 }) {
@@ -22,6 +23,7 @@ export default function DatasetManager({
   const [readerEmail, setReaderEmail] = useState('');
   const [allowedReaders, setAllowedReaders] = useState([]);
   const [shareBusy, setShareBusy] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
   const fileRef = useRef(null);
   const completedUploads = uploadProgress.filter(item => item.status === 'done').length;
   const failedUploads = uploadProgress.filter(item => item.status === 'error').length;
@@ -97,10 +99,22 @@ export default function DatasetManager({
     e.target.value = '';
   };
 
+  const handleClearArchive = async () => {
+    if (!onClearArchive || readOnly || archiveBusy) return;
+    const confirmed = window.confirm('Confermi la pulizia totale dell’archivio dati? Verranno eliminate tutte le partite e tutto il calendario.');
+    if (!confirmed) return;
+    setArchiveBusy(true);
+    try {
+      await onClearArchive();
+    } finally {
+      setArchiveBusy(false);
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div>
-        <h2 className="text-xl font-bold text-white mb-1">Gestione Dati</h2>
+        <h2 className="text-xl font-bold text-white mb-1">Gestione Archivio</h2>
         <p className="text-sm text-gray-400">
           Carica i file scout (.xlsm/.xlsx) e il calendario (.csv). I dati vengono
           salvati automaticamente su <span className="text-amber-400 font-medium">Database in Cloud</span> e
@@ -282,10 +296,21 @@ export default function DatasetManager({
 
       {/* Loaded Matches */}
       <div className="glass-card p-5">
-        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-          <span className="text-amber-400">⚡</span>
-          Partite su Database in Cloud ({matches.length})
-        </h3>
+        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+          <h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
+            <span className="text-amber-400">⚡</span>
+            Partite su Database in Cloud ({matches.length})
+          </h3>
+          {!readOnly && (
+            <button
+              onClick={handleClearArchive}
+              disabled={archiveBusy}
+              className="px-3 py-1.5 rounded-lg text-xs bg-red-500/15 text-red-300 hover:bg-red-500/25 transition-colors disabled:opacity-60"
+            >
+              {archiveBusy ? 'Pulizia in corso…' : 'Pulizia totale archivio'}
+            </button>
+          )}
+        </div>
         {matches.length === 0 ? (
           <p className="text-xs text-gray-500 py-4 text-center">
             Nessuna partita su Database in Cloud. Carica un file .xlsm o .xlsx per iniziare.
@@ -336,8 +361,72 @@ export default function DatasetManager({
           </div>
         )}
       </div>
+    </div>
+  );
+}
 
-      {/* Standings */}
+export function CalendarSection({ calendar = [], standings = [], ownerTeamName = '' }) {
+  const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
+  const ownerUpper = normalizeTeamName(ownerTeamName);
+
+  const allTeams = useMemo(() => {
+    const set = new Set();
+    (calendar || []).forEach(m => {
+      if (m.home) set.add(m.home);
+      if (m.away) set.add(m.away);
+    });
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [calendar]);
+
+  const ownerTeamResolved = useMemo(() => (
+    allTeams.find(t => {
+      const teamUpper = normalizeTeamName(t);
+      return teamUpper === ownerUpper || teamUpper.includes(ownerUpper) || ownerUpper.includes(teamUpper);
+    }) || ''
+  ), [allTeams, ownerUpper]);
+
+  const orderedTeams = useMemo(() => {
+    if (!ownerTeamResolved) return allTeams;
+    return [ownerTeamResolved, ...allTeams.filter(t => t !== ownerTeamResolved)];
+  }, [allTeams, ownerTeamResolved]);
+
+  const [activeTeam, setActiveTeam] = useState('');
+
+  useEffect(() => {
+    if (orderedTeams.length === 0) {
+      setActiveTeam('');
+      return;
+    }
+    if (ownerTeamResolved) {
+      setActiveTeam(ownerTeamResolved);
+      return;
+    }
+    if (!activeTeam || !orderedTeams.includes(activeTeam)) {
+      setActiveTeam(orderedTeams[0]);
+    }
+  }, [orderedTeams, ownerTeamResolved, activeTeam]);
+
+  const selectedTeam = activeTeam || orderedTeams[0] || '';
+
+  const teamMatches = useMemo(() => (
+    (calendar || [])
+      .filter(m => m.home === selectedTeam || m.away === selectedTeam)
+      .sort((a, b) => {
+        const gDiff = (a.giornata || 0) - (b.giornata || 0);
+        if (gDiff !== 0) return gDiff;
+        return String(a.data || '').localeCompare(String(b.data || ''));
+      })
+  ), [calendar, selectedTeam]);
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-white mb-1">Calendiario</h2>
+        <p className="text-sm text-gray-400">
+          Classifica e calendario completo per tutte le squadre del CSV.
+        </p>
+      </div>
+
       {standings.length > 0 && (
         <div className="glass-card p-5">
           <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
@@ -361,23 +450,19 @@ export default function DatasetManager({
               </thead>
               <tbody>
                 {standings.map(t => {
-                  const isUs = isOwnerTeam(t.name);
+                  const teamUpper = normalizeTeamName(t.name);
+                  const isUs = ownerUpper && (teamUpper === ownerUpper || teamUpper.includes(ownerUpper) || ownerUpper.includes(teamUpper));
                   return (
-                    <tr key={t.name}
-                      className={`border-b border-white/[0.03] ${isUs ? 'bg-amber-500/5' : ''}`}>
+                    <tr key={t.name} className={`border-b border-white/[0.03] ${isUs ? 'bg-amber-500/5' : ''}`}>
                       <td className="py-1.5 px-2 font-mono font-bold text-gray-400">{t.rank}</td>
-                      <td className={`py-1.5 px-2 ${isUs ? 'text-amber-400 font-semibold' : 'text-gray-200'}`}>
-                        {t.name}
-                      </td>
+                      <td className={`py-1.5 px-2 ${isUs ? 'text-amber-400 font-semibold' : 'text-gray-200'}`}>{t.name}</td>
                       <td className="text-center py-1.5 px-1 font-bold text-white">{t.pts}</td>
                       <td className="text-center py-1.5 px-1 text-gray-400">{t.matches}</td>
                       <td className="text-center py-1.5 px-1 text-green-400">{t.w}</td>
                       <td className="text-center py-1.5 px-1 text-red-400">{t.l}</td>
                       <td className="text-center py-1.5 px-1 text-gray-400">{t.sw}</td>
                       <td className="text-center py-1.5 px-1 text-gray-400">{t.sl}</td>
-                      <td className="text-center py-1.5 px-1 text-gray-400">
-                        {t.sl > 0 ? (t.sw / t.sl).toFixed(2) : '—'}
-                      </td>
+                      <td className="text-center py-1.5 px-1 text-gray-400">{t.sl > 0 ? (t.sw / t.sl).toFixed(2) : '—'}</td>
                     </tr>
                   );
                 })}
@@ -387,37 +472,66 @@ export default function DatasetManager({
         </div>
       )}
 
-      {/* Calendar Preview */}
-      {calendar.length > 0 && (
-        <div className="glass-card p-5">
-          <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-            <span className="text-amber-400">📅</span>
-            Calendario ({calendar.filter(m => m.played).length} giocate / {calendar.length} totali)
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
-            {calendar
-              .filter(m => isOwnerTeam(m.home) || isOwnerTeam(m.away))
-              .sort((a, b) => a.giornata - b.giornata)
-              .map((m, i) => {
-                const isHome = isOwnerTeam(m.home);
-                return (
-                  <div key={i} className="flex items-center gap-2 p-2 rounded bg-white/[0.02] text-[11px]">
-                    <span className="text-gray-500 w-6">G{m.giornata}</span>
-                    <span className={`flex-1 ${isHome ? 'text-amber-400' : 'text-gray-300'}`}>
-                      {isHome ? m.away : m.home}
-                    </span>
-                    <span className="text-gray-500">{isHome ? 'casa' : 'trasf.'}</span>
-                    {m.played ? (
-                      <span className="font-mono text-gray-300">{m.setsHome}-{m.setsAway}</span>
-                    ) : (
-                      <span className="text-gray-600">da giocare</span>
-                    )}
-                  </div>
-                );
-              })}
-          </div>
-        </div>
-      )}
+      <div className="glass-card p-5">
+        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+          <span className="text-amber-400">📅</span>
+          Calendario completo ({calendar.filter(m => m.played).length} giocate / {calendar.length} totali)
+        </h3>
+
+        {orderedTeams.length === 0 ? (
+          <p className="text-xs text-gray-500 py-4 text-center">Nessun calendario caricato.</p>
+        ) : (
+          <>
+            <div className="flex gap-1 p-1 rounded-xl flex-wrap mb-3"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+              {orderedTeams.map(team => (
+                <button
+                  key={team}
+                  onClick={() => setActiveTeam(team)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    selectedTeam === team
+                      ? 'bg-amber-500/15 text-amber-400'
+                      : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  {team}
+                </button>
+              ))}
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500 border-b border-white/5">
+                    <th className="text-left py-2 px-2">G</th>
+                    <th className="text-left py-2 px-2">Data</th>
+                    <th className="text-left py-2 px-2">Ora</th>
+                    <th className="text-left py-2 px-2">Casa</th>
+                    <th className="text-left py-2 px-2">Ospite</th>
+                    <th className="text-left py-2 px-2">Campo</th>
+                    <th className="text-left py-2 px-2">Stato</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teamMatches.map((m, idx) => (
+                    <tr key={`${m.giornata}-${m.home}-${m.away}-${idx}`} className="border-b border-white/[0.03]">
+                      <td className="py-1.5 px-2 text-gray-400 font-mono">{m.giornata || '—'}</td>
+                      <td className="py-1.5 px-2 text-gray-300">{m.data || '—'}</td>
+                      <td className="py-1.5 px-2 text-gray-400">{m.ora || '—'}</td>
+                      <td className={`py-1.5 px-2 ${m.home === selectedTeam ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}>{m.home}</td>
+                      <td className={`py-1.5 px-2 ${m.away === selectedTeam ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}>{m.away}</td>
+                      <td className="py-1.5 px-2 text-gray-500">{m.venue || '—'}</td>
+                      <td className={`py-1.5 px-2 ${m.played ? 'text-gray-300 font-mono' : 'text-sky-400'}`}>
+                        {m.played ? `${m.setsHome}-${m.setsAway}` : 'Da giocare'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

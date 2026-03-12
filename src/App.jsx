@@ -18,6 +18,7 @@ import { APP_NAME, APP_VERSION, DEFAULT_WEIGHTS, DEFAULT_FNC_CONFIG, DEFAULT_PRO
 import {
   saveMatch,
   deleteMatchFromFirestore,
+  clearArchiveData,
   loadAllMatches,
   saveCalendar,
   loadCalendar,
@@ -34,7 +35,7 @@ import MatchReport from './components/MatchReport';
 import PlayerCard from './components/PlayerCard';
 import WeightAdjuster from './components/WeightAdjuster';
 import ConfigPanel from './components/ConfigPanel';
-import DatasetManager from './components/DatasetManager';
+import DatasetManager, { CalendarSection } from './components/DatasetManager';
 import TrainingSuggestions from './components/TrainingSuggestions';
 import SequenceAnalysis, { ChainTrainingPlan } from './components/SequenceAnalysis';
 import TeamTrends from './components/TeamTrends';
@@ -55,7 +56,8 @@ const NAV_ITEMS = [
   { id: 'training',  label: 'Allenamento',     icon: '⚙' },
   { id: 'sequences', label: 'Coach Brain',      icon: '🧠' },
   { id: 'training_plan', label: 'Trainig plan', icon: '📅' },
-  { id: 'data',      label: 'Dati',            icon: '☰' },
+  { id: 'data',      label: 'Gestione Archivio', icon: '☰' },
+  { id: 'calendiario', label: 'Calendiario',   icon: '🗓' },
   { id: 'config',    label: 'Config',          icon: '🔧' },
   { id: 'glossary',  label: 'Glossario',       icon: '📖' },
 ];
@@ -571,6 +573,27 @@ export default function App() {
     }
   }, [user, selectedMatch, dataOwnerUid, canEditDataset]);
 
+  const handleClearArchive = useCallback(async () => {
+    if (!user || !dataOwnerUid || !canEditDataset) return;
+    try {
+      setIsLoading(true);
+      setLoadingMsg('Pulizia totale archivio in corso…');
+      await clearArchiveData(dataOwnerUid);
+      setMatches([]);
+      setCalendar([]);
+      setStandings([]);
+      setSelectedMatch(null);
+      setLoadingMsg('Archivio ripulito: partite e calendario eliminati');
+      setActiveTab('data');
+      setTimeout(() => setLoadingMsg(''), 3500);
+    } catch (err) {
+      console.error('[App] clearArchive error:', err);
+      setErrorMsg(`Errore pulizia archivio: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user, dataOwnerUid, canEditDataset]);
+
   // ─── Fundamental baselines — depends only on match DATA (not on weights/FNC) ─
   const baselines = useMemo(() => {
     if (matches.length === 0) return null;
@@ -829,8 +852,17 @@ export default function App() {
               onUpdateShareReaders={handleUpdateShareReaders}
               onUpload={handleFileUpload}
               onDelete={handleDeleteMatch}
+              onClearArchive={handleClearArchive}
               isLoading={isLoading}
               uploadProgress={uploadProgress}
+            />
+          )}
+
+          {activeTab === 'calendiario' && (
+            <CalendarSection
+              calendar={calendar}
+              standings={standings}
+              ownerTeamName={ownerTeamName}
             />
           )}
 

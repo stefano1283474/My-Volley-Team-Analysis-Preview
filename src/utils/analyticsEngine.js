@@ -23,7 +23,7 @@ export function reconstructOpponent(match) {
   // Method 2: Deduce from our stats using inverse mapping
   const deduced = {
     serve: deduceOpponentServe(team.reception, rallies),
-    attack: deduceOpponentAttack(team.defense, rallies),
+    attack: deduceOpponentAttack(team.defense, rallies, team.block),
     defense: deduceOpponentDefense(team.attack),
     reception: deduceOpponentReception(team.serve),
   };
@@ -59,21 +59,36 @@ function deduceOpponentServe(ourReception, rallies) {
   };
 }
 
-function deduceOpponentAttack(ourDefense, rallies) {
-  // Our D1 → their Attack 5, D2 → Attack 4, D3 → Attack 3, D4 → Attack 2
-  const attack5 = ourDefense.err || 0;   // D1
+function deduceOpponentAttack(ourDefense, rallies, ourBlock) {
+  // Our D1 → their Attack 5, D2 → Attack 4, D3 → Attack 3, D4+D5 → Attack 2
+  // Also include block contributions to attack deduction:
+  // - Block errors → Attack 5
+  // - Block exc/neg → Attack 2
+  // - Block kill → Attack 1
+  let attack5 = ourDefense.err || 0;   // D1
   const attack4 = ourDefense.neg || 0;   // D2
   const attack3 = ourDefense.exc || 0;   // D3
-  const attack2 = ourDefense.pos + ourDefense.kill; // D4 + D5
+  let attack2 = (ourDefense.pos || 0) + (ourDefense.kill || 0); // D4 + D5
+
+  // Add block contributions
+  if (ourBlock) {
+    attack5 += ourBlock.err || 0;        // block errors → opponent attack 5
+    attack2 += (ourBlock.exc || 0) + (ourBlock.neg || 0); // block exc+neg → opponent attack 2
+  }
 
   // Attack 1 = opponent attack errors
   // Count from rallies where "avv" is preceded by a touch action (not alone)
-  const attack1 = rallies.filter(r => {
+  let attack1 = rallies.filter(r => {
     if (r.quartine.length < 2) return false;
     const last = r.quartine[r.quartine.length - 1];
     const prev = r.quartine[r.quartine.length - 2];
     return last.type === 'opponent_error' && prev.type === 'action';
   }).length;
+
+  // Add block kills to opponent attack 1
+  if (ourBlock) {
+    attack1 += ourBlock.kill || 0;       // block kills → opponent attack 1
+  }
 
   const total = attack5 + attack4 + attack3 + attack2 + attack1;
   return {
@@ -365,11 +380,13 @@ export function computePlayerTrends(allMatchPlayerStats) {
         return { ...m, played, tot };
       });
 
-      // Only include matches where the player actually had actions
       const playedMatches = matchesWithData.filter(m => m.played);
+      const validPlayedMatches = playedMatches.filter(
+        m => Number.isFinite(m.raw?.[fund]?.efficacy) && Number.isFinite(m.weighted?.[fund]?.efficacy)
+      );
 
-      const rawValues = playedMatches.map(m => m.raw[fund]?.efficacy || 0);
-      const weightedValues = playedMatches.map(m => m.weighted[fund]?.efficacy || 0);
+      const rawValues = validPlayedMatches.map(m => m.raw[fund].efficacy);
+      const weightedValues = validPlayedMatches.map(m => m.weighted[fund].efficacy);
 
       // Compute recent (last 3) vs older averages — used for accurate decline % in suggestions
       const getSegmentAvgs = (values) => {
@@ -396,9 +413,9 @@ export function computePlayerTrends(allMatchPlayerStats) {
         rollingRaw: rollingAverage(rawValues, 3),
         rollingWeighted: rollingAverage(weightedValues, 3),
         // Keep track of which matches had data (for charts)
-        matchLabels: playedMatches.map(m => ({ opponent: m.opponent, date: m.date, matchId: m.matchId, weight: m.matchWeight })),
+        matchLabels: validPlayedMatches.map(m => ({ opponent: m.opponent, date: m.date, matchId: m.matchId, weight: m.matchWeight })),
         totalMatches: player.matches.length,
-        playedMatches: playedMatches.length,
+        playedMatches: validPlayedMatches.length,
       };
     }
   }
@@ -557,8 +574,12 @@ export function generateTrainingSuggestions(playerTrends, teamStats, roster = []
     const prevMatch = teamStats[teamStats.length - 2];
 
     for (const fund of ['attack', 'serve', 'reception', 'defense']) {
-      const lastEff = lastMatch.team?.[fund]?.efficacy || 0;
-      const prevEff = prevMatch.team?.[fund]?.efficacy || 0;
+      const lastTot = Number(lastMatch.team?.[fund]?.tot || 0);
+      const prevTot = Number(prevMatch.team?.[fund]?.tot || 0);
+      if (lastTot <= 0 || prevTot <= 0) continue;
+      const lastEff = Number(lastMatch.team?.[fund]?.efficacy);
+      const prevEff = Number(prevMatch.team?.[fund]?.efficacy);
+      if (!Number.isFinite(lastEff) || !Number.isFinite(prevEff)) continue;
 
       if (prevEff !== 0 && ((lastEff - prevEff) / Math.abs(prevEff)) < -0.15) {
         // Identify which roles should work on this fundamental
@@ -1459,10 +1480,96 @@ export function analyzeRallyLengthPerformance(allMatches, roster = []) {
   return { players, team: finalize(team) };
 }
 
+// ─── tactical roles and rotation logic ──────────────────────────────────────
+const ROLE_SEQUENCE = ['P', 'B1', 'C2', 'O', 'B2', 'C1'];
+
+/**
+ * Identify tactical roles for a set based on initial lineup.
+ */
+export function identifyRolesPerSet(setRotations) {
+  // We need P1 rotation to get the starting positions 1-6
+  const p1 = setRotations.find(r => r.rotation === 1);
+  if (!p1 || !p1.lineup) return null;
+
+  const players = p1.lineup.split(',').map(s => s.trim());
+  if (players.length !== 6) return null;
+
+  const roles = {};
+  ROLE_SEQUENCE.forEach((role, idx) => {
+    roles[players[idx]] = role;
+  });
+  return roles;
+}
+
+/**
+ * Returns mapping of players to positions (1-6) for a given rotation and phase.
+ */
+export function getPositionsFromRotation(rotationNum, lineup, phase = 'r') {
+  if (!lineup) return {};
+  const players = lineup.split(',').map(s => s.trim());
+  if (players.length !== 6) return {};
+
+  // Standard clock-wise rotation from P1
+  // rotationNum: 1=P1, 2=P2, 3=P3, 4=P4, 5=P5, 6=P6
+  // Each rotation shifts players clockwise: pos1→pos6, pos6→pos5, ...pos2→pos1
+  // Shift count: P1=0, P6=1, P5=2, P4=3, P3=4, P2=5
+  let shift = 0;
+  if (rotationNum === 6) shift = 1;
+  else if (rotationNum === 5) shift = 2;
+  else if (rotationNum === 4) shift = 3;
+  else if (rotationNum === 3) shift = 4;
+  else if (rotationNum === 2) shift = 5;
+
+  const rotatedPlayers = [...players];
+  for (let i = 0; i < shift; i++) {
+    const p = rotatedPlayers.shift();
+    rotatedPlayers.push(p);
+  }
+
+  const pos = {
+    1: rotatedPlayers[0],
+    2: rotatedPlayers[1],
+    3: rotatedPlayers[2],
+    4: rotatedPlayers[3],
+    5: rotatedPlayers[4],
+    6: rotatedPlayers[5],
+  };
+
+  // P1 logic: fixed for rally based on starting phase
+  if (rotationNum === 1) {
+    if (phase === 'b') { // Service/Defense phase
+      // Switch B1 (in 2) and O (in 4) to their specialized zones (B1=4, O=2)
+      const p2 = pos[2];
+      const p4 = pos[4];
+      pos[2] = p4;
+      pos[4] = p2;
+    }
+  } else {
+    // Other rotations: generally switch to specialize after serve/receive
+    // But for this analysis, we focus on the "incastro" (front row)
+    // Most coaches switch B to 4 and O to 2.
+    // We can implement a general auto-switch if we want to be hyper-precise
+  }
+
+  return pos;
+}
+
 // ─── 5. Rotational chain analysis ─────────────────────────────────────────
 // Per rotation: side-out%, break-point%, transition (D→A in phase='b')%
 export function analyzeRotationalChains(allMatches) {
   const rotations = {};
+  const rolesStats = {
+    B1: { attack: { total: 0, pts: 0 }, reception: { total: 0, exc: 0 } },
+    B2: { attack: { total: 0, pts: 0 }, reception: { total: 0, exc: 0 } },
+    C1: { attack: { total: 0, pts: 0 } },
+    C2: { attack: { total: 0, pts: 0 } },
+    O:  { attack: { total: 0, pts: 0 } },
+    P:  { attack: { total: 0, pts: 0 } },
+  };
+  const attackerModeStats = {
+    '2att': { sideOut: { total: 0, won: 0 }, breakPoint: { total: 0, won: 0 } },
+    '3att': { sideOut: { total: 0, won: 0 }, breakPoint: { total: 0, won: 0 } },
+  };
 
   function ensure(rot) {
     const k = `R${rot}`;
@@ -1478,20 +1585,25 @@ export function analyzeRotationalChains(allMatches) {
   }
 
   for (const match of allMatches) {
+    const rolesBySet = {};
+    (match.sets || []).forEach(s => {
+      rolesBySet[s.number] = identifyRolesPerSet(s.rotations || []);
+    });
+
     for (const rally of match.rallies || []) {
-      const { quartine, phase, rotation, isPoint } = rally;
+      const { quartine, phase, rotation, isPoint, set: setNum } = rally;
       if (!rotation || !quartine) continue;
 
       const k = ensure(rotation);
+      const roles = rolesBySet[setNum];
 
       if (phase === 'r') {
         rotations[k].sideOut.total++;
         if (isPoint) rotations[k].sideOut.won++;
-      } else if (phase === 'b') {
+      } else {
         rotations[k].breakPoint.total++;
         if (isPoint) rotations[k].breakPoint.won++;
 
-        // Transition: phase='b' rally that contains a D followed by an A
         const hasTransition = quartine.some((q, i) =>
           q.type === 'action' && q.fundamental === 'd' &&
           quartine.slice(i + 1).some(q2 => q2.type === 'action' && q2.fundamental === 'a')
@@ -1501,10 +1613,38 @@ export function analyzeRotationalChains(allMatches) {
           if (isPoint) rotations[k].transition.won++;
         }
       }
+
+      // Attacker Mode: P1, P6, P5 = 3 attackers in front; P4, P3, P2 = 2 attackers + setter in front
+      const mode = [1, 6, 5].includes(rotation) ? '3att' : '2att';
+      if (phase === 'r') {
+        attackerModeStats[mode].sideOut.total++;
+        if (isPoint) attackerModeStats[mode].sideOut.won++;
+      } else {
+        attackerModeStats[mode].breakPoint.total++;
+        if (isPoint) attackerModeStats[mode].breakPoint.won++;
+      }
+
+      // Role stats
+      if (roles) {
+        quartine.forEach(q => {
+          if (q.type !== 'action' || !q.player) return;
+          const r = roles[q.player];
+          if (!r || !rolesStats[r]) return;
+
+          if (q.fundamental === 'a') {
+            rolesStats[r].attack.total++;
+            if (q.value >= 4) rolesStats[r].attack.pts++;
+          }
+          if (q.fundamental === 'r' && rolesStats[r].reception) {
+            rolesStats[r].reception.total++;
+            if (q.value >= 4) rolesStats[r].reception.exc++;
+          }
+        });
+      }
     }
   }
 
-  // Compute percentages
+  // Compute final percentages per rotation
   for (const k of Object.keys(rotations)) {
     const r = rotations[k];
     r.sideOut.pct    = r.sideOut.total    > 0 ? r.sideOut.won    / r.sideOut.total    : null;
@@ -1516,7 +1656,35 @@ export function analyzeRotationalChains(allMatches) {
   const avgSideOut    = validRots.length > 0 ? avg(validRots.map(r => r.sideOut.pct).filter(v => v !== null)) : null;
   const avgBreakPoint = validRots.length > 0 ? avg(validRots.map(r => r.breakPoint.pct).filter(v => v !== null)) : null;
 
-  return { rotations, avgSideOut, avgBreakPoint };
+  const finalizeMode = (m) => ({
+    sideOut: m.sideOut.total > 0 ? m.sideOut.won / m.sideOut.total : 0,
+    breakPoint: m.breakPoint.total > 0 ? m.breakPoint.won / m.breakPoint.total : 0,
+    totals: { sideOut: m.sideOut.total, breakPoint: m.breakPoint.total }
+  });
+
+  const finalizeRole = (r) => ({
+    attackEff: r.attack.total > 0 ? r.attack.pts / r.attack.total : 0,
+    receptionExc: r.reception?.total > 0 ? r.reception.exc / r.reception.total : 0,
+    totals: { attack: r.attack.total, reception: r.reception?.total || 0 }
+  });
+
+  return {
+    rotations,
+    avgSideOut,
+    avgBreakPoint,
+    attackerModes: {
+      '2att': finalizeMode(attackerModeStats['2att']),
+      '3att': finalizeMode(attackerModeStats['3att']),
+    },
+    rolePerformance: {
+      B1: finalizeRole(rolesStats.B1),
+      B2: finalizeRole(rolesStats.B2),
+      C1: finalizeRole(rolesStats.C1),
+      C2: finalizeRole(rolesStats.C2),
+      O:  finalizeRole(rolesStats.O),
+      P:  finalizeRole(rolesStats.P),
+    }
+  };
 }
 
 // ─── 6. Generate chain-based training suggestions ─────────────────────────
@@ -1745,4 +1913,367 @@ export function generateChainSuggestions(chainData, roster = []) {
   });
 
   return sugg;
+}
+
+// ============================================================================
+// TACTICAL LAB — Advanced Rotation Matchup Analysis
+// ============================================================================
+
+const ROLE_ORDER_P1 = ['P', 'B1', 'C2', 'O', 'B2', 'C1'];
+
+/**
+ * Get rotation metadata: front row composition, attacker mode, attack zones.
+ */
+export function getRotationMeta(rotNum) {
+  // From P1 lineup [P, B1, C2, O, B2, C1] at positions [1,2,3,4,5,6]:
+  // Clockwise rotation shifts by (rotNum-1) effectively.
+  const shifted = [];
+  for (let i = 0; i < 6; i++) {
+    shifted.push(ROLE_ORDER_P1[(i + (rotNum === 1 ? 0 : rotNum === 6 ? 1 : rotNum === 5 ? 2 : rotNum === 4 ? 3 : rotNum === 3 ? 4 : 5)) % 6]);
+  }
+  // positions: shifted[0]=pos1, shifted[1]=pos2, ..., shifted[5]=pos6
+  const frontRow = [
+    { pos: 4, role: shifted[3] },
+    { pos: 3, role: shifted[2] },
+    { pos: 2, role: shifted[1] },
+  ];
+  const backRow = [
+    { pos: 5, role: shifted[4] },
+    { pos: 6, role: shifted[5] },
+    { pos: 1, role: shifted[0] },
+  ];
+  const setterInFront = frontRow.some(p => p.role === 'P');
+  const attackerCount = setterInFront ? 2 : 3;
+  const mode = attackerCount === 3 ? '3att' : '2att';
+
+  // Attack zones in reception (side-out)
+  let attackZones;
+  if (rotNum === 1) {
+    // P1 special: O attacks from 4, B1 from 2, C2 from 3
+    attackZones = { 4: 'O', 3: 'C2', 2: 'B1' };
+  } else {
+    // Standard: banda→4, centro→3, opposto→2
+    attackZones = {};
+    for (const p of frontRow) {
+      if (p.role === 'P') continue;
+      if (p.role === 'O') attackZones[2] = 'O';
+      else if (p.role.startsWith('C')) attackZones[3] = p.role;
+      else if (p.role.startsWith('B')) attackZones[4] = p.role;
+    }
+  }
+
+  return { rotNum, frontRow, backRow, setterInFront, attackerCount, mode, attackZones, positions: shifted };
+}
+
+/**
+ * Track opponent rotations through a match given starting rotations per set.
+ * Returns rallies annotated with oppRotation field.
+ */
+export function trackOpponentRotations(rallies, oppStartPerSet) {
+  if (!oppStartPerSet || Object.keys(oppStartPerSet).length === 0) return rallies;
+
+  const bySet = {};
+  for (const rally of rallies) {
+    if (!bySet[rally.set]) bySet[rally.set] = [];
+    bySet[rally.set].push(rally);
+  }
+
+  const annotated = [];
+  for (const [setNumStr, setRallies] of Object.entries(bySet)) {
+    const setNum = parseInt(setNumStr);
+    let oppRot = oppStartPerSet[setNum];
+    if (!oppRot) {
+      // No opponent start rotation for this set — leave unannotated
+      for (const r of setRallies) annotated.push({ ...r, oppRotation: null });
+      continue;
+    }
+
+    for (const rally of setRallies) {
+      const annotatedRally = { ...rally, oppRotation: oppRot };
+      annotated.push(annotatedRally);
+
+      // Opponent rotates when they win a side-out:
+      // They were receiving (we were serving = phase 'b') and they scored (!isPoint)
+      if (rally.phase === 'b' && !rally.isPoint) {
+        oppRot = oppRot === 1 ? 6 : oppRot - 1; // next rotation in sequence
+      }
+    }
+  }
+  return annotated;
+}
+
+/**
+ * Compute the matchup matrix: our rotation × opponent rotation.
+ * Each cell contains: rallies count, our points, their points, net, phase breakdown.
+ */
+export function computeMatchupMatrix(annotatedRallies) {
+  const matrix = {};
+  for (let us = 1; us <= 6; us++) {
+    matrix[us] = {};
+    for (let them = 1; them <= 6; them++) {
+      matrix[us][them] = {
+        total: 0, ourPts: 0, theirPts: 0,
+        sideOut: { total: 0, won: 0 },
+        breakPoint: { total: 0, won: 0 },
+      };
+    }
+  }
+
+  const summary = {
+    totalAnnotated: 0,
+    bestMatchup: null,
+    worstMatchup: null,
+  };
+
+  for (const rally of annotatedRallies) {
+    const { rotation, oppRotation, phase, isPoint } = rally;
+    if (!rotation || !oppRotation || rotation < 1 || rotation > 6 || oppRotation < 1 || oppRotation > 6) continue;
+
+    summary.totalAnnotated++;
+    const cell = matrix[rotation][oppRotation];
+    cell.total++;
+    if (isPoint) cell.ourPts++;
+    else cell.theirPts++;
+
+    if (phase === 'r') {
+      cell.sideOut.total++;
+      if (isPoint) cell.sideOut.won++;
+    } else if (phase === 'b') {
+      cell.breakPoint.total++;
+      if (isPoint) cell.breakPoint.won++;
+    }
+  }
+
+  // Find best/worst matchups
+  let bestNet = -Infinity, worstNet = Infinity;
+  for (let us = 1; us <= 6; us++) {
+    for (let them = 1; them <= 6; them++) {
+      const cell = matrix[us][them];
+      if (cell.total < 2) continue;
+      const net = cell.ourPts - cell.theirPts;
+      if (net > bestNet) { bestNet = net; summary.bestMatchup = { us, them, ...cell }; }
+      if (net < worstNet) { worstNet = net; summary.worstMatchup = { us, them, ...cell }; }
+    }
+  }
+
+  return { matrix, summary };
+}
+
+/**
+ * Compute detailed stats per our rotation: attack, reception, serve, defense
+ * broken down by player, with point/error tracking.
+ */
+export function computeRotationDetailedStats(rallies, roles) {
+  const stats = {};
+  for (let r = 1; r <= 6; r++) {
+    stats[r] = {
+      sideOut: { total: 0, won: 0, rallies: [] },
+      breakPoint: { total: 0, won: 0, rallies: [] },
+      players: {},
+      reception: { dist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, total: 0 },
+      attack: { dist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, total: 0, byPlayer: {} },
+      serve: { dist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, total: 0 },
+      defense: { dist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, total: 0 },
+      block: { dist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, total: 0 },
+      oppErrors: 0,
+      scoreRuns: [],
+    };
+  }
+
+  for (const rally of rallies) {
+    const { rotation, phase, isPoint, quartine } = rally;
+    if (!rotation || rotation < 1 || rotation > 6) continue;
+    const rs = stats[rotation];
+
+    if (phase === 'r') {
+      rs.sideOut.total++;
+      if (isPoint) rs.sideOut.won++;
+    } else if (phase === 'b') {
+      rs.breakPoint.total++;
+      if (isPoint) rs.breakPoint.won++;
+    }
+
+    // Track score runs (consecutive points)
+    rs.scoreRuns.push({ set: rally.set, ourScore: rally.ourScore, theirScore: rally.theirScore, isPoint, phase });
+
+    if (!quartine) continue;
+    for (const q of quartine) {
+      if (q.type === 'opponent_error') {
+        rs.oppErrors++;
+        continue;
+      }
+      if (q.type !== 'action' || !q.fundamental || !q.value) continue;
+      const f = q.fundamental;
+      const v = q.value;
+
+      // Aggregate by fundamental
+      if (f === 'r' && rs.reception.dist[v] !== undefined) { rs.reception.dist[v]++; rs.reception.total++; }
+      if (f === 'a' && rs.attack.dist[v] !== undefined) {
+        rs.attack.dist[v]++;
+        rs.attack.total++;
+        // Track attack by player
+        const pNum = q.player;
+        if (pNum) {
+          if (!rs.attack.byPlayer[pNum]) rs.attack.byPlayer[pNum] = { total: 0, pts: 0, err: 0, role: roles?.[pNum] || '' };
+          rs.attack.byPlayer[pNum].total++;
+          if (v >= 4) rs.attack.byPlayer[pNum].pts++;
+          if (v === 1) rs.attack.byPlayer[pNum].err++;
+        }
+      }
+      if (f === 'b' && rs.serve.dist[v] !== undefined) { rs.serve.dist[v]++; rs.serve.total++; }
+      if (f === 'd' && rs.defense.dist[v] !== undefined) { rs.defense.dist[v]++; rs.defense.total++; }
+      if (f === 'm' && rs.block.dist[v] !== undefined) { rs.block.dist[v]++; rs.block.total++; }
+    }
+  }
+
+  return stats;
+}
+
+/**
+ * Compute set-by-set flow: score progression annotated with rotations and matchups.
+ */
+export function computeSetFlow(rallies, oppStartPerSet) {
+  const annotated = oppStartPerSet ? trackOpponentRotations(rallies, oppStartPerSet) : rallies;
+  const bySet = {};
+
+  for (const rally of annotated) {
+    if (!bySet[rally.set]) bySet[rally.set] = [];
+    bySet[rally.set].push({
+      ourScore: rally.ourScore,
+      theirScore: rally.theirScore,
+      ourRot: rally.rotation,
+      oppRot: rally.oppRotation || null,
+      phase: rally.phase,
+      isPoint: rally.isPoint,
+      ourMode: [1, 6, 5].includes(rally.rotation) ? '3att' : '2att',
+      oppMode: rally.oppRotation ? ([1, 6, 5].includes(rally.oppRotation) ? '3att' : '2att') : null,
+    });
+  }
+  return bySet;
+}
+
+/**
+ * Compute role comparison: B1 vs B2, C1 vs C2 performance across matches.
+ */
+export function computeRoleComparison(allMatches, roster = []) {
+  const comparison = {
+    B1: { attack: { total: 0, pts: 0, err: 0 }, reception: { total: 0, pos: 0, err: 0 }, serve: { total: 0, pts: 0, err: 0 } },
+    B2: { attack: { total: 0, pts: 0, err: 0 }, reception: { total: 0, pos: 0, err: 0 }, serve: { total: 0, pts: 0, err: 0 } },
+    C1: { attack: { total: 0, pts: 0, err: 0 }, block: { total: 0, pts: 0 }, serve: { total: 0, pts: 0, err: 0 } },
+    C2: { attack: { total: 0, pts: 0, err: 0 }, block: { total: 0, pts: 0 }, serve: { total: 0, pts: 0, err: 0 } },
+    O: { attack: { total: 0, pts: 0, err: 0 }, serve: { total: 0, pts: 0, err: 0 }, block: { total: 0, pts: 0 } },
+  };
+
+  // Build player→role map from roster
+  const playerRoleMap = {};
+  for (const p of roster) {
+    if (p.number && p.role) playerRoleMap[p.number] = p.role.trim();
+  }
+
+  // Map scout role codes (M1→B1, M2→B2, etc.)
+  const roleMapping = { M1: 'B1', M2: 'B2', C1: 'C1', C2: 'C2', O: 'O' };
+
+  for (const match of allMatches) {
+    for (const rally of match.rallies || []) {
+      for (const q of rally.quartine || []) {
+        if (q.type !== 'action' || !q.player || !q.value) continue;
+        const rosterRole = playerRoleMap[q.player];
+        const compRole = rosterRole ? roleMapping[rosterRole] : null;
+        if (!compRole || !comparison[compRole]) continue;
+
+        const f = q.fundamental;
+        const v = q.value;
+
+        if (f === 'a' && comparison[compRole].attack) {
+          comparison[compRole].attack.total++;
+          if (v >= 4) comparison[compRole].attack.pts++;
+          if (v === 1) comparison[compRole].attack.err++;
+        }
+        if (f === 'r' && comparison[compRole].reception) {
+          comparison[compRole].reception.total++;
+          if (v >= 4) comparison[compRole].reception.pos++;
+          if (v === 1) comparison[compRole].reception.err++;
+        }
+        if (f === 'b' && comparison[compRole].serve) {
+          comparison[compRole].serve.total++;
+          if (v >= 4) comparison[compRole].serve.pts++;
+          if (v === 1) comparison[compRole].serve.err++;
+        }
+        if (f === 'm' && comparison[compRole].block) {
+          comparison[compRole].block.total++;
+          if (v === 5) comparison[compRole].block.pts++;
+        }
+      }
+    }
+  }
+
+  return comparison;
+}
+
+/**
+ * Compute phase-specific performance per rotation: how well we perform in
+ * "our reception vs their serve" and "our serve vs their reception".
+ */
+export function computePhaseRotationStats(rallies, roles) {
+  const phaseStats = {};
+  for (let r = 1; r <= 6; r++) {
+    phaseStats[r] = {
+      // Our reception (SO): quality of our attack chain after receiving
+      ourReception: {
+        total: 0, won: 0,
+        receptionQuality: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+        attackAfterRec: { total: 0, pts: 0, err: 0 },
+      },
+      // Our serve (BP): quality of our serve + defense/transition chain
+      ourServe: {
+        total: 0, won: 0,
+        serveQuality: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+        blockPts: 0, transitionAttack: { total: 0, pts: 0, err: 0 },
+      },
+    };
+  }
+
+  for (const rally of rallies) {
+    const { rotation, phase, isPoint, quartine } = rally;
+    if (!rotation || rotation < 1 || rotation > 6 || !quartine) continue;
+    const ps = phaseStats[rotation];
+
+    if (phase === 'r') {
+      ps.ourReception.total++;
+      if (isPoint) ps.ourReception.won++;
+
+      // Track reception and subsequent attack quality
+      for (const q of quartine) {
+        if (q.type !== 'action') continue;
+        if (q.fundamental === 'r' && q.value >= 1 && q.value <= 5) {
+          ps.ourReception.receptionQuality[q.value]++;
+        }
+        if (q.fundamental === 'a') {
+          ps.ourReception.attackAfterRec.total++;
+          if (q.value >= 4) ps.ourReception.attackAfterRec.pts++;
+          if (q.value === 1) ps.ourReception.attackAfterRec.err++;
+        }
+      }
+    } else if (phase === 'b') {
+      ps.ourServe.total++;
+      if (isPoint) ps.ourServe.won++;
+
+      for (const q of quartine) {
+        if (q.type !== 'action') continue;
+        if (q.fundamental === 'b' && q.value >= 1 && q.value <= 5) {
+          ps.ourServe.serveQuality[q.value]++;
+        }
+        if (q.fundamental === 'm' && q.value === 5) {
+          ps.ourServe.blockPts++;
+        }
+        if (q.fundamental === 'a') {
+          ps.ourServe.transitionAttack.total++;
+          if (q.value >= 4) ps.ourServe.transitionAttack.pts++;
+          if (q.value === 1) ps.ourServe.transitionAttack.err++;
+        }
+      }
+    }
+  }
+
+  return phaseStats;
 }

@@ -465,7 +465,7 @@ export default function ConfigPanel({
   onProfileReset,
   hasUnsavedChanges,
 }) {
-  const [activeSection, setActiveSection] = useState('weights'); // 'weights' | 'fnc' | 'preview'
+  const [activeSection, setActiveSection] = useState('weights'); // 'weights' | 'fnc'
 
   const totalWeightImpact = Object.values(weights).reduce((s, v) => s + v, 0);
 
@@ -480,7 +480,6 @@ export default function ConfigPanel({
   const tabs = [
     { id: 'weights', label: 'Pesi Partita', icon: '⚖' },
     { id: 'fnc', label: 'Normalizzazione FNC', icon: '📐' },
-    { id: 'preview', label: 'Preview Live', icon: '👁' },
   ];
 
   return (
@@ -761,78 +760,6 @@ export default function ConfigPanel({
                   L'FNC corregge questo bias riallineando tutte le scale sulla media globale.
                 </p>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Sezione Preview Live — Sintesi effetto combinato CC + FNC ── */}
-      {activeSection === 'preview' && (
-        <div className="space-y-4">
-
-          {/* Banner esplicativo */}
-          <div className="glass-card px-4 py-3 border border-amber-500/15">
-            <p className="text-xs text-amber-300 font-medium mb-1">👁 Preview Live — Effetto combinato dei due sistemi</p>
-            <p className="text-[10px] text-gray-400 leading-relaxed">
-              Questa vista mostra come i due sistemi di correzione agiscono <em>insieme</em> sui dati.
-              Il <span className="text-amber-400">Coefficiente di Contesto (CC)</span> rivaluta le performance in base alla difficoltà della partita.
-              Il <span className="text-amber-400">FNC</span> corregge il bias di scala tra fondamentali diversi.
-              I grafici qui rispecchiano i parametri correnti di entrambi i tab — variano in tempo reale.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {/* Grafico 1: performance grezza vs pesata (effetto CC) */}
-            <div className="glass-card px-4 pt-3 pb-2">
-              <div className="mb-2">
-                <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wide">
-                  Effetto CC — Performance grezza vs. pesata per contesto
-                </h3>
-                <p className="text-[10px] text-gray-500 mt-0.5">
-                  Come i pesi partita modificano la performance media squadra in ogni match.
-                  <span className="text-sky-400"> Blu</span> = grezza ·
-                  <span className="text-amber-400"> Tratteggio</span> = pesata CC.
-                </p>
-              </div>
-              {analytics?.matchAnalytics?.length > 0
-                ? <RawVsWeightedChart analytics={analytics} />
-                : <p className="text-xs text-gray-600 italic py-6 text-center">Carica partite per vedere il grafico.</p>}
-            </div>
-
-            {/* Grafico 2: peso di contesto per partita */}
-            <div className="glass-card px-4 pt-3 pb-2">
-              <div className="mb-2">
-                <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wide">
-                  Peso di contesto (CC) per partita
-                </h3>
-                <p className="text-[10px] text-gray-500 mt-0.5">
-                  CC {'>'} 1.0 = partita difficile (performance rivalutate) ·
-                  CC {'<'} 1.0 = partita facile (performance ridimensionate).
-                  <span className="text-green-400"> Verde</span> = facile ·
-                  <span className="text-red-400"> Rosso</span> = difficile.
-                </p>
-              </div>
-              {analytics?.matchAnalytics?.length > 0
-                ? <WeightImpactChart analytics={analytics} />
-                : <p className="text-xs text-gray-600 italic py-6 text-center">Carica partite per vedere il grafico.</p>}
-            </div>
-
-            {/* Grafico 3: radar FNC (effetto FNC) */}
-            <div className="glass-card p-4 xl:col-span-2">
-              <div className="mb-2">
-                <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wide">
-                  Effetto FNC — Radar fondamentali (media stagione)
-                </h3>
-                <p className="text-[10px] text-gray-500 mt-0.5">
-                  Visualizza il riallineamento delle scale prodotto dall'FNC sulla media di stagione.
-                  <span className="text-sky-400"> Blu</span> = valori grezzi ·
-                  <span className="text-amber-400"> Arancio</span> = dopo FNC.
-                  {!fncConfig.enabled && <span className="text-amber-500/70"> (FNC disabilitato — le due linee coincidono)</span>}
-                </p>
-              </div>
-              {analytics?.matchAnalytics?.length > 0 && baselines
-                ? <FNCPreviewRadar analytics={analytics} baselines={baselines} fncConfig={fncConfig} />
-                : <p className="text-xs text-gray-600 italic py-6 text-center">Carica almeno 3 partite per vedere la preview FNC.</p>}
             </div>
           </div>
         </div>

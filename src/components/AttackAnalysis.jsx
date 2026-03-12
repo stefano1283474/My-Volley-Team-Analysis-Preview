@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 
 const ATTACK_QUALITY = ['A5', 'A4', 'A3', 'A2', 'A1'];
@@ -116,6 +116,7 @@ export default function AttackAnalysis({ analytics, matches, allPlayers, dataMod
   const [convPlayerFilter, setConvPlayerFilter] = useState(null);
   const [trendTouchKey, setTrendTouchKey] = useState('R5');
   const [hoveredSeriesKey, setHoveredSeriesKey] = useState('');
+  const [selectedTrendSeries, setSelectedTrendSeries] = useState(() => [...ATTACK_QUALITY]);
 
   if (!analytics || matches.length === 0) {
     return (
@@ -191,6 +192,7 @@ export default function AttackAnalysis({ analytics, matches, allPlayers, dataMod
   ), [sortedSources, convPlayerFilter, trendTouchKey]);
 
   const trendSeries = ATTACK_QUALITY.filter(aq => trendData.some(d => d[aq] !== null));
+  const visibleTrendSeries = trendSeries.filter(aq => selectedTrendSeries.includes(aq));
 
   const renderTrendTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
@@ -389,8 +391,7 @@ export default function AttackAnalysis({ analytics, matches, allPlayers, dataMod
             <XAxis dataKey="label" tick={{ fill: '#9ca3af', fontSize: 10 }} interval="preserveStartEnd" minTickGap={30} />
             <YAxis domain={[0, 100]} tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
             <Tooltip content={renderTrendTooltip} />
-            <Legend wrapperStyle={{ fontSize: 11 }} formatter={(v) => ATTACK_COL_LABELS[v]} />
-            {trendSeries.map(aq => (
+            {visibleTrendSeries.map(aq => (
               <Line
                 key={aq}
                 type="monotone"
@@ -424,6 +425,30 @@ export default function AttackAnalysis({ analytics, matches, allPlayers, dataMod
             ))}
           </LineChart>
         </ResponsiveContainer>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
+          {trendSeries.map(aq => {
+            const active = selectedTrendSeries.includes(aq);
+            return (
+              <button
+                key={aq}
+                onClick={() => setSelectedTrendSeries(prev => (
+                  prev.includes(aq) ? prev.filter(k => k !== aq) : [...prev, aq]
+                ))}
+                className={`text-[11px] px-2 py-1 rounded-full border transition-all ${
+                  active
+                    ? 'bg-white/10 text-white border-white/25'
+                    : 'bg-white/[0.03] text-gray-500 border-white/10'
+                }`}
+              >
+                <span
+                  className="inline-block w-2.5 h-2.5 rounded-full mr-1.5 align-middle"
+                  style={{ background: ATTACK_COL_COLORS[aq], opacity: active ? 1 : 0.45 }}
+                />
+                {ATTACK_COL_LABELS[aq]}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

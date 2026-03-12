@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   AreaChart, Area } from 'recharts';
 import { COLORS } from '../utils/constants';
+import { analyzeRotationalChains } from '../utils/analyticsEngine';
 
 export default function TeamTrends({ analytics, matches, standings, dataMode = 'raw' }) {
   if (!analytics || matches.length < 2) {
@@ -26,6 +27,10 @@ export default function TeamTrends({ analytics, matches, standings, dataMode = '
         const team = ma.match.riepilogo?.team;
         const w = ma.matchWeight.final;
         const fw = ma.fundWeights;
+        
+        // Role-specific data for this match
+        const rc = analyzeRotationalChains([ma.match]);
+        
         return {
           label: (ma.match.metadata.opponent || '').substring(0, 10),
           date: ma.match.metadata.date || `Match ${i + 1}`,
@@ -43,6 +48,11 @@ export default function TeamTrends({ analytics, matches, standings, dataMode = '
           // Chain stats
           sideOut: (ma.chains.sideOut.pct || 0) * 100,
           breakPoint: (ma.chains.breakPoint.pct || 0) * 100,
+          // Role Performance
+          b1Att: (rc.rolePerformance?.B1?.attackEff || 0) * 100,
+          b2Att: (rc.rolePerformance?.B2?.attackEff || 0) * 100,
+          b1Rec: (rc.rolePerformance?.B1?.receptionExc || 0) * 100,
+          b2Rec: (rc.rolePerformance?.B2?.receptionExc || 0) * 100,
         };
       });
   }, [matchAnalytics]);
@@ -59,7 +69,7 @@ export default function TeamTrends({ analytics, matches, standings, dataMode = '
       <div>
         <h2 className="text-xl font-bold text-white mb-1">Trend Squadra</h2>
         <p className="text-sm text-gray-400">
-          Andamento nel tempo su {matches.length} partite. Il dato contestualizzato tiene conto della forza degli avversari affrontati.
+          Andamento nel tempo su {matches.length} partite.
         </p>
       </div>
 
@@ -86,19 +96,49 @@ export default function TeamTrends({ analytics, matches, standings, dataMode = '
             <Legend wrapperStyle={{ fontSize: 11 }} />
           </AreaChart>
         </ResponsiveContainer>
-        <p className="text-[10px] text-gray-500 mt-2">
-          {dataMode === 'weighted'
-            ? 'Dato contestualizzato: tiene conto della forza degli avversari affrontati e dei pesi dei fondamentali.'
-            : 'Dato grezzo: efficacia media della squadra sui fondamentali, senza pesatura del contesto.'}
-        </p>
+      </div>
+
+      {/* Role Comparison Trends (B1 vs B2) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="glass-card p-5">
+           <h3 className="text-sm font-semibold text-gray-300 mb-4">Trend Efficienza Attacco: B1 vs B2</h3>
+           <ResponsiveContainer width="100%" height={220}>
+             <LineChart data={timelineData}>
+               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+               <XAxis dataKey="label" tick={{ fill: '#9ca3af', fontSize: 10 }} />
+               <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0, 100]} />
+               <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: 'none', borderRadius: 8, fontSize: 11 }} />
+               <Line type="monotone" dataKey="b1Att" name="B1 (Attaccante)" stroke="#f59e0b" strokeWidth={3} dot={{ r: 4 }} />
+               <Line type="monotone" dataKey="b2Att" name="B2 (Ricevitore)" stroke="#fcd34d" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
+               <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+             </LineChart>
+           </ResponsiveContainer>
+           <p className="text-[10px] text-gray-500 mt-2 italic">B1 dovrebbe mantenere efficienza più alta e costante.</p>
+        </div>
+
+        <div className="glass-card p-5">
+           <h3 className="text-sm font-semibold text-gray-300 mb-4">Trend Ricezione Eccellente: B1 vs B2</h3>
+           <ResponsiveContainer width="100%" height={220}>
+             <LineChart data={timelineData}>
+               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+               <XAxis dataKey="label" tick={{ fill: '#9ca3af', fontSize: 10 }} />
+               <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0, 100]} />
+               <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: 'none', borderRadius: 8, fontSize: 11 }} />
+               <Line type="monotone" dataKey="b2Rec" name="B2 (Specialista)" stroke="#38bdf8" strokeWidth={3} dot={{ r: 4 }} />
+               <Line type="monotone" dataKey="b1Rec" name="B1" stroke="#bae6fd" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
+               <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+             </LineChart>
+           </ResponsiveContainer>
+           <p className="text-[10px] text-gray-500 mt-2 italic">B2 dovrebbe essere il pilastro della ricezione.</p>
+        </div>
       </div>
 
       {/* Per-fundamental trends */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <FundTrendChart data={timelineData} rawKey="attRaw" weiKey="attWei" title="Attacco" color="#f43f5e" dataMode={dataMode} />
-        <FundTrendChart data={timelineData} rawKey="serRaw" weiKey="serWei" title="Battuta" color="#8b5cf6" dataMode={dataMode} />
-        <FundTrendChart data={timelineData} rawKey="recRaw" weiKey="recWei" title="Ricezione" color="#0ea5e9" dataMode={dataMode} />
-        <FundTrendChart data={timelineData} rawKey="defRaw" weiKey="defWei" title="Difesa" color="#10b981" dataMode={dataMode} />
+        <FundTrendChart data={timelineData} rawKey="attRaw" weiKey="attWei" title="Attacco Squadra" color="#f43f5e" dataMode={dataMode} />
+        <FundTrendChart data={timelineData} rawKey="serRaw" weiKey="serWei" title="Battuta Squadra" color="#8b5cf6" dataMode={dataMode} />
+        <FundTrendChart data={timelineData} rawKey="recRaw" weiKey="recWei" title="Ricezione Squadra" color="#0ea5e9" dataMode={dataMode} />
+        <FundTrendChart data={timelineData} rawKey="defRaw" weiKey="defWei" title="Difesa Squadra" color="#10b981" dataMode={dataMode} />
       </div>
 
       {/* Side-out and Break trends */}
@@ -109,29 +149,12 @@ export default function TeamTrends({ analytics, matches, standings, dataMode = '
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
             <XAxis dataKey="label" tick={{ fill: '#9ca3af', fontSize: 10 }} />
             <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0, 100]} />
-            <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }} />
+            <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: 'none', borderRadius: 8, fontSize: 11 }} />
             <Line type="monotone" dataKey="sideOut" name="Side-Out %" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} />
             <Line type="monotone" dataKey="breakPoint" name="Break-Point %" stroke="#a3e635" strokeWidth={2} dot={{ r: 3 }} />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
           </LineChart>
         </ResponsiveContainer>
-      </div>
-
-      {/* Context weight trend */}
-      <div className="glass-card p-5">
-        <h3 className="text-sm font-semibold text-gray-300 mb-4">Peso Contesto nel Tempo</h3>
-        <ResponsiveContainer width="100%" height={180}>
-          <AreaChart data={timelineData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-            <XAxis dataKey="label" tick={{ fill: '#9ca3af', fontSize: 10 }} />
-            <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0.5, 1.5]} />
-            <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }} />
-            <Area type="monotone" dataKey="weight" name="Peso" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} strokeWidth={2} />
-          </AreaChart>
-        </ResponsiveContainer>
-        <p className="text-[10px] text-gray-500 mt-2">
-          Pesi medi alti = hai affrontato avversari forti o contesti difficili. Utile per contestualizzare il rendimento.
-        </p>
       </div>
     </div>
   );
@@ -151,7 +174,7 @@ function FundTrendChart({ data, rawKey, weiKey, title, color, dataMode = 'raw' }
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
           <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 8 }} />
           <YAxis tick={{ fill: '#6b7280', fontSize: 8 }} />
-          <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 10 }} />
+          <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.95)', border: 'none', borderRadius: 8, fontSize: 10 }} />
           <Line type="monotone" dataKey={activeKey} name={activeName} stroke={activeColor} strokeWidth={2} dot={{ r: 3 }} />
         </LineChart>
       </ResponsiveContainer>

@@ -4,7 +4,8 @@
 // ============================================================================
 
 import * as XLSX from 'xlsx';
-import Papa from 'papaparse';
+import * as PapaRaw from 'papaparse';
+const Papa = PapaRaw.default ?? PapaRaw;
 import { OUR_TEAM, TEAM_MAP, TEAM_MAP_REVERSE } from './constants';
 
 // ─── CSV Calendar Parser ───────────────────────────────────────────────────
@@ -103,6 +104,7 @@ export function parseMatchFile(buffer, fileName) {
     sets: parseSets(wb),
     riepilogo: parseRiepilogo(wb),
     gioco: parseGioco(wb),
+    giriDiRice: parseGiriDiRice(wb),
     rallies: parseAllRallies(wb),
   };
 
@@ -169,6 +171,12 @@ function parseSets(wb) {
     const ourScore = getCellValue(ws, 'C12');
     const theirScore = getCellValue(ws, 'E12');
 
+    // Starting rotations per set: A6 = opponent, A7 = our team
+    const oppStartRotRaw = getCellValue(ws, 'A6');
+    const ourStartRotRaw = getCellValue(ws, 'A7');
+    const oppStartRotation = oppStartRotRaw ? (Number(oppStartRotRaw) || null) : null;
+    const ourStartRotation = ourStartRotRaw ? (Number(ourStartRotRaw) || null) : null;
+
     if (ourScore && Number(ourScore) > 0) {
       sets.push({
         number: s,
@@ -176,6 +184,8 @@ function parseSets(wb) {
         theirScore: Number(theirScore) || 0,
         margin: Number(ourScore) - (Number(theirScore) || 0),
         won: Number(ourScore) > (Number(theirScore) || 0),
+        oppStartRotation: (oppStartRotation >= 1 && oppStartRotation <= 6) ? oppStartRotation : null,
+        ourStartRotation: (ourStartRotation >= 1 && ourStartRotation <= 6) ? ourStartRotation : null,
       });
     }
   }
@@ -448,6 +458,56 @@ function parseGioco(wb) {
   }
 
   return { overview, rotationStats, attackFromReception, attackFromDefense, receptionByRotation };
+}
+
+// ─── Parse Giri di Rice (rotation flow) sheet ───────────────────────────────
+// Contains serve rotation stats (SP1-SP6) and receive rotation stats (RP1-RP6)
+// plus the matchup pairs (our serve rotation ↔ opponent receive rotation)
+function parseGiriDiRice(wb) {
+  const ws = wb.Sheets['Giri di Rice'];
+  if (!ws) return null;
+
+  // Serve rotation stats: rows 4-9 (SP1-SP6)
+  // Columns: B=B(break), C=A(attack), D=M(muro), E=Err, F=total, G=label, I=oppRotation
+  const serveRotations = [];
+  for (let row = 4; row <= 9; row++) {
+    const label = getCellValue(ws, `G${row}`);
+    if (!label || !String(label).startsWith('SP')) continue;
+    const rotNum = parseInt(String(label).replace('SP', ''));
+    const oppLabel = getCellValue(ws, `I${row}`);
+    const oppRot = oppLabel ? parseInt(String(oppLabel).replace('RP', '')) : null;
+    serveRotations.push({
+      rotation: rotNum,
+      breakPts: n(getCellValue(ws, `B${row}`)),
+      attackPts: n(getCellValue(ws, `C${row}`)),
+      blockPts: n(getCellValue(ws, `D${row}`)),
+      errors: n(getCellValue(ws, `E${row}`)),
+      total: n(getCellValue(ws, `F${row}`)),
+      oppReceiveRotation: (oppRot >= 1 && oppRot <= 6) ? oppRot : null,
+    });
+  }
+
+  // Receive rotation stats: rows 13-18 (RP1-RP6)
+  // Columns: B=A(attack), C=M(muro), D=AvvS(opp serve err), E=AvvG, F=total, G=label, I=oppRotation
+  const receiveRotations = [];
+  for (let row = 13; row <= 18; row++) {
+    const label = getCellValue(ws, `G${row}`);
+    if (!label || !String(label).startsWith('RP')) continue;
+    const rotNum = parseInt(String(label).replace('RP', ''));
+    const oppLabel = getCellValue(ws, `I${row}`);
+    const oppRot = oppLabel ? parseInt(String(oppLabel).replace('SP', '')) : null;
+    receiveRotations.push({
+      rotation: rotNum,
+      attackPts: n(getCellValue(ws, `B${row}`)),
+      blockPts: n(getCellValue(ws, `C${row}`)),
+      oppServeErrors: n(getCellValue(ws, `D${row}`)),
+      oppGiftPts: n(getCellValue(ws, `E${row}`)),
+      total: n(getCellValue(ws, `F${row}`)),
+      oppServeRotation: (oppRot >= 1 && oppRot <= 6) ? oppRot : null,
+    });
+  }
+
+  return { serveRotations, receiveRotations };
 }
 
 // ─── Parse rally sequences from Set sheets ─────────────────────────────────

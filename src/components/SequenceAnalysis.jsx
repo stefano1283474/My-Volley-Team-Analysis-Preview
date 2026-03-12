@@ -5,7 +5,7 @@
 //       rally lunghi, analisi rotazionale
 // ============================================================================
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ReferenceLine, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, Legend,
@@ -39,6 +39,73 @@ const CHAIN_TYPE_LABELS = {
   rally_length:    { icon: '⏱ Rally',  color: 'text-blue-400',   badge: 'bg-blue-500/15 text-blue-400' },
   rotation:        { icon: '⟳ Rot.',   color: 'text-teal-400',   badge: 'bg-teal-500/15 text-teal-400' },
 };
+
+const TRAINING_PLAN_STORAGE_KEY = 'vpa_chain_training_plan_config';
+const TRAINING_DAYS = [
+  { id: 'monday', label: 'Lunedì', jsDay: 1 },
+  { id: 'tuesday', label: 'Martedì', jsDay: 2 },
+  { id: 'wednesday', label: 'Mercoledì', jsDay: 3 },
+  { id: 'thursday', label: 'Giovedì', jsDay: 4 },
+  { id: 'friday', label: 'Venerdì', jsDay: 5 },
+  { id: 'saturday', label: 'Sabato', jsDay: 6 },
+  { id: 'sunday', label: 'Domenica', jsDay: 0 },
+];
+const DURATION_OPTIONS = [1, 1.5, 2, 2.5, 3];
+const SESSIONS_OPTIONS = [1, 2, 3];
+
+function normalizeTeamName(name) {
+  return String(name || '').trim().toUpperCase();
+}
+
+function createDefaultTrainingSchedule() {
+  return TRAINING_DAYS.reduce((acc, day) => {
+    const enabled = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].includes(day.id);
+    acc[day.id] = { enabled, duration: 2, sessions: 1 };
+    return acc;
+  }, {});
+}
+
+function parseCalendarDate(dateValue) {
+  const raw = String(dateValue || '').trim();
+  if (!raw) return null;
+  const slash = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (slash) {
+    const day = Number(slash[1]);
+    const month = Number(slash[2]);
+    const year = Number(slash[3]);
+    const d = new Date(year, month - 1, day, 12, 0, 0, 0);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  const dash = raw.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (dash) {
+    const year = Number(dash[1]);
+    const month = Number(dash[2]);
+    const day = Number(dash[3]);
+    const d = new Date(year, month - 1, day, 12, 0, 0, 0);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  const fallback = new Date(raw);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
+}
+
+function parseMatchKickoff(dateValue, timeValue) {
+  const base = parseCalendarDate(dateValue);
+  if (!base) return null;
+  const timeRaw = String(timeValue || '').trim();
+  if (!timeRaw) return base;
+  const cleaned = timeRaw.replace('.', ':');
+  const [hStr, mStr = '0'] = cleaned.split(':');
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (Number.isFinite(h) && Number.isFinite(m)) {
+    base.setHours(h, m, 0, 0);
+  }
+  return base;
+}
+
+function weekdayRank(jsDay) {
+  return jsDay === 0 ? 7 : jsDay;
+}
 
 // ─── Heatmap cell color ───────────────────────────────────────────────────────
 // inputKey = 'R3'/'R4'/'R5'/'D3'/'D4'/'D5', outputKey = 'A1'..'A5'
@@ -172,6 +239,335 @@ export default function SequenceAnalysis({ chainData, chainSuggestions, matches,
   );
 }
 
+export function ChainTrainingPlan({ chainSuggestions, matches, calendar = [], ownerTeamName = '' }) {
+  const suggestions = chainSuggestions || [];
+  const declines = suggestions.filter(s => s.priority >= 3);
+  const [isScheduleExpanded, setIsScheduleExpanded] = useState(true);
+  const [trainingSchedule, setTrainingSchedule] = useState(() => {
+    const defaults = createDefaultTrainingSchedule();
+    try {
+      const stored = JSON.parse(localStorage.getItem(TRAINING_PLAN_STORAGE_KEY) || '{}');
+      const merged = { ...defaults };
+      for (const day of TRAINING_DAYS) {
+        const row = stored?.schedule?.[day.id];
+        if (!row) continue;
+        merged[day.id] = {
+          enabled: !!row.enabled,
+          duration: DURATION_OPTIONS.includes(Number(row.duration)) ? Number(row.duration) : defaults[day.id].duration,
+          sessions: SESSIONS_OPTIONS.includes(Number(row.sessions)) ? Number(row.sessions) : defaults[day.id].sessions,
+        };
+      }
+      return merged;
+    } catch {
+      return defaults;
+    }
+  });
+  const [preferRefinementBeforeMatch, setPreferRefinementBeforeMatch] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(TRAINING_PLAN_STORAGE_KEY) || '{}');
+      return stored?.preferRefinementBeforeMatch !== false;
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TRAINING_PLAN_STORAGE_KEY, JSON.stringify({
+        schedule: trainingSchedule,
+        preferRefinementBeforeMatch,
+      }));
+    } catch {}
+  }, [trainingSchedule, preferRefinementBeforeMatch]);
+
+  const scheduleRows = useMemo(
+    () => TRAINING_DAYS.map(day => ({ day, cfg: trainingSchedule[day.id] || { enabled: false, duration: 2, sessions: 1 } })),
+    [trainingSchedule]
+  );
+
+  const activeDayRows = scheduleRows.filter(({ cfg }) => cfg.enabled && cfg.sessions > 0);
+  const totalSessions = activeDayRows.reduce((sum, { cfg }) => sum + cfg.sessions, 0);
+  const totalHours = activeDayRows.reduce((sum, { cfg }) => sum + (cfg.duration * cfg.sessions), 0);
+
+  const sessionSlots = useMemo(() => {
+    const slots = [];
+    for (const { day, cfg } of activeDayRows) {
+      for (let i = 0; i < cfg.sessions; i += 1) {
+        slots.push({
+          dayId: day.id,
+          dayLabel: day.label,
+          jsDay: day.jsDay,
+          duration: cfg.duration,
+          sessionIndex: i + 1,
+          daySessions: cfg.sessions,
+        });
+      }
+    }
+    return slots;
+  }, [activeDayRows]);
+
+  const nextMatch = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const ownerUpper = normalizeTeamName(ownerTeamName);
+    const isOwnerMatch = (m) => {
+      if (!ownerUpper) return true;
+      const home = normalizeTeamName(m.home);
+      const away = normalizeTeamName(m.away);
+      return home === ownerUpper || away === ownerUpper || home.includes(ownerUpper) || away.includes(ownerUpper) || ownerUpper.includes(home) || ownerUpper.includes(away);
+    };
+    const candidates = (calendar || [])
+      .filter(m => !m.played && isOwnerMatch(m))
+      .map(m => {
+        const kickoff = parseMatchKickoff(m.data, m.ora);
+        return kickoff ? { ...m, kickoff } : null;
+      })
+      .filter(Boolean)
+      .filter(m => m.kickoff >= now)
+      .sort((a, b) => a.kickoff - b.kickoff || a.giornata - b.giornata);
+    return candidates[0] || null;
+  }, [calendar, ownerTeamName]);
+
+  const preMatchSessionIndex = useMemo(() => {
+    if (!nextMatch || sessionSlots.length === 0) return -1;
+    const matchRank = weekdayRank(nextMatch.kickoff.getDay());
+    let bestIdx = -1;
+    let bestRank = -1;
+    sessionSlots.forEach((slot, idx) => {
+      const rank = weekdayRank(slot.jsDay);
+      if (rank < matchRank && rank >= bestRank) {
+        bestRank = rank;
+        bestIdx = idx;
+      }
+    });
+    if (bestIdx >= 0) return bestIdx;
+    let fallbackIdx = -1;
+    let fallbackRank = -1;
+    sessionSlots.forEach((slot, idx) => {
+      const rank = weekdayRank(slot.jsDay);
+      if (rank >= fallbackRank) {
+        fallbackRank = rank;
+        fallbackIdx = idx;
+      }
+    });
+    return fallbackIdx;
+  }, [nextMatch, sessionSlots]);
+
+  const focusBlocks = useMemo(() => {
+    const hasTransitionGap = declines.some(s => s.type === 'side_out_vs_transition_gap');
+    const hasR5Waste = declines.some(s => s.type === 'r_to_a_waste');
+    const hasD5Waste = declines.some(s => s.type === 'd_to_a_waste');
+    const hasServeDef = declines.some(s => s.type === 'serve_defense_break');
+    const hasRallyLong = declines.some(s => s.type === 'rally_length_fatigue' || s.type === 'rally_length_fatigue_team');
+    const hasRotWeak = declines.some(s => s.type === 'rotation_chain_weakness');
+    const weakRot = declines.find(s => s.type === 'rotation_chain_weakness')?.rotation;
+    const r5Players = [...new Set(declines.filter(s => s.type === 'r_to_a_waste').map(s => s.player))].slice(0, 3);
+    const trPlayers = [...new Set(declines.filter(s => s.type === 'side_out_vs_transition_gap').map(s => s.player))].slice(0, 3);
+
+    const blocks = [];
+    blocks.push({
+      title: 'Side-out',
+      desc: hasR5Waste && r5Players.length > 0
+        ? `Ricezione di qualità alta da convertire meglio in punto per ${r5Players.join(', ')}.`
+        : 'Catena ricezione → alzata → attacco con continuità su palla positiva.',
+    });
+    blocks.push({
+      title: 'Transizione',
+      desc: hasTransitionGap && trPlayers.length > 0
+        ? `Rincorsa corta e timing in D→A per ${trPlayers.join(', ')}.`
+        : 'Collegamento difesa → alzata → attacco in break-point.',
+    });
+    blocks.push({
+      title: 'Break-point',
+      desc: hasServeDef
+        ? 'Battuta efficace e organizzazione difensiva immediata dopo B4/B5.'
+        : hasD5Waste
+          ? 'Difesa utile e transizione rapida per migliorare conversione D5→A.'
+          : 'Pressione al servizio e letture muro-difesa.',
+    });
+    blocks.push({
+      title: 'Tattica gara',
+      desc: hasRotWeak && weakRot
+        ? `Preparazione specifica sulla rotazione ${weakRot}, poi set con obiettivi di sistema.`
+        : hasRallyLong
+          ? 'Set con scambi lunghi e mantenimento qualità tecnica sotto fatica.'
+          : 'Preparazione della prossima gara su rotazioni e situazioni chiave.',
+    });
+    return blocks;
+  }, [declines]);
+
+  const plannedSessions = useMemo(() => (
+    sessionSlots.map((slot, idx) => {
+      const focus = focusBlocks[idx % focusBlocks.length];
+      const isPreMatch = idx === preMatchSessionIndex;
+      const minutes = Math.round(slot.duration * 60);
+      const coreMinutes = Math.max(25, minutes - 30);
+      const closureMinutes = Math.min(20, Math.max(10, Math.round(minutes * 0.2)));
+      const warmupMinutes = Math.max(10, minutes - coreMinutes - closureMinutes);
+      let desc = `${focus.title}: ${focus.desc}`;
+      if (isPreMatch && nextMatch && preferRefinementBeforeMatch) {
+        desc = `Rifinitura pre-gara: organizzazione di fase, battuta mirata, side-out di sicurezza e finali set in pressione per la partita contro ${nextMatch.home} vs ${nextMatch.away}.`;
+      }
+      return {
+        ...slot,
+        desc,
+        structure: `${warmupMinutes}' attivazione · ${coreMinutes}' focus principale · ${closureMinutes}' 6vs6 a obiettivo`,
+        isPreMatch,
+      };
+    })
+  ), [sessionSlots, focusBlocks, preMatchSessionIndex, nextMatch, preferRefinementBeforeMatch]);
+
+  const formatMatchDate = (d) => {
+    try {
+      return new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: '2-digit', month: '2-digit' }).format(d);
+    } catch {
+      return String(d || '');
+    }
+  };
+
+  const updateDayConfig = (dayId, patch) => {
+    setTrainingSchedule(prev => ({
+      ...prev,
+      [dayId]: { ...(prev[dayId] || { enabled: false, duration: 2, sessions: 1 }), ...patch },
+    }));
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-5">
+      <div>
+        <h2 className="text-xl font-bold text-white mb-1">Trainig plan</h2>
+        <p className="text-sm text-gray-400">
+          Configura le sedute settimanali e genera una programmazione che integra catene di gioco e calendario gare.
+        </p>
+      </div>
+
+      <div className="glass-card p-5 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <button
+            onClick={() => setIsScheduleExpanded(v => !v)}
+            className="inline-flex items-center gap-2 text-sm font-semibold text-sky-400 hover:text-sky-300 transition-colors"
+          >
+            <span>{isScheduleExpanded ? '▼' : '▶'}</span>
+            <span>Sedute settimanali</span>
+          </button>
+          <p className="text-xs text-gray-400">
+            {totalSessions} sedute · {totalHours.toFixed(1).replace('.', ',')} ore totali
+          </p>
+        </div>
+        {isScheduleExpanded && (
+          <>
+            <div className="space-y-2">
+              {scheduleRows.map(({ day, cfg }) => (
+                <div key={day.id} className="grid grid-cols-1 md:grid-cols-[180px,1fr,1fr] gap-2 md:gap-3 items-center bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2">
+                  <label className="flex items-center gap-2 text-sm text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={!!cfg.enabled}
+                      onChange={(e) => updateDayConfig(day.id, { enabled: e.target.checked })}
+                      className="accent-sky-500"
+                    />
+                    <span>{day.label}</span>
+                  </label>
+                  <label className="text-xs text-gray-400 flex items-center gap-2">
+                    <span className="w-24">Durata</span>
+                    <select
+                      value={cfg.duration}
+                      disabled={!cfg.enabled}
+                      onChange={(e) => updateDayConfig(day.id, { duration: Number(e.target.value) })}
+                      className="flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-gray-200 disabled:opacity-50"
+                    >
+                      {DURATION_OPTIONS.map(v => (
+                        <option key={v} value={v}>{String(v).replace('.', ',')} ore</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-gray-400 flex items-center gap-2">
+                    <span className="w-24">Sedute</span>
+                    <select
+                      value={cfg.sessions}
+                      disabled={!cfg.enabled}
+                      onChange={(e) => updateDayConfig(day.id, { sessions: Number(e.target.value) })}
+                      className="flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-gray-200 disabled:opacity-50"
+                    >
+                      {SESSIONS_OPTIONS.map(v => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ))}
+            </div>
+            <label className="flex items-start gap-2 text-xs text-gray-300">
+              <input
+                type="checkbox"
+                checked={preferRefinementBeforeMatch}
+                onChange={(e) => setPreferRefinementBeforeMatch(e.target.checked)}
+                className="accent-amber-500 mt-0.5"
+              />
+              <span>
+                Preferisci usare la seduta immediatamente precedente alla prossima gara come rifinitura.
+              </span>
+            </label>
+          </>
+        )}
+      </div>
+
+      <div className="glass-card p-4">
+        <h3 className="text-sm font-semibold text-amber-400 mb-2">Calendario prossimo impegno</h3>
+        {nextMatch ? (
+          <p className="text-xs text-gray-300">
+            G{nextMatch.giornata} · {nextMatch.home} vs {nextMatch.away} · {formatMatchDate(nextMatch.kickoff)}{nextMatch.ora ? ` · ${nextMatch.ora}` : ''}
+          </p>
+        ) : (
+          <p className="text-xs text-gray-500">
+            Nessuna prossima partita trovata nel calendario CSV per la squadra selezionata.
+          </p>
+        )}
+      </div>
+
+      {matches.length < 2 && (
+        <div className="glass-card p-4 border border-amber-500/20">
+          <p className="text-xs text-amber-300">
+            Servono almeno 2 partite scout caricate per personalizzare il piano in base alle catene.
+          </p>
+        </div>
+      )}
+
+      <div className="glass-card-accent p-5">
+        <h3 className="text-sm font-semibold text-sky-400 mb-3">Programmazione suggerita</h3>
+        {plannedSessions.length > 0 ? (
+          <div className="space-y-2.5 text-xs text-gray-300">
+            {plannedSessions.map((row, idx) => (
+              <div key={`${row.dayId}-${idx}`} className={`rounded-lg border px-3 py-2 ${row.isPreMatch ? 'border-amber-500/30 bg-amber-500/6' : 'border-white/5 bg-white/[0.02]'}`}>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className="font-semibold text-sky-300">
+                    {row.dayLabel} · Seduta {row.sessionIndex}/{row.daySessions} · {String(row.duration).replace('.', ',')}h
+                  </p>
+                  {row.isPreMatch && nextMatch && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                      seduta pre-gara
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1">{row.desc}</p>
+                <p className="text-[10px] text-gray-500 mt-1">{row.structure}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-gray-500">
+            Seleziona almeno un giorno con almeno una seduta per generare la programmazione.
+          </p>
+        )}
+      </div>
+
+      {declines.length > 0 && (
+        <ChainWeeklyPlan suggestions={declines} />
+      )}
+    </div>
+  );
+}
+
 // ─── Suggerimenti View ────────────────────────────────────────────────────────
 
 function SuggestionsView({ suggestions }) {
@@ -249,10 +645,6 @@ function SuggestionsView({ suggestions }) {
         <FilterEmptyState typeFilter={typeFilter} />
       )}
 
-      {/* Weekly plan based on chain suggestions */}
-      {typeFilter === 'all' && declines.length > 0 && (
-        <ChainWeeklyPlan suggestions={declines} />
-      )}
     </div>
   );
 }

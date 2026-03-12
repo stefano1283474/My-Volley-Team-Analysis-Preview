@@ -134,6 +134,19 @@ export async function loadCalendar(userId) {
   return data; // { calendar, standings }
 }
 
+export async function clearArchiveData(userId) {
+  const col = datasetsCol(userId);
+  const snap = await getDocs(col);
+  const tasks = [];
+  snap.forEach((d) => {
+    const data = d.data();
+    if (data?._type === 'match' || data?._type === 'calendar') {
+      tasks.push(deleteDoc(d.ref));
+    }
+  });
+  await Promise.all(tasks);
+}
+
 // ─── Suggestion reviews (coach annotations) ──────────────────────────────────
 
 const REVIEWS_DOC_ID = 'suggestion_reviews';

@@ -190,7 +190,7 @@ export default function TrainingSuggestions({ analytics, matches, readOnly = fal
             }`}
           >
             <span>{tab.icon}</span>
-            <span className="hidden sm:inline">{tab.label}</span>
+            <span>{tab.label}</span>
           </button>
         ))}
       </div>
