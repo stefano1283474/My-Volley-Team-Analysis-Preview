@@ -64,7 +64,7 @@ function findStandingTeamByName(standings, teamName) {
 
 // ─── Main Dashboard component ─────────────────────────────────────────────────
 
-export default function Dashboard({ analytics, matches, standings, weights, fncConfig, baselines, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici, ownerTeamName, onOwnerTeamChange, dataMode = 'raw' }) {
+export default function Dashboard({ analytics, matches, standings, weights, fncConfig, baselines, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici, ownerTeamName, onOwnerTeamChange, onOpenOpponentReport, dataMode = 'raw' }) {
   const hasData = !!analytics && matches.length > 0;
 
   // showChart: se dashboardConfig è definito, mostra solo i grafici selezionati
@@ -251,6 +251,7 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
           standings={standings}
           ourTeamName={ourStanding?.name || ''}
           onOwnerTeamChange={onOwnerTeamChange}
+          onOpenOpponentReport={onOpenOpponentReport}
           matchAnalytics={sortedMA}
         />
       )}
@@ -875,7 +876,7 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
 
 // ─── Standings Widget ─────────────────────────────────────────────────────────
 
-function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, matchAnalytics }) {
+function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, onOpenOpponentReport, matchAnalytics }) {
   const [expanded, setExpanded] = useState(false);
 
   const visibleTeams = expanded ? standings : standings.slice(0, 12);
@@ -898,7 +899,7 @@ function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, matchAnaly
           )}
         </div>
         <p className="text-[10px] text-gray-500">
-          Clicca una squadra per impostarla come proprietaria dei dati scout
+          Checkbox = squadra owner · click squadra = report partite contro quella squadra
         </p>
       </div>
 
@@ -907,6 +908,7 @@ function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, matchAnaly
         <table className="w-full text-xs">
           <thead>
             <tr className="text-gray-600 border-b border-white/[0.04] text-[10px]">
+              <th className="text-center py-1.5 px-1 w-7">✓</th>
               <th className="text-left py-1.5 px-2 w-6">#</th>
               <th className="text-left py-1.5 px-2">Squadra</th>
               <th className="text-center py-1.5 px-2">Pt</th>
@@ -925,13 +927,22 @@ function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, matchAnaly
               return (
                 <tr
                   key={t.name}
-                  onClick={() => onOwnerTeamChange?.(t.name)}
+                  onClick={() => onOpenOpponentReport?.(t.name)}
                   className={`border-b border-white/[0.02] cursor-pointer transition-colors ${
                     isOurs
                       ? 'bg-amber-500/[0.08] hover:bg-amber-500/[0.12]'
                       : 'hover:bg-white/[0.03]'
                   }`}
                 >
+                  <td className="py-1.5 px-1 text-center">
+                    <input
+                      type="checkbox"
+                      checked={isOurs}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={() => onOwnerTeamChange?.(t.name)}
+                      className="accent-amber-500 w-3.5 h-3.5"
+                    />
+                  </td>
                   <td className={`py-1.5 px-2 font-mono font-bold text-center ${
                     t.rank <= 3 ? 'text-amber-400' : 'text-gray-500'
                   }`}>
@@ -977,7 +988,7 @@ function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, matchAnaly
       <div className="mt-3 pt-3 border-t border-white/[0.04] flex items-center gap-3 text-[10px] text-gray-500">
         <span className="text-purple-400">ℹ</span>
         <span>
-          La stellina identifica la squadra proprietaria dei dati scout. I pesi delle partite riflettono la forza relativa dell'avversario in classifica.
+          La checkbox identifica la squadra proprietaria dei dati scout. I pesi delle partite riflettono la forza relativa dell'avversario in classifica.
         </span>
       </div>
     </div>

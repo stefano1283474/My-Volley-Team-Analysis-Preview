@@ -13,6 +13,8 @@ import {
   computeFundamentalBaselines,
   analyzeRDtoAConversions, analyzeSideOutVsTransition, analyzeServeDefenseChain,
   analyzeRallyLengthPerformance, analyzeRotationalChains, generateChainSuggestions,
+  analyzeSetterDistribution,
+  buildSetterDiagnostics,
 } from './utils/analyticsEngine';
 import { APP_NAME, APP_VERSION, DEFAULT_WEIGHTS, DEFAULT_FNC_CONFIG, DEFAULT_PROFILE, TEAM_MAP, FUNDAMENTALS, COLORS, SCALE_DESCRIPTIONS } from './utils/constants';
 import {
@@ -55,7 +57,7 @@ const NAV_ITEMS = [
   { id: 'attack',    label: 'Analisi attacco', icon: '⚔' },
   { id: 'training',  label: 'Allenamento',     icon: '⚙' },
   { id: 'sequences', label: 'Coach Brain',      icon: '🧠' },
-  { id: 'training_plan', label: 'Trainig plan', icon: '📅' },
+  { id: 'training_plan', label: 'Training Plan', icon: '📅' },
   { id: 'data',      label: 'Gestione Archivio', icon: '☰' },
   { id: 'calendiario', label: 'Calendiario',   icon: '🗓' },
   { id: 'config',    label: 'Config',          icon: '🔧' },
@@ -173,6 +175,7 @@ export default function App() {
   }, []);
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [matchReportIntent, setMatchReportIntent] = useState({ opponent: '', openCommentTick: 0 });
   const [isLoading, setIsLoading]         = useState(false);
   const [loadingMsg, setLoadingMsg]       = useState('');
   const [errorMsg, setErrorMsg]           = useState('');
@@ -296,6 +299,20 @@ export default function App() {
     setOwnerTeamName(resolved);
     try { localStorage.setItem('vpa_owner_team', resolved); } catch {}
   }, [standings]);
+
+  const handleOpenOpponentCommentFromTrainingPlan = useCallback((opponentName) => {
+    if (!opponentName) return;
+    setSelectedMatch(null);
+    setMatchReportIntent({ opponent: opponentName, openCommentTick: Date.now() });
+    setActiveTab('matches');
+  }, []);
+
+  const handleOpenOpponentReportFromDashboard = useCallback((opponentName) => {
+    if (!opponentName) return;
+    setSelectedMatch(null);
+    setMatchReportIntent({ opponent: opponentName, openCommentTick: 0 });
+    setActiveTab('matches');
+  }, []);
 
   useEffect(() => {
     if (!standings.length) return;
@@ -647,7 +664,11 @@ export default function App() {
     };
     const chainSuggestions = generateChainSuggestions(chainData, roster);
 
-    return { matchAnalytics, playerTrends, suggestions, chainData, chainSuggestions };
+    // ─── Setter distribution analytics ──────────────────────────────────────
+    const setterDistribution = analyzeSetterDistribution(matches, roster);
+    const setterDiagnostics = buildSetterDiagnostics(setterDistribution, playerTrends, roster);
+
+    return { matchAnalytics, playerTrends, trainingSuggestions: suggestions, chainData, chainSuggestions, setterDistribution, setterDiagnostics };
   // fncConfig intentionally NOT in deps: FNC is applied at display-time in components,
   // not recalculated in the engine (baselines are separate, weights trigger re-compute)
   }, [matches, standings, weights]);
@@ -881,6 +902,7 @@ export default function App() {
               onOpenGrafici={() => setActiveTab('grafici')}
               ownerTeamName={ownerTeamName}
               onOwnerTeamChange={handleOwnerTeamChange}
+              onOpenOpponentReport={handleOpenOpponentReportFromDashboard}
             />
           )}
 
@@ -905,6 +927,8 @@ export default function App() {
               selectedMatch={selectedMatch}
               onSelectMatch={setSelectedMatch}
               weights={weights}
+              externalScoutOpponent={matchReportIntent.opponent}
+              externalOpenCommentTick={matchReportIntent.openCommentTick}
             />
           )}
 
@@ -987,10 +1011,13 @@ export default function App() {
 
           {activeTab === 'training_plan' && (
             <ChainTrainingPlan
-              chainSuggestions={analytics?.chainSuggestions}
+              analytics={analytics}
               matches={matches}
               calendar={calendar}
+              standings={standings}
               ownerTeamName={ownerTeamName}
+              allPlayers={allPlayers}
+              onOpenOpponentComment={handleOpenOpponentCommentFromTrainingPlan}
             />
           )}
 

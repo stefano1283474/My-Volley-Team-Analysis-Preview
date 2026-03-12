@@ -239,331 +239,1510 @@ export default function SequenceAnalysis({ chainData, chainSuggestions, matches,
   );
 }
 
-export function ChainTrainingPlan({ chainSuggestions, matches, calendar = [], ownerTeamName = '' }) {
-  const suggestions = chainSuggestions || [];
-  const declines = suggestions.filter(s => s.priority >= 3);
-  const [isScheduleExpanded, setIsScheduleExpanded] = useState(true);
+export function ChainTrainingPlan({ analytics, matches, calendar = [], standings = [], ownerTeamName = '', allPlayers = [], onOpenOpponentComment }) {
+  // ─── Data extraction ──
+  const chainSuggestions = analytics?.chainSuggestions || [];
+  const trainingSuggestions = analytics?.trainingSuggestions || [];
+  const playerTrends = analytics?.playerTrends || {};
+  const chainData = analytics?.chainData || {};
+  const matchAnalytics = analytics?.matchAnalytics || [];
+  const sd = analytics?.setterDistribution || null;
+  const sdDiag = analytics?.setterDiagnostics || { diagnostics: [], contextMap: {} };
+
+  const allSuggestions = useMemo(() => {
+    const merged = [...chainSuggestions, ...trainingSuggestions];
+    merged.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+    return merged;
+  }, [chainSuggestions, trainingSuggestions]);
+
+  const declines = allSuggestions.filter(s => s.priority >= 3);
+  const strengths = allSuggestions.filter(s => s.priority === 1);
+
+  // ─── Persistent state ──
+  const stored = useRef((() => { try { return JSON.parse(localStorage.getItem(TRAINING_PLAN_STORAGE_KEY) || '{}'); } catch { return {}; } })());
+  const [tab, setTab] = useState('panoramica');
+  const [targetPosition, setTargetPosition] = useState(() => Number(stored.current.targetPosition) || 3);
+  const [coachNotes, setCoachNotes] = useState(() => stored.current.coachNotes || '');
+  const [sessionNotes, setSessionNotes] = useState(() => stored.current.sessionNotes || {});
+  const [preferRefinement, setPreferRefinement] = useState(() => stored.current.preferRefinement !== false);
   const [trainingSchedule, setTrainingSchedule] = useState(() => {
     const defaults = createDefaultTrainingSchedule();
     try {
-      const stored = JSON.parse(localStorage.getItem(TRAINING_PLAN_STORAGE_KEY) || '{}');
       const merged = { ...defaults };
       for (const day of TRAINING_DAYS) {
-        const row = stored?.schedule?.[day.id];
+        const row = stored.current?.schedule?.[day.id];
         if (!row) continue;
-        merged[day.id] = {
-          enabled: !!row.enabled,
+        merged[day.id] = { enabled: !!row.enabled,
           duration: DURATION_OPTIONS.includes(Number(row.duration)) ? Number(row.duration) : defaults[day.id].duration,
-          sessions: SESSIONS_OPTIONS.includes(Number(row.sessions)) ? Number(row.sessions) : defaults[day.id].sessions,
-        };
+          sessions: SESSIONS_OPTIONS.includes(Number(row.sessions)) ? Number(row.sessions) : defaults[day.id].sessions };
       }
       return merged;
-    } catch {
-      return defaults;
-    }
-  });
-  const [preferRefinementBeforeMatch, setPreferRefinementBeforeMatch] = useState(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(TRAINING_PLAN_STORAGE_KEY) || '{}');
-      return stored?.preferRefinementBeforeMatch !== false;
-    } catch {
-      return true;
-    }
+    } catch { return defaults; }
   });
 
+  // ─── Focus priorities (4 axes sum to 100) ──
+  const DEF_PRIO = { criticita: 30, crescita: 20, gara: 35, fisico: 15 };
+  const hadStoredPrio = useRef(!!(stored.current.prio && typeof stored.current.prio.criticita === 'number'));
+  const appliedSuggested = useRef(false);
+  const [prio, setPrio] = useState(() => {
+    const s = stored.current.prio;
+    return (s && typeof s.criticita === 'number') ? s : DEF_PRIO;
+  });
+  const [distView, setDistView] = useState('diagnosi');
+  const [diagFilter, setDiagFilter] = useState('all');
+  const [selectedFund, setSelectedFund] = useState('attack');
+  const [selectedPlayerNumber, setSelectedPlayerNumber] = useState('');
+  const [selectedFocusAxis, setSelectedFocusAxis] = useState('all');
+  const fundLabel = { attack: 'Attacco', serve: 'Battuta', reception: 'Ricezione', defense: 'Difesa', block: 'Muro' };
+
+  const adjustPrio = useCallback((axis, raw) => {
+    setPrio(prev => {
+      const val = Math.max(0, Math.min(100, Math.round(raw)));
+      const diff = val - prev[axis];
+      if (diff === 0) return prev;
+      const others = Object.keys(prev).filter(k => k !== axis);
+      const othersSum = others.reduce((s, k) => s + prev[k], 0);
+      const next = { ...prev, [axis]: val };
+      if (othersSum === 0) { others.forEach(k => { next[k] = Math.max(0, Math.round(-diff / others.length)); }); }
+      else {
+        let rem = -diff;
+        others.forEach((k, i) => {
+          if (i === others.length - 1) { next[k] = Math.max(0, prev[k] + rem); }
+          else { const p = Math.round(rem * prev[k] / othersSum); next[k] = Math.max(0, prev[k] + p); rem -= p; }
+        });
+      }
+      const sum = Object.values(next).reduce((s, v) => s + v, 0);
+      if (sum !== 100) { const big = Object.keys(next).reduce((a, b) => next[a] >= next[b] ? a : b); next[big] += 100 - sum; }
+      return next;
+    });
+  }, []);
+
+  // ─── Persist ──
   useEffect(() => {
-    try {
-      localStorage.setItem(TRAINING_PLAN_STORAGE_KEY, JSON.stringify({
-        schedule: trainingSchedule,
-        preferRefinementBeforeMatch,
-      }));
-    } catch {}
-  }, [trainingSchedule, preferRefinementBeforeMatch]);
+    try { localStorage.setItem(TRAINING_PLAN_STORAGE_KEY, JSON.stringify({
+      schedule: trainingSchedule, preferRefinement, targetPosition, coachNotes, sessionNotes, prio,
+    })); } catch {}
+  }, [trainingSchedule, preferRefinement, targetPosition, coachNotes, sessionNotes, prio]);
 
-  const scheduleRows = useMemo(
-    () => TRAINING_DAYS.map(day => ({ day, cfg: trainingSchedule[day.id] || { enabled: false, duration: 2, sessions: 1 } })),
-    [trainingSchedule]
-  );
-
-  const activeDayRows = scheduleRows.filter(({ cfg }) => cfg.enabled && cfg.sessions > 0);
-  const totalSessions = activeDayRows.reduce((sum, { cfg }) => sum + cfg.sessions, 0);
-  const totalHours = activeDayRows.reduce((sum, { cfg }) => sum + (cfg.duration * cfg.sessions), 0);
+  // ─── Schedule computations ──
+  const scheduleRows = useMemo(() => TRAINING_DAYS.map(day => ({ day, cfg: trainingSchedule[day.id] || { enabled: false, duration: 2, sessions: 1 } })), [trainingSchedule]);
+  const activeDays = scheduleRows.filter(({ cfg }) => cfg.enabled && cfg.sessions > 0);
+  const totalSessions = activeDays.reduce((s, { cfg }) => s + cfg.sessions, 0);
+  const totalHours = activeDays.reduce((s, { cfg }) => s + cfg.duration * cfg.sessions, 0);
 
   const sessionSlots = useMemo(() => {
     const slots = [];
-    for (const { day, cfg } of activeDayRows) {
-      for (let i = 0; i < cfg.sessions; i += 1) {
-        slots.push({
-          dayId: day.id,
-          dayLabel: day.label,
-          jsDay: day.jsDay,
-          duration: cfg.duration,
-          sessionIndex: i + 1,
-          daySessions: cfg.sessions,
-        });
-      }
+    for (const { day, cfg } of activeDays) {
+      for (let i = 0; i < cfg.sessions; i++) slots.push({ dayId: day.id, dayLabel: day.label, jsDay: day.jsDay, duration: cfg.duration, sessionIdx: i + 1, daySessions: cfg.sessions });
     }
     return slots;
-  }, [activeDayRows]);
+  }, [activeDays]);
 
-  const nextMatch = useMemo(() => {
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const ownerUpper = normalizeTeamName(ownerTeamName);
-    const isOwnerMatch = (m) => {
-      if (!ownerUpper) return true;
-      const home = normalizeTeamName(m.home);
-      const away = normalizeTeamName(m.away);
-      return home === ownerUpper || away === ownerUpper || home.includes(ownerUpper) || away.includes(ownerUpper) || ownerUpper.includes(home) || ownerUpper.includes(away);
+  // ─── Calendar / matches ──
+  const ownerUpper = normalizeTeamName(ownerTeamName);
+  const isOwner = useCallback(m => {
+    if (!ownerUpper) return true;
+    const h = normalizeTeamName(m.home), a = normalizeTeamName(m.away);
+    return h === ownerUpper || a === ownerUpper || h.includes(ownerUpper) || a.includes(ownerUpper) || ownerUpper.includes(h) || ownerUpper.includes(a);
+  }, [ownerUpper]);
+
+  const upcoming = useMemo(() => {
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    return (calendar || []).filter(m => !m.played && isOwner(m))
+      .map(m => { const k = parseMatchKickoff(m.data, m.ora); return k ? { ...m, kickoff: k } : null; })
+      .filter(Boolean).filter(m => m.kickoff >= now).sort((a, b) => a.kickoff - b.kickoff);
+  }, [calendar, isOwner]);
+
+  const past = useMemo(() => (calendar || []).filter(m => m.played && isOwner(m))
+    .map(m => { const k = parseMatchKickoff(m.data, m.ora); return k ? { ...m, kickoff: k } : null; })
+    .filter(Boolean).sort((a, b) => b.kickoff - a.kickoff), [calendar, isOwner]);
+
+  const nextMatch = upcoming[0] || null;
+  const daysToMatch = nextMatch ? Math.max(0, Math.round((nextMatch.kickoff - new Date()) / 864e5)) : null;
+
+  // ─── Standings ──
+  const ourStanding = useMemo(() => {
+    if (!standings?.length || !ownerUpper) return null;
+    return standings.find(t => { const n = normalizeTeamName(t.name); return n === ownerUpper || n.includes(ownerUpper) || ownerUpper.includes(n); });
+  }, [standings, ownerUpper]);
+
+  const standingGap = useMemo(() => {
+    if (!ourStanding || !standings?.length || targetPosition < 1) return null;
+    const target = standings[targetPosition - 1];
+    if (!target) return null;
+    return { current: ourStanding.rank, target: targetPosition, diff: target.pts - ourStanding.pts, targetName: target.name, remaining: upcoming.length };
+  }, [ourStanding, standings, targetPosition, upcoming]);
+
+  // ─── Next opponent scouting ──
+  const nextOpp = useMemo(() => {
+    if (!nextMatch) return null;
+    const oppName = normalizeTeamName(nextMatch.home) === ownerUpper ? nextMatch.away : nextMatch.home;
+    const pastVs = past.filter(m => normalizeTeamName(m.home) === normalizeTeamName(oppName) || normalizeTeamName(m.away) === normalizeTeamName(oppName));
+    const scoutVs = matchAnalytics.filter(ma => { const o = normalizeTeamName(ma.match?.metadata?.opponent || ''); return o === normalizeTeamName(oppName) || o.includes(normalizeTeamName(oppName).substring(0, 8)); });
+    const oppStanding = standings?.find(t => { const n = normalizeTeamName(t.name); return n === normalizeTeamName(oppName) || n.includes(normalizeTeamName(oppName).substring(0, 8)); });
+    return { oppName, pastVs, scoutVs, oppStanding, played: pastVs.length > 0 };
+  }, [nextMatch, ownerUpper, past, matchAnalytics, standings]);
+
+  // ─── Fund priorities from data ──
+  const fundStatus = useMemo(() => {
+    const fs = { attack: 'stable', serve: 'stable', reception: 'stable', defense: 'stable', block: 'stable' };
+    for (const s of allSuggestions) {
+      const f = s.fundamental;
+      if (!f || !fs[f]) continue;
+      if (s.priority >= 4) fs[f] = 'critical';
+      else if (s.priority >= 3 && fs[f] !== 'critical') fs[f] = 'warning';
+      else if (s.priority === 1 && fs[f] === 'stable') fs[f] = 'good';
+    }
+    return fs;
+  }, [allSuggestions]);
+
+  const fundStats = useMemo(() => {
+    const funds = ['attack', 'serve', 'reception', 'defense', 'block'];
+    const byFund = {};
+    for (const fund of funds) {
+      let playersWithData = 0;
+      let rawSum = 0;
+      let weightedSum = 0;
+      let declining = 0;
+      let improving = 0;
+      for (const p of Object.values(playerTrends || {})) {
+        const t = p?.trends?.[fund];
+        if (!t || (t.playedMatches || 0) < 1) continue;
+        playersWithData += 1;
+        rawSum += Number(t.rawAvg || 0) * 100;
+        weightedSum += Number(t.weightedAvg || 0) * 100;
+        if (t.rawTrend === 'declining') declining += 1;
+        if (t.rawTrend === 'improving') improving += 1;
+      }
+      byFund[fund] = {
+        playersWithData,
+        rawAvgPct: playersWithData > 0 ? rawSum / playersWithData : 0,
+        weightedAvgPct: playersWithData > 0 ? weightedSum / playersWithData : 0,
+        decliningPct: playersWithData > 0 ? (declining / playersWithData) * 100 : 0,
+        improvingPct: playersWithData > 0 ? (improving / playersWithData) * 100 : 0,
+      };
+    }
+    return byFund;
+  }, [playerTrends]);
+
+  const selectedFundStats = fundStats[selectedFund] || {
+    playersWithData: 0, rawAvgPct: 0, weightedAvgPct: 0, decliningPct: 0, improvingPct: 0,
+  };
+
+  const selectedFundChartData = useMemo(() => ([
+    { label: 'Media grezza', value: selectedFundStats.rawAvgPct, color: '#38bdf8' },
+    { label: 'Media pesata', value: selectedFundStats.weightedAvgPct, color: '#f59e0b' },
+    { label: 'In calo', value: selectedFundStats.decliningPct, color: '#f87171' },
+    { label: 'In crescita', value: selectedFundStats.improvingPct, color: '#4ade80' },
+  ]), [selectedFundStats]);
+
+  // ─── Player cards ──
+  const playerCards = useMemo(() => {
+    const cards = [];
+    for (const [pNum, pData] of Object.entries(playerTrends)) {
+      if (!pData?.trends) continue;
+      const player = allPlayers.find(p => p.number === pNum) || { number: pNum, name: pData.name || `#${pNum}`, role: '' };
+      const declining = [], improving = [], stable = [];
+      for (const [fund, t] of Object.entries(pData.trends)) {
+        if (t.playedMatches < 2) continue;
+        const trend = t.rawTrend || 'stable';
+        if (trend === 'declining') declining.push({ fund, ...t });
+        else if (trend === 'improving') improving.push({ fund, ...t });
+        else stable.push({ fund, ...t });
+      }
+      const pSugg = allSuggestions.filter(s => s.playerNumber === pNum);
+      const sdData = sd?.byAttacker?.[pNum] || null;
+      if (declining.length > 0 || improving.length > 0 || pSugg.length > 0 || (sdData && sdData.total >= 3)) {
+        cards.push({ player, declining, improving, stable, suggestions: pSugg, sdData });
+      }
+    }
+    cards.sort((a, b) => b.declining.length - a.declining.length || b.suggestions.length - a.suggestions.length);
+    return cards;
+  }, [playerTrends, allPlayers, allSuggestions, sd]);
+
+  const selectedPlayerDetails = useMemo(() => {
+    const pNum = selectedPlayerNumber || playerCards[0]?.player?.number || '';
+    if (!pNum) return null;
+    const pData = playerTrends?.[pNum];
+    if (!pData?.trends) return null;
+    const funds = ['attack', 'serve', 'reception', 'defense', 'block'];
+    const chartData = funds.map(f => {
+      const t = pData.trends[f];
+      return {
+        fund: fundLabel[f],
+        season: t && (t.playedMatches || 0) >= 1 ? Number(t.rawAvg || 0) * 100 : null,
+        recent: t && (t.playedMatches || 0) >= 2 ? Number(t.rawRecentAvg || 0) * 100 : null,
+        weighted: t && (t.playedMatches || 0) >= 1 ? Number(t.weightedAvg || 0) * 100 : null,
+      };
+    });
+    const card = playerCards.find(c => c.player.number === pNum) || null;
+    return { pNum, chartData, card };
+  }, [selectedPlayerNumber, playerCards, playerTrends, fundLabel]);
+
+  // ─── Suggested priorities (data-driven) ──
+  const [showPrioInfo, setShowPrioInfo] = useState(false);
+  const suggestedPrio = useMemo(() => {
+    // Scoring factors for each axis
+    let critScore = 0, crscScore = 0, garaScore = 0, fisScore = 0;
+    const reasons = { criticita: [], crescita: [], gara: [], fisico: [] };
+
+    // 1. Criticità: declines, setter diagnostics, weak rotations
+    const criticalSugg = allSuggestions.filter(s => s.priority >= 4).length;
+    const moderateSugg = allSuggestions.filter(s => s.priority === 3).length;
+    if (criticalSugg > 0) {
+      critScore += Math.min(criticalSugg * 8, 35);
+      reasons.criticita.push(`${criticalSugg} segnali ad alta priorità nei trend`);
+    }
+    if (moderateSugg > 0) {
+      critScore += Math.min(moderateSugg * 3, 12);
+    }
+    // Setter diagnostics
+    const setterIssues = sdDiag.diagnostics.filter(d => d.type === 'setter_wrong_choice').length;
+    const skillDeficits = sdDiag.diagnostics.filter(d => d.type !== 'setter_wrong_choice').length;
+    if (setterIssues > 0) {
+      critScore += Math.min(setterIssues * 5, 15);
+      reasons.criticita.push(`${setterIssues} scelte del palleggiatore da correggere`);
+    }
+    if (skillDeficits > 0) {
+      critScore += Math.min(skillDeficits * 4, 12);
+      reasons.criticita.push(`${skillDeficits} deficit tecnici attaccanti`);
+    }
+    // Declining players
+    const decliningPlayers = playerCards.filter(c => c.declining.length > 0).length;
+    if (decliningPlayers > 0) {
+      critScore += Math.min(decliningPlayers * 4, 16);
+      reasons.criticita.push(`${decliningPlayers} giocatrici con trend in calo`);
+    }
+
+    // 2. Crescita: improving trends, under-used attackers, strengths
+    const improvingPlayers = playerCards.filter(c => c.improving.length > 0).length;
+    if (improvingPlayers > 0) {
+      crscScore += Math.min(improvingPlayers * 5, 20);
+      reasons.crescita.push(`${improvingPlayers} giocatrici con trend in miglioramento`);
+    }
+    const strengthSugg = allSuggestions.filter(s => s.priority === 1).length;
+    if (strengthSugg > 0) {
+      crscScore += Math.min(strengthSugg * 3, 12);
+      reasons.crescita.push(`${strengthSugg} punti di forza da valorizzare`);
+    }
+    const underUsed = sd?.tendencies?.filter(t => t.type === 'under_used').length || 0;
+    if (underUsed > 0) {
+      crscScore += 8;
+      reasons.crescita.push(`Attaccante sotto-utilizzata con alta efficienza`);
+    }
+
+    // 3. Gara: based on upcoming opponents difficulty
+    // Evaluate next 3 opponents vs standings
+    const oppDifficulties = [];
+    for (let i = 0; i < Math.min(3, upcoming.length); i++) {
+      const m = upcoming[i];
+      const oppName = normalizeTeamName(m.home) === ownerUpper ? m.away : m.home;
+      const oppStanding = standings?.find(t => {
+        const n = normalizeTeamName(t.name);
+        return n === normalizeTeamName(oppName) || n.includes(normalizeTeamName(oppName).substring(0, 6));
+      });
+      const ourRank = ourStanding?.rank || 999;
+      const oppRank = oppStanding?.rank || 999;
+      // Difficulty: harder if opponent is higher ranked (lower rank number)
+      const harder = oppRank < ourRank;
+      const much_harder = oppRank < ourRank && (ourRank - oppRank) >= 3;
+      oppDifficulties.push({ idx: i, name: oppName, oppRank, harder, much_harder, days: Math.max(0, Math.round((m.kickoff - new Date()) / 864e5)) });
+    }
+
+    // Strategic analysis: should we focus on the hardest upcoming match?
+    let focusMatchIdx = 0; // default: focus on next match
+    let strategicReason = '';
+
+    if (oppDifficulties.length >= 3) {
+      const d = oppDifficulties;
+      // If match 3 is much harder but matches 1-2 are easy, consider sacrificing
+      if (d[2]?.much_harder && !d[0]?.harder && !d[1]?.harder) {
+        focusMatchIdx = 2;
+        strategicReason = `Le prime 2 partite sono accessibili (${d[0].name}, ${d[1].name}). Conviene concentrare la preparazione sulla 3ª partita (${d[2].name}, posizione ${d[2].oppRank}) in ${d[2].days} giorni.`;
+      }
+      // If match 2 is much harder and match 1 is easy
+      else if (d[1]?.much_harder && !d[0]?.harder) {
+        focusMatchIdx = 1;
+        strategicReason = `La 1ª partita è accessibile (${d[0].name}). Focus sulla 2ª partita (${d[1].name}, posizione ${d[1].oppRank}) in ${d[1].days} giorni.`;
+      }
+    }
+
+    const focusOpp = oppDifficulties[focusMatchIdx];
+    if (focusOpp) {
+      if (focusOpp.harder || focusOpp.much_harder) {
+        garaScore += focusOpp.much_harder ? 35 : 22;
+        reasons.gara.push(`Prossimo avversario chiave: ${focusOpp.name} (pos. ${focusOpp.oppRank}) tra ${focusOpp.days}gg`);
+      } else {
+        garaScore += 12;
+        reasons.gara.push(`Avversario accessibile: ${focusOpp.name} (pos. ${focusOpp.oppRank})`);
+      }
+      if (strategicReason) reasons.gara.push(strategicReason);
+    }
+    // Closeness in standings (need points to reach target)
+    if (standingGap && standingGap.diff > 0 && standingGap.remaining <= 5) {
+      garaScore += 10;
+      reasons.gara.push(`${standingGap.diff} punti dal target (pos. ${standingGap.target}) con ${standingGap.remaining} partite restanti`);
+    }
+    // Days to match: more gara weight if match is close
+    if (daysToMatch !== null && daysToMatch <= 3) {
+      garaScore += 10;
+      reasons.gara.push(`Partita imminente: ${daysToMatch} giorni`);
+    }
+
+    // 4. Fisico: baseline + extra if season is long or many matches upcoming
+    fisScore = 10; // baseline always present
+    reasons.fisico.push('Base mantenimento fisico e prevenzione infortuni');
+    if (upcoming.length >= 5) {
+      fisScore += 5;
+      reasons.fisico.push(`${upcoming.length} partite ancora da giocare`);
+    }
+
+    // ─── Normalize to 100% ──
+    const rawTotal = critScore + crscScore + garaScore + fisScore;
+    if (rawTotal === 0) return { values: { criticita: 30, crescita: 20, gara: 35, fisico: 15 }, reasons, strategic: strategicReason, focusMatchIdx };
+    const normalize = v => Math.round(v / rawTotal * 100 / 5) * 5; // round to 5%
+    let suggested = {
+      criticita: normalize(critScore),
+      crescita: normalize(crscScore),
+      gara: normalize(garaScore),
+      fisico: normalize(fisScore),
     };
-    const candidates = (calendar || [])
-      .filter(m => !m.played && isOwnerMatch(m))
-      .map(m => {
-        const kickoff = parseMatchKickoff(m.data, m.ora);
-        return kickoff ? { ...m, kickoff } : null;
-      })
-      .filter(Boolean)
-      .filter(m => m.kickoff >= now)
-      .sort((a, b) => a.kickoff - b.kickoff || a.giornata - b.giornata);
-    return candidates[0] || null;
-  }, [calendar, ownerTeamName]);
-
-  const preMatchSessionIndex = useMemo(() => {
-    if (!nextMatch || sessionSlots.length === 0) return -1;
-    const matchRank = weekdayRank(nextMatch.kickoff.getDay());
-    let bestIdx = -1;
-    let bestRank = -1;
-    sessionSlots.forEach((slot, idx) => {
-      const rank = weekdayRank(slot.jsDay);
-      if (rank < matchRank && rank >= bestRank) {
-        bestRank = rank;
-        bestIdx = idx;
+    // Ensure sum = 100
+    const sum = Object.values(suggested).reduce((s, v) => s + v, 0);
+    if (sum !== 100) {
+      const biggest = Object.keys(suggested).reduce((a, b) => suggested[a] >= suggested[b] ? a : b);
+      suggested[biggest] += 100 - sum;
+    }
+    // Ensure minimum 5% per axis
+    for (const k of Object.keys(suggested)) {
+      if (suggested[k] < 5) {
+        const diff = 5 - suggested[k];
+        suggested[k] = 5;
+        const biggest = Object.keys(suggested).filter(x => x !== k).reduce((a, b) => suggested[a] >= suggested[b] ? a : b);
+        suggested[biggest] -= diff;
       }
-    });
-    if (bestIdx >= 0) return bestIdx;
-    let fallbackIdx = -1;
-    let fallbackRank = -1;
-    sessionSlots.forEach((slot, idx) => {
-      const rank = weekdayRank(slot.jsDay);
-      if (rank >= fallbackRank) {
-        fallbackRank = rank;
-        fallbackIdx = idx;
-      }
-    });
-    return fallbackIdx;
-  }, [nextMatch, sessionSlots]);
+    }
 
+    return { values: suggested, reasons, strategic: strategicReason, focusMatchIdx };
+  }, [allSuggestions, sdDiag, playerCards, upcoming, standings, ourStanding, ownerUpper, standingGap, daysToMatch, sd]);
+
+  // Auto-apply suggested priorities on first data load if no stored values exist
+  useEffect(() => {
+    if (!hadStoredPrio.current && !appliedSuggested.current && suggestedPrio.values) {
+      const sv = suggestedPrio.values;
+      // Only apply if different from default (meaning data actually influenced the values)
+      if (sv.criticita !== DEF_PRIO.criticita || sv.crescita !== DEF_PRIO.crescita || sv.gara !== DEF_PRIO.gara || sv.fisico !== DEF_PRIO.fisico) {
+        setPrio(sv);
+        appliedSuggested.current = true;
+      }
+    }
+  }, [suggestedPrio]);
+
+  // ─── Setter distribution summary ──
+  const sdTop = useMemo(() => {
+    if (!sd?.byAttacker) return [];
+    return Object.entries(sd.byAttacker).filter(([, a]) => a.total >= 3).sort((a, b) => b[1].total - a[1].total);
+  }, [sd]);
+
+  const diagCounts = useMemo(() => ({
+    all: sdDiag.diagnostics.length,
+    setter_wrong_choice: sdDiag.diagnostics.filter(d => d.type === 'setter_wrong_choice').length,
+    player_skill_declining: sdDiag.diagnostics.filter(d => d.type === 'player_skill_declining').length,
+    player_skill_deficit_group: sdDiag.diagnostics.filter(d => d.type === 'player_skill_deficit' || d.type === 'player_skill_growing').length,
+  }), [sdDiag]);
+
+  const filteredDiagnostics = useMemo(() => {
+    if (diagFilter === 'all') return sdDiag.diagnostics;
+    if (diagFilter === 'player_skill_deficit_group') {
+      return sdDiag.diagnostics.filter(d => d.type === 'player_skill_deficit' || d.type === 'player_skill_growing');
+    }
+    return sdDiag.diagnostics.filter(d => d.type === diagFilter);
+  }, [sdDiag, diagFilter]);
+
+  // ─── Focus blocks (tagged by axis) ──
   const focusBlocks = useMemo(() => {
-    const hasTransitionGap = declines.some(s => s.type === 'side_out_vs_transition_gap');
+    const blocks = [];
     const hasR5Waste = declines.some(s => s.type === 'r_to_a_waste');
-    const hasD5Waste = declines.some(s => s.type === 'd_to_a_waste');
+    const hasTransGap = declines.some(s => s.type === 'side_out_vs_transition_gap');
     const hasServeDef = declines.some(s => s.type === 'serve_defense_break');
-    const hasRallyLong = declines.some(s => s.type === 'rally_length_fatigue' || s.type === 'rally_length_fatigue_team');
+    const hasRallyLong = declines.some(s => s.type?.includes('rally_length'));
     const hasRotWeak = declines.some(s => s.type === 'rotation_chain_weakness');
     const weakRot = declines.find(s => s.type === 'rotation_chain_weakness')?.rotation;
-    const r5Players = [...new Set(declines.filter(s => s.type === 'r_to_a_waste').map(s => s.player))].slice(0, 3);
-    const trPlayers = [...new Set(declines.filter(s => s.type === 'side_out_vs_transition_gap').map(s => s.player))].slice(0, 3);
+    const r5P = [...new Set(declines.filter(s => s.type === 'r_to_a_waste').map(s => s.player))].slice(0, 3);
+    const trP = [...new Set(declines.filter(s => s.type === 'side_out_vs_transition_gap').map(s => s.player))].slice(0, 3);
 
-    const blocks = [];
-    blocks.push({
-      title: 'Side-out',
-      desc: hasR5Waste && r5Players.length > 0
-        ? `Ricezione di qualità alta da convertire meglio in punto per ${r5Players.join(', ')}.`
-        : 'Catena ricezione → alzata → attacco con continuità su palla positiva.',
-    });
-    blocks.push({
-      title: 'Transizione',
-      desc: hasTransitionGap && trPlayers.length > 0
-        ? `Rincorsa corta e timing in D→A per ${trPlayers.join(', ')}.`
-        : 'Collegamento difesa → alzata → attacco in break-point.',
-    });
-    blocks.push({
-      title: 'Break-point',
-      desc: hasServeDef
-        ? 'Battuta efficace e organizzazione difensiva immediata dopo B4/B5.'
-        : hasD5Waste
-          ? 'Difesa utile e transizione rapida per migliorare conversione D5→A.'
-          : 'Pressione al servizio e letture muro-difesa.',
-    });
-    blocks.push({
-      title: 'Tattica gara',
-      desc: hasRotWeak && weakRot
-        ? `Preparazione specifica sulla rotazione ${weakRot}, poi set con obiettivi di sistema.`
-        : hasRallyLong
-          ? 'Set con scambi lunghi e mantenimento qualità tecnica sotto fatica.'
-          : 'Preparazione della prossima gara su rotazioni e situazioni chiave.',
-    });
-    return blocks;
-  }, [declines]);
-
-  const plannedSessions = useMemo(() => (
-    sessionSlots.map((slot, idx) => {
-      const focus = focusBlocks[idx % focusBlocks.length];
-      const isPreMatch = idx === preMatchSessionIndex;
-      const minutes = Math.round(slot.duration * 60);
-      const coreMinutes = Math.max(25, minutes - 30);
-      const closureMinutes = Math.min(20, Math.max(10, Math.round(minutes * 0.2)));
-      const warmupMinutes = Math.max(10, minutes - coreMinutes - closureMinutes);
-      let desc = `${focus.title}: ${focus.desc}`;
-      if (isPreMatch && nextMatch && preferRefinementBeforeMatch) {
-        desc = `Rifinitura pre-gara: organizzazione di fase, battuta mirata, side-out di sicurezza e finali set in pressione per la partita contro ${nextMatch.home} vs ${nextMatch.away}.`;
-      }
-      return {
-        ...slot,
-        desc,
-        structure: `${warmupMinutes}' attivazione · ${coreMinutes}' focus principale · ${closureMinutes}' 6vs6 a obiettivo`,
-        isPreMatch,
-      };
-    })
-  ), [sessionSlots, focusBlocks, preMatchSessionIndex, nextMatch, preferRefinementBeforeMatch]);
-
-  const formatMatchDate = (d) => {
-    try {
-      return new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: '2-digit', month: '2-digit' }).format(d);
-    } catch {
-      return String(d || '');
+    blocks.push({ title: 'Side-out', axis: hasR5Waste ? 'criticita' : 'crescita', cat: 'tecnico', int: 'alta',
+      desc: hasR5Waste && r5P.length ? `Conversione R5→A per ${r5P.join(', ')}` : 'Catena ricezione→alzata→attacco su palla positiva',
+      drills: ['Ricezione + attacco su palla positiva (R4/R5)', 'Side-out a rotazione con punteggio', 'Alzate mirate + attacco variato'] });
+    blocks.push({ title: 'Transizione D→A', axis: hasTransGap ? 'criticita' : 'crescita', cat: 'tecnico', int: 'alta',
+      desc: hasTransGap && trP.length ? `Rincorsa corta per ${trP.join(', ')}` : 'Difesa→alzata→attacco in break-point',
+      drills: ['Difesa + rincorsa corta + attacco', 'Transizione 3vs3 con difesa obbligata', 'Rally continui da difesa'] });
+    blocks.push({ title: 'Break-point', axis: 'gara', cat: 'tattico', int: 'media',
+      desc: hasServeDef ? 'Battuta aggressiva + organizzazione difensiva' : 'Pressione al servizio e letture muro-difesa',
+      drills: ['Battuta mirata + posizionamento muro-difesa', 'Servizio tattico + transizione', '6vs6 da break-point'] });
+    blocks.push({ title: 'Preparazione gara', axis: 'gara', cat: 'tattico', int: 'variabile',
+      desc: hasRotWeak && weakRot ? `Focus P${weakRot} + set a obiettivo` : 'Rotazioni chiave e situazioni di gioco',
+      drills: ['6vs6 con partenze per rotazione', 'Set con obiettivi di sistema', 'Finali set sotto pressione'] });
+    blocks.push({ title: 'Lavoro individuale', axis: 'criticita', cat: 'tecnico', int: 'media',
+      desc: 'Drill personalizzati per fondamentali in calo',
+      drills: ['Tecnica individuale su fondamentale specifico', 'Ripetizioni mirate ad alta intensità', 'Analisi video + correzione'] });
+    // Setter distribution
+    const dW = sd?.tendencies?.filter(t => t.severity === 'warning') || [];
+    const dO = sd?.tendencies?.filter(t => t.severity === 'opportunity') || [];
+    if (dW.length > 0 || dO.length > 0) {
+      blocks.push({ title: 'Distribuzione palleggiatore', axis: dW.length ? 'criticita' : 'crescita', cat: 'tattico', int: 'media',
+        desc: (dW[0] || dO[0])?.message || 'Lavoro sulla distribuzione',
+        drills: ['Alzata differenziata R3/R4/R5 con scelta', 'Transizione con variazione terminale', dO.length ? 'Sfruttare terminale sotto-utilizzato' : 'Lettura muro avversario'] });
     }
-  };
+    // Physical
+    blocks.push({ title: 'Resistenza / Intensità', axis: 'fisico', cat: 'fisico', int: 'alta',
+      desc: hasRallyLong ? 'Rally lunghi in calo: resistenza specifica' : 'Mantenimento condizione fisica',
+      drills: ['Circuito funzionale con salti', 'Rally lunghi 6vs6 senza stop', 'Reazione e agilità'] });
+    blocks.push({ title: 'Forza / Prevenzione', axis: 'fisico', cat: 'fisico', int: 'media',
+      desc: 'Rinforzo muscolare e prevenzione infortuni',
+      drills: ['Pliometria specifica per ruolo', 'Core stability + arti inferiori', 'Stretching attivo e mobilità'] });
+    if (strengths.length > 0) {
+      blocks.push({ title: 'Valorizzazione punti forza', axis: 'crescita', cat: 'tecnico', int: 'media',
+        desc: strengths[0].action || strengths[0].message || 'Consolidare i punti di forza',
+        drills: ['Situazioni che esaltano i punti forza', 'Varianti tattiche per consolidare', 'Pressione su sistema di successo'] });
+    }
+    return blocks;
+  }, [declines, strengths, sd]);
 
-  const updateDayConfig = (dayId, patch) => {
-    setTrainingSchedule(prev => ({
-      ...prev,
-      [dayId]: { ...(prev[dayId] || { enabled: false, duration: 2, sessions: 1 }), ...patch },
-    }));
-  };
+  // ─── Priority-weighted session assignment ──
+  const assignedSessions = useMemo(() => {
+    const n = sessionSlots.length;
+    if (n === 0 || focusBlocks.length === 0) return [];
+    // Group blocks by axis, sort by prio weight
+    const axisPool = {};
+    for (const b of focusBlocks) {
+      if ((prio[b.axis] || 0) <= 0) continue;
+      if (!axisPool[b.axis]) axisPool[b.axis] = [];
+      axisPool[b.axis].push(b);
+    }
+    const axes = Object.keys(axisPool).sort((a, b) => (prio[b] || 0) - (prio[a] || 0));
+    const totalW = axes.reduce((s, a) => s + (prio[a] || 0), 0);
+    // Allocate session counts per axis
+    let used = 0;
+    const counts = {};
+    axes.forEach((a, i) => {
+      if (i === axes.length - 1) counts[a] = Math.max(0, n - used);
+      else { counts[a] = Math.max(0, Math.round(n * (prio[a] || 0) / Math.max(1, totalW))); used += counts[a]; }
+    });
+    // Build ordered block list
+    const result = [];
+    for (const a of axes) { const pool = axisPool[a]; for (let i = 0; i < (counts[a] || 0); i++) result.push(pool[i % pool.length]); }
+    return result;
+  }, [sessionSlots, focusBlocks, prio]);
+
+  // Pre-match index
+  const preMatchIdx = useMemo(() => {
+    if (!nextMatch || sessionSlots.length === 0) return -1;
+    const mRank = weekdayRank(nextMatch.kickoff.getDay());
+    let best = -1, bestR = -1;
+    sessionSlots.forEach((s, i) => { const r = weekdayRank(s.jsDay); if (r < mRank && r >= bestR) { bestR = r; best = i; } });
+    if (best >= 0) return best;
+    let fb = -1, fbR = -1;
+    sessionSlots.forEach((s, i) => { const r = weekdayRank(s.jsDay); if (r >= fbR) { fbR = r; fb = i; } });
+    return fb;
+  }, [nextMatch, sessionSlots]);
+
+  const planned = useMemo(() => sessionSlots.map((slot, idx) => {
+    const block = assignedSessions[idx] || focusBlocks[idx % Math.max(1, focusBlocks.length)] || { title: '—', desc: '', drills: [], cat: '', int: '', axis: '' };
+    const isPre = idx === preMatchIdx;
+    const mins = Math.round(slot.duration * 60);
+    const cooldown = 5;
+    const fW = prio.fisico / 100;
+    const warmup = Math.max(10, Math.round(mins * (0.12 + fW * 0.05)));
+    const workingMins = Math.max(15, mins - warmup - cooldown);
+    const phys = block.axis === 'fisico' ? Math.max(8, Math.round(workingMins * 0.25)) : Math.max(0, Math.round(workingMins * fW * 0.12));
+    const residual = Math.max(8, workingMins - phys);
+    const tech = Math.max(8, Math.round(residual * Math.max(0.2, (prio.criticita + prio.crescita) / 200)));
+    const tact = Math.max(8, Math.round(residual * Math.max(0.2, prio.gara / 100)));
+    const game = Math.max(6, workingMins - phys - tech - tact);
+    let desc = block.desc, focus = block;
+    if (isPre && nextMatch && preferRefinement) {
+      const opp = normalizeTeamName(nextMatch.home) === ownerUpper ? nextMatch.away : nextMatch.home;
+      desc = `Rifinitura pre-gara vs ${opp}: side-out sicurezza, battuta mirata, finali set`;
+      focus = { ...block, title: 'Rifinitura pre-gara', cat: 'tattico', int: 'bassa', axis: 'gara' };
+    }
+    return { ...slot, desc, focus, isPre, structure: { warmup, phys, tech, tact, game, cooldown, total: mins },
+      note: sessionNotes[`${slot.dayId}-${idx}`] || '' };
+  }), [sessionSlots, assignedSessions, focusBlocks, preMatchIdx, nextMatch, preferRefinement, ownerUpper, sessionNotes, prio]);
+
+  // Medium term plan
+  const mediumPlan = useMemo(() => {
+    const blocks = [];
+    for (let i = 0; i < Math.min(upcoming.length, 6); i++) {
+      const m = upcoming[i];
+      const prev = i > 0 ? upcoming[i - 1] : (past[0] || null);
+      const gap = prev ? Math.round((m.kickoff - (prev.kickoff || new Date())) / 864e5) : 7;
+      const sess = Math.max(1, Math.min(totalSessions, Math.floor(gap * totalSessions / 7)));
+      const opp = normalizeTeamName(m.home) === ownerUpper ? m.away : m.home;
+      const oppS = standings?.find(t => normalizeTeamName(t.name).includes(normalizeTeamName(opp).substring(0, 8)));
+      const played = past.some(p => normalizeTeamName(p.home) === normalizeTeamName(opp) || normalizeTeamName(p.away) === normalizeTeamName(opp));
+      blocks.push({ match: m, opp, oppS, gap, sess, played, giornata: m.giornata });
+    }
+    return blocks;
+  }, [upcoming, past, totalSessions, ownerUpper, standings]);
+
+  // ─── Helpers ──
+  const fmtDate = d => { try { return new Intl.DateTimeFormat('it-IT', { weekday: 'short', day: '2-digit', month: '2-digit' }).format(d); } catch { return ''; } };
+  const updateDay = (id, patch) => setTrainingSchedule(prev => ({ ...prev, [id]: { ...(prev[id] || { enabled: false, duration: 2, sessions: 1 }), ...patch } }));
+  const statusCls = s => s === 'critical' ? 'text-red-400 bg-red-500/10 border-red-500/20' : s === 'warning' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : s === 'good' ? 'text-green-400 bg-green-500/10 border-green-500/20' : 'text-gray-500 bg-white/5 border-white/8';
+  const statusIco = s => s === 'critical' ? '▼' : s === 'warning' ? '~' : s === 'good' ? '▲' : '—';
+  const roleCls = r => r === 'O' ? 'text-red-400' : (r === 'B1' || r === 'B2') ? 'text-sky-400' : (r === 'C1' || r === 'C2') ? 'text-amber-400' : 'text-purple-400';
+  const axisCls = a => a === 'criticita' ? 'bg-red-500/15 text-red-400' : a === 'crescita' ? 'bg-green-500/15 text-green-400' : a === 'gara' ? 'bg-purple-500/15 text-purple-400' : 'bg-rose-500/15 text-rose-400';
+  const axisLabel = a => a === 'criticita' ? 'Criticità' : a === 'crescita' ? 'Crescita' : a === 'gara' ? 'Gara' : 'Fisico';
+  const axisBarCls = a => a === 'criticita' ? 'bg-red-500/40' : a === 'crescita' ? 'bg-green-500/40' : a === 'gara' ? 'bg-purple-500/40' : 'bg-rose-500/40';
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════════════════
+  const TABS = [
+    { k: 'panoramica', l: 'Stato attuale Team' },
+    { k: 'focus', l: 'Definisci Priorità' },
+    { k: 'giocatrici', l: 'Stato Giocatrici' },
+    { k: 'settimana', l: 'Programmazione settimana' },
+    { k: 'distribuzione', l: 'Stato di attacco' },
+  ];
 
   return (
-    <div className="max-w-5xl mx-auto space-y-5">
-      <div>
-        <h2 className="text-xl font-bold text-white mb-1">Trainig plan</h2>
-        <p className="text-sm text-gray-400">
-          Configura le sedute settimanali e genera una programmazione che integra catene di gioco e calendario gare.
-        </p>
-      </div>
+    <div className="max-w-6xl mx-auto space-y-4">
 
-      <div className="glass-card p-5 space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <button
-            onClick={() => setIsScheduleExpanded(v => !v)}
-            className="inline-flex items-center gap-2 text-sm font-semibold text-sky-400 hover:text-sky-300 transition-colors"
-          >
-            <span>{isScheduleExpanded ? '▼' : '▶'}</span>
-            <span>Sedute settimanali</span>
-          </button>
-          <p className="text-xs text-gray-400">
-            {totalSessions} sedute · {totalHours.toFixed(1).replace('.', ',')} ore totali
-          </p>
-        </div>
-        {isScheduleExpanded && (
-          <>
-            <div className="space-y-2">
-              {scheduleRows.map(({ day, cfg }) => (
-                <div key={day.id} className="grid grid-cols-1 md:grid-cols-[180px,1fr,1fr] gap-2 md:gap-3 items-center bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2">
-                  <label className="flex items-center gap-2 text-sm text-gray-200">
-                    <input
-                      type="checkbox"
-                      checked={!!cfg.enabled}
-                      onChange={(e) => updateDayConfig(day.id, { enabled: e.target.checked })}
-                      className="accent-sky-500"
-                    />
-                    <span>{day.label}</span>
-                  </label>
-                  <label className="text-xs text-gray-400 flex items-center gap-2">
-                    <span className="w-24">Durata</span>
-                    <select
-                      value={cfg.duration}
-                      disabled={!cfg.enabled}
-                      onChange={(e) => updateDayConfig(day.id, { duration: Number(e.target.value) })}
-                      className="flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-gray-200 disabled:opacity-50"
-                    >
-                      {DURATION_OPTIONS.map(v => (
-                        <option key={v} value={v}>{String(v).replace('.', ',')} ore</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-xs text-gray-400 flex items-center gap-2">
-                    <span className="w-24">Sedute</span>
-                    <select
-                      value={cfg.sessions}
-                      disabled={!cfg.enabled}
-                      onChange={(e) => updateDayConfig(day.id, { sessions: Number(e.target.value) })}
-                      className="flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-gray-200 disabled:opacity-50"
-                    >
-                      {SESSIONS_OPTIONS.map(v => (
-                        <option key={v} value={v}>{v}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-              ))}
-            </div>
-            <label className="flex items-start gap-2 text-xs text-gray-300">
-              <input
-                type="checkbox"
-                checked={preferRefinementBeforeMatch}
-                onChange={(e) => setPreferRefinementBeforeMatch(e.target.checked)}
-                className="accent-amber-500 mt-0.5"
-              />
-              <span>
-                Preferisci usare la seduta immediatamente precedente alla prossima gara come rifinitura.
-              </span>
-            </label>
-          </>
-        )}
-      </div>
-
+      {/* ═══ COMMAND BAR ═══ */}
       <div className="glass-card p-4">
-        <h3 className="text-sm font-semibold text-amber-400 mb-2">Calendario prossimo impegno</h3>
-        {nextMatch ? (
-          <p className="text-xs text-gray-300">
-            G{nextMatch.giornata} · {nextMatch.home} vs {nextMatch.away} · {formatMatchDate(nextMatch.kickoff)}{nextMatch.ora ? ` · ${nextMatch.ora}` : ''}
-          </p>
-        ) : (
-          <p className="text-xs text-gray-500">
-            Nessuna prossima partita trovata nel calendario CSV per la squadra selezionata.
-          </p>
-        )}
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h2 className="text-lg font-black text-white tracking-tight">Training Plan</h2>
+            <p className="text-[10px] text-gray-500">{matches.length} partite · {totalSessions} sedute/sett. · {totalHours.toFixed(1).replace('.', ',')}h</p>
+          </div>
+          {nextMatch && (
+            <div className="flex items-center gap-3 bg-white/[0.03] rounded-xl px-4 py-2 border border-white/5">
+              <div className="text-center">
+                <div className="text-2xl font-black text-amber-400">{daysToMatch}</div>
+                <div className="text-[7px] text-gray-500 uppercase font-bold">giorni</div>
+              </div>
+              <div className="h-8 w-px bg-white/10" />
+              <div>
+                <div className="text-[10px] text-gray-400">Prossima gara</div>
+                <button
+                  onClick={() => onOpenOpponentComment?.(nextOpp?.oppName)}
+                  className={`text-xs font-bold ${onOpenOpponentComment ? 'text-sky-300 hover:text-sky-200 underline decoration-dotted underline-offset-2' : 'text-white'}`}
+                >
+                  {nextOpp?.oppName || '?'}
+                </button>
+                <div className="text-[9px] text-gray-500">{fmtDate(nextMatch.kickoff)}{nextMatch.ora ? ` · ${nextMatch.ora}` : ''}</div>
+              </div>
+              {nextOpp?.oppStanding && (
+                <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-white/5 text-gray-400">{nextOpp.oppStanding.rank}° class.</span>
+              )}
+            </div>
+          )}
+          {/* Mini priority bar */}
+          <div className="flex h-3 w-48 rounded-full overflow-hidden gap-px">
+            {prio.criticita > 0 && <div className="bg-red-500/50 transition-all" style={{ width: `${prio.criticita}%` }} />}
+            {prio.crescita > 0 && <div className="bg-green-500/50 transition-all" style={{ width: `${prio.crescita}%` }} />}
+            {prio.gara > 0 && <div className="bg-purple-500/50 transition-all" style={{ width: `${prio.gara}%` }} />}
+            {prio.fisico > 0 && <div className="bg-rose-500/50 transition-all" style={{ width: `${prio.fisico}%` }} />}
+          </div>
+        </div>
       </div>
 
-      {matches.length < 2 && (
-        <div className="glass-card p-4 border border-amber-500/20">
-          <p className="text-xs text-amber-300">
-            Servono almeno 2 partite scout caricate per personalizzare il piano in base alle catene.
-          </p>
+      {/* ═══ TAB BAR ═══ */}
+      <div className="flex gap-1 bg-white/[0.02] rounded-xl p-1 overflow-x-auto">
+        {TABS.map(t => (
+          <button key={t.k} onClick={() => setTab(t.k)}
+            className={`flex-1 min-w-[90px] px-3 py-2 rounded-lg text-[10px] font-bold transition-all tracking-wide ${tab === t.k ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20' : 'text-gray-500 hover:text-white hover:bg-white/[0.04]'}`}>
+            {t.l}
+          </button>
+        ))}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════
+          TAB 1: PANORAMICA
+          ═══════════════════════════════════════════════════════════════ */}
+      {tab === 'panoramica' && (
+        <div className="space-y-4">
+          {/* Row 1: Fund status + Standings */}
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr,320px] gap-4">
+            {/* Fundamental health */}
+            <div className="glass-card p-4 space-y-3">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Stato Fondamentali</div>
+              <div className="grid grid-cols-5 gap-2">
+                {Object.entries(fundStatus).map(([f, s]) => (
+                  <button
+                    key={f}
+                    onClick={() => setSelectedFund(f)}
+                    className={`rounded-xl p-2.5 border text-center transition-all ${statusCls(s)} ${selectedFund === f ? 'ring-1 ring-white/40' : 'hover:bg-white/[0.05]'}`}
+                  >
+                    <div className="text-base font-black">{statusIco(s)}</div>
+                    <div className="text-[8px] font-bold uppercase mt-1">{fundLabel[f]}</div>
+                  </button>
+                ))}
+              </div>
+              <div className="glass-card p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] font-bold text-white">Dettaglio {fundLabel[selectedFund]}</div>
+                  <div className="text-[8px] text-gray-500">{selectedFundStats.playersWithData} giocatrici con dati</div>
+                </div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={selectedFundChartData} margin={{ left: -12, right: 8, top: 8, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    <XAxis dataKey="label" tick={{ fill: '#94a3b8', fontSize: 9 }} />
+                    <YAxis tick={{ fill: '#64748b', fontSize: 9 }} tickFormatter={(v) => `${v.toFixed(0)}%`} domain={[0, 100]} />
+                    <Tooltip
+                      contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
+                      formatter={(v) => [`${Number(v).toFixed(1)}%`, 'Valore']}
+                    />
+                    <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                      {selectedFundChartData.map((e) => (
+                        <Cell key={e.label} fill={e.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              {/* Top criticità inline */}
+              {declines.length > 0 && (
+                <div className="space-y-1.5 mt-2">
+                  <div className="text-[9px] font-bold text-red-400">Top criticità</div>
+                  {declines.slice(0, 3).map((s, i) => (
+                    <div key={i} className="text-[9px] text-gray-400 bg-white/[0.02] rounded-lg p-2 border border-white/5">
+                      <span className="text-red-400 font-bold mr-1">P{s.priority}</span>
+                      {s.player && <span className="text-white font-bold mr-1">{s.player}</span>}
+                      {s.message}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Standings + target */}
+            <div className="glass-card p-4 space-y-3">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Classifica</div>
+              {ourStanding && (
+                <div className="flex items-center gap-3">
+                  <div className="text-3xl font-black text-white">{ourStanding.rank}°</div>
+                  <div><div className="text-xs text-gray-300">{ourStanding.pts} punti</div><div className="text-[9px] text-gray-500">{ourStanding.w}V {ourStanding.l}S</div></div>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <label className="text-[9px] text-gray-500 font-bold">Obiettivo:</label>
+                <select value={targetPosition} onChange={e => setTargetPosition(Number(e.target.value))}
+                  className="bg-white/5 border border-white/10 rounded px-2 py-0.5 text-[10px] text-white">
+                  {Array.from({ length: standings?.length || 12 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}°</option>)}
+                </select>
+              </div>
+              {standingGap && (
+                <div className={`text-[9px] px-3 py-2 rounded-lg border ${standingGap.diff <= 0 ? 'bg-green-500/5 border-green-500/15 text-green-400' : 'bg-amber-500/5 border-amber-500/15 text-amber-400'}`}>
+                  {standingGap.diff <= 0 ? `Obiettivo raggiunto! +${Math.abs(standingGap.diff)} punti sopra.` : `Servono ${standingGap.diff} pt. Restano ${standingGap.remaining} partite.`}
+                </div>
+              )}
+              {nextOpp && (
+                <div className="mt-2 space-y-1">
+                  <div className="text-[9px] text-gray-500 font-bold">Prossimo avversario</div>
+                  <div className="text-[9px] text-gray-300">
+                    {nextOpp.played ? <span className="text-green-400">Già affrontata ({nextOpp.pastVs.length}x){nextOpp.scoutVs.length > 0 ? ` · ${nextOpp.scoutVs.length} scout` : ''}</span>
+                      : <span className="text-blue-400">Prima volta — prep. generica</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Row 2: Setter distribution mini + Coach notes */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Setter summary */}
+            <div className="glass-card p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Distribuzione Palleggiatore</div>
+                {sd && <button onClick={() => setTab('distribuzione')} className="text-[8px] text-sky-400 hover:text-sky-300">dettagli →</button>}
+              </div>
+              {sdTop.length > 0 ? (
+                <>
+                  <div className="space-y-1.5">
+                    {sdTop.slice(0, 5).map(([pNum, a]) => (
+                      <div key={pNum} className="flex items-center gap-2">
+                        <span className="text-[9px] text-gray-300 w-20 truncate">#{pNum} {a.name}</span>
+                        <span className={`text-[7px] font-bold w-6 ${roleCls(a.role)}`}>{a.role}</span>
+                        <div className="flex-1 h-3 bg-white/5 rounded-full overflow-hidden">
+                          <div className="h-full bg-sky-500/30 rounded-full" style={{ width: `${Math.max(3, a.pctOfTotal * 100)}%` }} />
+                        </div>
+                        <span className="text-[8px] text-sky-400 font-bold w-8 text-right">{(a.pctOfTotal * 100).toFixed(0)}%</span>
+                        <span className={`text-[8px] font-bold w-10 text-right ${a.efficiency >= 0.25 ? 'text-green-400' : a.efficiency >= 0.1 ? 'text-amber-400' : 'text-red-400'}`}>{(a.efficiency * 100).toFixed(0)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                  {sd?.tendencies?.filter(t => t.severity === 'warning').slice(0, 1).map((t, i) => (
+                    <div key={i} className="text-[8px] text-amber-400 bg-amber-500/5 rounded px-2 py-1 border border-amber-500/10">⚠ {t.message}</div>
+                  ))}
+                  {sdDiag.diagnostics.length > 0 && (
+                    <button onClick={() => { setTab('distribuzione'); setDistView('diagnosi'); }} className="w-full text-left text-[8px] bg-red-500/5 rounded px-2 py-1.5 border border-red-500/10 hover:bg-red-500/10 transition-colors">
+                      <span className="text-red-400 font-bold">🎯 {sdDiag.diagnostics.filter(d => d.type === 'setter_wrong_choice').length} scelte palleggiatore</span>
+                      <span className="text-amber-400 font-bold ml-2">📉 {sdDiag.diagnostics.filter(d => d.type !== 'setter_wrong_choice').length} skill attaccanti</span>
+                      <span className="text-gray-500 ml-2">→ vedi diagnosi</span>
+                    </button>
+                  )}
+                </>
+              ) : <p className="text-[9px] text-gray-600">Dati insufficienti</p>}
+            </div>
+            {/* Coach notes */}
+            <div className="glass-card p-4 space-y-2">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Note Allenatore</div>
+              <p className="text-[8px] text-gray-600">Condizione fisica, mentale, infortuni, osservazioni.</p>
+              <textarea value={coachNotes} onChange={e => setCoachNotes(e.target.value)} rows={4} placeholder="Es: #12 rientro infortunio, evitare muro. Squadra mentalmente fragile..."
+                className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-[10px] text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-amber-500/30" />
+            </div>
+          </div>
+
+          {/* Row 3: Medium term timeline */}
+          {mediumPlan.length > 0 && (
+            <div className="glass-card p-4 space-y-3">
+              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Prossime Partite</div>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {mediumPlan.map((b, i) => (
+                  <div key={i} className="flex-shrink-0 w-48 bg-white/[0.02] border border-white/5 rounded-xl p-3 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[8px] text-gray-500 font-bold">G{b.giornata}</span>
+                      <span className="text-[8px] text-gray-500">{fmtDate(b.match.kickoff)}</span>
+                    </div>
+                    <div className="text-[10px] font-bold text-white truncate">{b.opp}</div>
+                    <div className="flex gap-1 flex-wrap">
+                      {b.oppS && <span className="text-[7px] px-1 py-0.5 rounded-full bg-white/5 text-gray-400">{b.oppS.rank}°</span>}
+                      {b.played && <span className="text-[7px] px-1 py-0.5 rounded-full bg-green-500/10 text-green-400">scout</span>}
+                      {b.gap <= 4 && <span className="text-[7px] px-1 py-0.5 rounded-full bg-amber-500/10 text-amber-400">ravv.</span>}
+                    </div>
+                    <div className="text-[8px] text-gray-500">{b.gap}gg · ~{b.sess} sedute</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      <div className="glass-card-accent p-5">
-        <h3 className="text-sm font-semibold text-sky-400 mb-3">Programmazione suggerita</h3>
-        {plannedSessions.length > 0 ? (
-          <div className="space-y-2.5 text-xs text-gray-300">
-            {plannedSessions.map((row, idx) => (
-              <div key={`${row.dayId}-${idx}`} className={`rounded-lg border px-3 py-2 ${row.isPreMatch ? 'border-amber-500/30 bg-amber-500/6' : 'border-white/5 bg-white/[0.02]'}`}>
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <p className="font-semibold text-sky-300">
-                    {row.dayLabel} · Seduta {row.sessionIndex}/{row.daySessions} · {String(row.duration).replace('.', ',')}h
-                  </p>
-                  {row.isPreMatch && nextMatch && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                      seduta pre-gara
-                    </span>
-                  )}
+      {/* ═══════════════════════════════════════════════════════════════
+          TAB 2: FOCUS & PRIORITÀ
+          ═══════════════════════════════════════════════════════════════ */}
+      {tab === 'focus' && (
+        <div className="space-y-4">
+          {/* Info dialog */}
+          {showPrioInfo && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowPrioInfo(false)}>
+              <div className="max-w-lg w-full mx-4 bg-gray-900 border border-white/10 rounded-2xl p-6 space-y-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-bold text-white">Valori Suggeriti — Motivazione</div>
+                  <button onClick={() => setShowPrioInfo(false)} className="text-gray-500 hover:text-white text-lg">✕</button>
                 </div>
-                <p className="mt-1">{row.desc}</p>
-                <p className="text-[10px] text-gray-500 mt-1">{row.structure}</p>
+                {['criticita', 'crescita', 'gara', 'fisico'].map(k => {
+                  const labels = { criticita: { l: 'Criticità / Trend', ic: '🔧', c: 'text-red-400' }, crescita: { l: 'Crescita / Skill', ic: '📈', c: 'text-green-400' }, gara: { l: 'Preparazione Gara', ic: '🎯', c: 'text-purple-400' }, fisico: { l: 'Fisico', ic: '💪', c: 'text-rose-400' } };
+                  const lb = labels[k];
+                  return (
+                    <div key={k} className="bg-white/[0.03] border border-white/5 rounded-xl p-3 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-white">{lb.ic} {lb.l}</span>
+                        <span className={`text-sm font-black ${lb.c}`}>{suggestedPrio.values[k]}%</span>
+                      </div>
+                      {(suggestedPrio.reasons[k] || []).map((r, i) => (
+                        <div key={i} className="text-[9px] text-gray-400 pl-2 border-l-2 border-white/5">• {r}</div>
+                      ))}
+                      {(suggestedPrio.reasons[k] || []).length === 0 && <div className="text-[9px] text-gray-600">Nessun fattore rilevante rilevato</div>}
+                    </div>
+                  );
+                })}
+                {suggestedPrio.strategic && (
+                  <div className="bg-purple-500/5 border border-purple-500/10 rounded-xl p-3">
+                    <div className="text-[9px] font-bold text-purple-400 mb-1">🧠 Analisi Strategica Calendario</div>
+                    <p className="text-[9px] text-gray-300">{suggestedPrio.strategic}</p>
+                  </div>
+                )}
+                <button onClick={() => { setPrio(suggestedPrio.values); setShowPrioInfo(false); }}
+                  className="w-full py-2 rounded-lg bg-sky-500/20 text-sky-400 text-xs font-bold hover:bg-sky-500/30 transition-colors border border-sky-500/20">
+                  Applica Valori Suggeriti
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Priority sliders */}
+          <div className="glass-card p-5 space-y-5">
+            <div>
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Priorità Allenamento</div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setPrio(suggestedPrio.values)}
+                    className="text-[8px] px-2.5 py-1 rounded-full bg-sky-500/15 text-sky-400 font-bold border border-sky-500/20 hover:bg-sky-500/25 transition-all flex items-center gap-1">
+                    Usa Suggeriti
+                  </button>
+                  <button onClick={() => setShowPrioInfo(true)}
+                    className="w-5 h-5 rounded-full bg-white/5 border border-white/10 text-gray-400 hover:text-sky-400 hover:border-sky-500/30 flex items-center justify-center text-[10px] font-bold transition-all" title="Perché questi valori?">
+                    i
+                  </button>
+                </div>
+              </div>
+              <p className="text-[8px] text-gray-600 mt-0.5">Regola i cursori per decidere come distribuire il tempo. Il totale è sempre 100%.</p>
+            </div>
+            {[
+              { k: 'criticita', l: 'Criticità / Trend', ic: '🔧', c: '#ef4444', d: 'Risolvere debolezze rilevate: catene, rotazioni, distribuzione' },
+              { k: 'crescita', l: 'Crescita / Skill', ic: '📈', c: '#22c55e', d: 'Valorizzare punti di forza emergenti' },
+              { k: 'gara', l: 'Preparazione Gara', ic: '🎯', c: '#a855f7', d: 'Tattica avversario: break-point, side-out, rotazioni' },
+              { k: 'fisico', l: 'Fisico / Condizionamento', ic: '💪', c: '#f43f5e', d: 'Resistenza, forza, prevenzione' },
+            ].map(ax => (
+              <div key={ax.k} className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span>{ax.ic}</span>
+                    <span className="text-[10px] font-bold text-white">{ax.l}</span>
+                    {prio[ax.k] !== suggestedPrio.values[ax.k] && (
+                      <span className="text-[7px] text-gray-600">(suggerito: {suggestedPrio.values[ax.k]}%)</span>
+                    )}
+                  </div>
+                  <span className="text-base font-black" style={{ color: ax.c }}>{prio[ax.k]}%</span>
+                </div>
+                <input type="range" min={0} max={100} step={5} value={prio[ax.k]}
+                  onChange={e => adjustPrio(ax.k, Number(e.target.value))}
+                  className="w-full h-2 rounded-full appearance-none cursor-pointer"
+                  style={{ background: `linear-gradient(to right, ${ax.c} ${prio[ax.k]}%, rgba(255,255,255,0.05) ${prio[ax.k]}%)` }} />
+                <p className="text-[8px] text-gray-600">{ax.d}</p>
               </div>
             ))}
-          </div>
-        ) : (
-          <p className="text-xs text-gray-500">
-            Seleziona almeno un giorno con almeno una seduta per generare la programmazione.
-          </p>
-        )}
-      </div>
 
-      {declines.length > 0 && (
-        <ChainWeeklyPlan suggestions={declines} />
+            {/* Summary bar */}
+            <div className="flex h-6 rounded-full overflow-hidden gap-0.5 mt-2">
+              {prio.criticita > 0 && (
+                <button
+                  onClick={() => setSelectedFocusAxis(v => v === 'criticita' ? 'all' : 'criticita')}
+                  className={`bg-red-500/40 flex items-center justify-center transition-all ${selectedFocusAxis === 'criticita' ? 'ring-1 ring-red-300/70' : ''}`}
+                  style={{ width: `${prio.criticita}%` }}
+                >
+                  <span className="text-[7px] text-red-200 font-bold">{prio.criticita}%</span>
+                </button>
+              )}
+              {prio.crescita > 0 && (
+                <button
+                  onClick={() => setSelectedFocusAxis(v => v === 'crescita' ? 'all' : 'crescita')}
+                  className={`bg-green-500/40 flex items-center justify-center transition-all ${selectedFocusAxis === 'crescita' ? 'ring-1 ring-green-300/70' : ''}`}
+                  style={{ width: `${prio.crescita}%` }}
+                >
+                  <span className="text-[7px] text-green-200 font-bold">{prio.crescita}%</span>
+                </button>
+              )}
+              {prio.gara > 0 && (
+                <button
+                  onClick={() => setSelectedFocusAxis(v => v === 'gara' ? 'all' : 'gara')}
+                  className={`bg-purple-500/40 flex items-center justify-center transition-all ${selectedFocusAxis === 'gara' ? 'ring-1 ring-purple-300/70' : ''}`}
+                  style={{ width: `${prio.gara}%` }}
+                >
+                  <span className="text-[7px] text-purple-200 font-bold">{prio.gara}%</span>
+                </button>
+              )}
+              {prio.fisico > 0 && (
+                <button
+                  onClick={() => setSelectedFocusAxis(v => v === 'fisico' ? 'all' : 'fisico')}
+                  className={`bg-rose-500/40 flex items-center justify-center transition-all ${selectedFocusAxis === 'fisico' ? 'ring-1 ring-rose-300/70' : ''}`}
+                  style={{ width: `${prio.fisico}%` }}
+                >
+                  <span className="text-[7px] text-rose-200 font-bold">{prio.fisico}%</span>
+                </button>
+              )}
+            </div>
+
+            {/* Strategic insight if present */}
+            {suggestedPrio.strategic && (
+              <div className="bg-purple-500/5 border border-purple-500/10 rounded-xl p-2.5 text-[8px] text-purple-300">
+                🧠 {suggestedPrio.strategic}
+              </div>
+            )}
+
+            {/* Presets */}
+            <div className="flex gap-2 flex-wrap">
+              <span className="text-[8px] text-gray-500 self-center">Presets:</span>
+              {[
+                { l: 'Equilibrato', v: { criticita: 30, crescita: 20, gara: 35, fisico: 15 } },
+                { l: 'Focus gara', v: { criticita: 15, crescita: 10, gara: 55, fisico: 20 } },
+                { l: 'Recupero', v: { criticita: 50, crescita: 15, gara: 20, fisico: 15 } },
+                { l: 'Crescita', v: { criticita: 15, crescita: 45, gara: 20, fisico: 20 } },
+                { l: 'Fisico', v: { criticita: 10, crescita: 10, gara: 15, fisico: 65 } },
+                { l: 'Pre-stagione', v: { criticita: 10, crescita: 30, gara: 10, fisico: 50 } },
+              ].map(p => (
+                <button key={p.l} onClick={() => setPrio(p.v)}
+                  className="text-[8px] px-2 py-1 rounded-full border border-white/10 text-gray-400 hover:text-white hover:border-sky-500/30 transition-all">{p.l}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Drill blocks */}
+          <div className="glass-card p-5 space-y-3">
+            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Blocchi di Lavoro</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {focusBlocks.map((b, i) => {
+                const active = (prio[b.axis] || 0) > 0;
+                const highlighted = selectedFocusAxis === 'all' || selectedFocusAxis === b.axis;
+                return (
+                  <div key={i} className={`bg-white/[0.02] border rounded-lg p-3 space-y-1 transition-all ${active ? 'border-white/5' : 'border-white/[0.02] opacity-30'} ${highlighted ? 'opacity-100 ring-1 ring-white/15' : 'opacity-35'}`}>
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-[9px] font-bold text-white">{b.title}</span>
+                      <span className={`text-[6px] px-1.5 py-0.5 rounded-full font-bold ${axisCls(b.axis)}`}>{axisLabel(b.axis)}</span>
+                    </div>
+                    <p className="text-[8px] text-gray-400">{b.desc}</p>
+                    {b.drills.map((d, j) => <div key={j} className="text-[7px] text-gray-600">· {d}</div>)}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          TAB 3: DISTRIBUZIONE PALLEGGIATORE
+          ═══════════════════════════════════════════════════════════════ */}
+      {tab === 'distribuzione' && (
+        <div className="space-y-4">
+          {(!sd || sd.grandTotal === 0) ? (
+            <div className="glass-card p-8 text-center"><p className="text-sm text-gray-500">Dati insufficienti per la distribuzione.</p></div>
+          ) : (<>
+            {/* Insights */}
+            {sd.tendencies?.length > 0 && (
+              <div className="glass-card p-4 space-y-1.5">
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Insight Distribuzione ({sd.grandTotal} palloni)</div>
+                {sd.tendencies.map((t, i) => (
+                  <div key={i} className={`text-[9px] px-3 py-1.5 rounded-lg border ${t.severity === 'warning' ? 'bg-amber-500/5 border-amber-500/15 text-amber-400' : t.severity === 'opportunity' ? 'bg-green-500/5 border-green-500/15 text-green-400' : 'bg-white/[0.02] border-white/5 text-gray-300'}`}>
+                    {t.severity === 'warning' ? '⚠ ' : t.severity === 'opportunity' ? '💡 ' : 'ℹ '}{t.message}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Sub-nav */}
+            <div className="flex gap-1 bg-white/[0.02] rounded-lg p-1 flex-wrap">
+              {[{ k: 'diagnosi', l: 'Diagnosi' }, { k: 'chi', l: 'Chi Attacca' }, { k: 'cosa', l: 'Cosa (Qualità)' }, { k: 'quando', l: 'Quando (Fase)' }, { k: 'rotazione', l: 'Per Rotazione' }, { k: 'avv', l: 'Vs Avversario' }].map(v => (
+                <button key={v.k} onClick={() => setDistView(v.k)}
+                  className={`flex-1 min-w-[80px] px-2 py-1.5 rounded-md text-[9px] font-bold transition-all ${distView === v.k ? 'bg-sky-500 text-black' : 'text-gray-500 hover:text-white'}`}>{v.l}</button>
+              ))}
+            </div>
+
+            {/* DIAGNOSI */}
+            {distView === 'diagnosi' && (
+              <div className="space-y-4">
+                {sdDiag.diagnostics.length === 0 ? (
+                  <div className="glass-card p-6 text-center">
+                    <div className="text-2xl mb-2">✅</div>
+                    <p className="text-sm text-gray-400">Nessuna criticità rilevata nella distribuzione.</p>
+                    <p className="text-[9px] text-gray-600 mt-1">Le scelte del palleggiatore risultano coerenti con le capacità dei terminali. Servono almeno 3 attacchi per contesto (rotazione × fase × qualità input) per generare diagnosi.</p>
+                  </div>
+                ) : (<>
+                  {/* Summary counts */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { l: 'Tutti', t: 'all', c: 'violet', ic: '📋', cnt: diagCounts.all },
+                      { l: 'Scelta Palleggiatore', t: 'setter_wrong_choice', c: 'red', ic: '🎯', cnt: diagCounts.setter_wrong_choice },
+                      { l: 'Trend Negativo', t: 'player_skill_declining', c: 'amber', ic: '📉', cnt: diagCounts.player_skill_declining },
+                      { l: 'Deficit Tecnico', t: 'player_skill_deficit_group', c: 'sky', ic: '🔧', cnt: diagCounts.player_skill_deficit_group },
+                    ].map(({ l, t, c, ic, cnt }) => {
+                      const isActive = diagFilter === t;
+                      return (
+                        <button
+                          key={t}
+                          onClick={() => { setDistView('diagnosi'); setDiagFilter(t); }}
+                          className={`glass-card p-3 text-center border-t-2 transition-all ${isActive ? 'ring-1 ring-white/30 bg-white/[0.04]' : 'hover:bg-white/[0.03]'} border-${c}-500/30`}
+                        >
+                          <div className="text-lg">{ic}</div>
+                          <div className={`text-xl font-black text-${c}-400`}>{cnt}</div>
+                          <div className="text-[8px] text-gray-500 font-bold">{l}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Diagnostic cards */}
+                  {filteredDiagnostics.length === 0 ? (
+                    <div className="glass-card p-5 text-center">
+                      <p className="text-xs text-gray-400">Nessun contenuto per il filtro selezionato.</p>
+                    </div>
+                  ) : filteredDiagnostics.map((diag, i) => {
+                    const isSetterIssue = diag.type === 'setter_wrong_choice';
+                    const borderColor = isSetterIssue ? 'border-red-500/30' : diag.type === 'player_skill_declining' ? 'border-amber-500/30' : 'border-sky-500/30';
+                    const tagColor = isSetterIssue ? 'bg-red-500/15 text-red-400' : diag.type === 'player_skill_declining' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400';
+                    const tagLabel = isSetterIssue ? 'SCELTA PALLEGGIATORE' : diag.type === 'player_skill_declining' ? 'TREND NEGATIVO' : diag.type === 'player_skill_growing' ? 'IN CRESCITA MA INSUFFICIENTE' : 'DEFICIT TECNICO';
+
+                    return (
+                      <div key={i} className={`glass-card p-4 space-y-3 border-l-2 ${borderColor}`}>
+                        {/* Header */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded ${tagColor}`}>{tagLabel}</span>
+                            <div className="text-[10px] text-white font-bold mt-1.5">
+                              P{diag.rotation} · {diag.phase === 'SO' ? 'Side-out' : 'Transizione'} · {diag.inputQuality}
+                            </div>
+                          </div>
+                          <span className="text-[8px] text-gray-500">{diag.attacker.total} pall.</span>
+                        </div>
+
+                        {/* Attacker vs Alternative */}
+                        {isSetterIssue && diag.alternative && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="bg-red-500/5 border border-red-500/10 rounded-lg p-2">
+                              <div className="text-[7px] text-red-400/70 font-bold">SCELTA ATTUALE</div>
+                              <div className="text-[10px] text-white font-bold mt-0.5">{diag.attacker.name} <span className={`text-[8px] ${roleCls(diag.attacker.role)}`}>{diag.attacker.role}</span></div>
+                              <div className="text-[9px] text-red-400 font-bold">Eff. {(diag.attacker.eff * 100).toFixed(0)}%</div>
+                              <div className="text-[7px] text-gray-500">{(diag.attacker.share * 100).toFixed(0)}% dei palloni</div>
+                            </div>
+                            <div className="bg-green-500/5 border border-green-500/10 rounded-lg p-2">
+                              <div className="text-[7px] text-green-400/70 font-bold">ALTERNATIVA MIGLIORE</div>
+                              <div className="text-[10px] text-white font-bold mt-0.5">{diag.alternative.name} <span className={`text-[8px] ${roleCls(diag.alternative.role)}`}>{diag.alternative.role}</span></div>
+                              <div className="text-[9px] text-green-400 font-bold">Eff. {(diag.alternative.eff * 100).toFixed(0)}%</div>
+                              <div className="text-[7px] text-gray-500">{diag.alternative.source === 'same_context' ? 'Stesso contesto' : 'Da dati globali su ' + diag.inputQuality}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Trend info for player issues */}
+                        {!isSetterIssue && diag.trend && (
+                          <div className="flex items-center gap-3 bg-white/[0.02] rounded-lg p-2">
+                            <span className="text-base">{diag.trend.direction === 'declining' ? '📉' : diag.trend.direction === 'improving' ? '📈' : '➡'}</span>
+                            <div>
+                              <div className="text-[10px] text-white font-bold">{diag.attacker.name} <span className={`text-[8px] ${roleCls(diag.attacker.role)}`}>{diag.attacker.role}</span></div>
+                              <div className="text-[8px] text-gray-400">
+                                Eff. contesto: <span className={diag.attacker.eff < 0.10 ? 'text-red-400 font-bold' : 'text-amber-400'}>{(diag.attacker.eff * 100).toFixed(0)}%</span>
+                                {diag.trend.olderAvg != null && diag.trend.recentAvg != null && (
+                                  <span className="ml-2">Trend att.: {(diag.trend.olderAvg * 100).toFixed(0)}% → {(diag.trend.recentAvg * 100).toFixed(0)}%</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Training prescription */}
+                        <div className="space-y-1.5">
+                          {diag.training.setter && (
+                            <div className="bg-red-500/[0.04] border border-red-500/10 rounded-lg p-2.5">
+                              <div className="text-[7px] text-red-400/70 font-bold uppercase mb-0.5">🎯 Lavoro Palleggiatore</div>
+                              <p className="text-[9px] text-gray-300 leading-relaxed">{diag.training.setter}</p>
+                            </div>
+                          )}
+                          {diag.training.player && (
+                            <div className="bg-sky-500/[0.04] border border-sky-500/10 rounded-lg p-2.5">
+                              <div className="text-[7px] text-sky-400/70 font-bold uppercase mb-0.5">🔧 Lavoro Tecnico Attaccante</div>
+                              <p className="text-[9px] text-gray-300 leading-relaxed">{diag.training.player}</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Context summary */}
+                  <div className="glass-card p-3">
+                    <div className="text-[8px] text-gray-500">
+                      Analisi su {Object.keys(sdDiag.contextMap).length} contesti (rotazione × fase × qualità input) con almeno 3 palloni.
+                      {sdDiag.diagnostics.filter(d => d.type === 'setter_wrong_choice').length > 0 && (
+                        <span className="text-red-400 font-bold ml-1">{sdDiag.diagnostics.filter(d => d.type === 'setter_wrong_choice').length} situazioni richiedono lavoro situazionale del palleggiatore.</span>
+                      )}
+                    </div>
+                  </div>
+                </>)}
+              </div>
+            )}
+
+            {/* CHI ATTACCA */}
+            {distView === 'chi' && (
+              <div className="space-y-4">
+                <div className="glass-card p-4 space-y-3">
+                  <div className="text-[10px] font-bold text-white">Distribuzione Palloni</div>
+                  {sdTop.map(([pNum, a]) => (
+                    <div key={pNum} className="grid grid-cols-[110px,1fr,45px,50px] items-center gap-1.5">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[9px] font-bold text-white">#{pNum}</span>
+                        <span className="text-[8px] text-gray-400 truncate">{a.name}</span>
+                        <span className={`text-[7px] font-bold ${roleCls(a.role)}`}>{a.role}</span>
+                      </div>
+                      <div className="h-4 bg-white/5 rounded-full overflow-hidden"><div className="h-full bg-sky-500/30 rounded-full flex items-center justify-end pr-1" style={{ width: `${Math.max(4, a.pctOfTotal * 100)}%` }}><span className="text-[6px] text-sky-200 font-bold">{(a.pctOfTotal * 100).toFixed(0)}%</span></div></div>
+                      <span className="text-[8px] text-gray-500 text-right">{a.total}</span>
+                      <span className={`text-[8px] font-bold text-right ${a.efficiency >= 0.25 ? 'text-green-400' : a.efficiency >= 0.1 ? 'text-amber-400' : 'text-red-400'}`}>eff {(a.efficiency * 100).toFixed(0)}%</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {[{ l: '1ª Linea', d: sd.byAttackerRow.front, c: 'sky' }, { l: '2ª Linea', d: sd.byAttackerRow.back, c: 'amber' }].map(({ l, d, c }) => {
+                    const tot = sd.byAttackerRow.front.total + sd.byAttackerRow.back.total;
+                    return (
+                      <div key={l} className={`glass-card p-3 text-center bg-${c}-500/[0.03]`}>
+                        <div className="text-xl font-black text-white">{tot > 0 ? (d.total / tot * 100).toFixed(0) : 0}%</div>
+                        <div className="text-[9px] text-gray-400 font-bold">{l}</div>
+                        <div className="text-[8px] text-gray-500">{d.total} pall. · eff {d.total > 0 ? ((d.pts - d.err) / d.total * 100).toFixed(0) : 0}%</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* COSA (Qualità) */}
+            {distView === 'cosa' && (
+              <div className="space-y-4">
+                {[{ label: 'Ricezione → Attacco (Side-out)', keys: ['R3', 'R4', 'R5'], color: 'sky' },
+                  { label: 'Difesa → Attacco (Transizione)', keys: ['D3', 'D4', 'D5'], color: 'orange' }].map(section => (
+                  <div key={section.label} className="glass-card p-4 space-y-3">
+                    <div className={`text-[10px] font-bold text-${section.color}-400`}>{section.label}</div>
+                    {section.keys.map(iq => {
+                      const data = sd.byInputQuality[iq];
+                      if (!data || data.total === 0) return null;
+                      const atks = Object.entries(data.byAttacker).sort((a, b) => b[1].total - a[1].total);
+                      const qLabel = iq.endsWith('5') ? 'Palleggio vicino a rete' : iq.endsWith('4') ? 'Palleggio staccato' : 'Attacco da bagher';
+                      const tempoData = sd.tempo[iq];
+                      return (
+                        <div key={iq} className="bg-white/[0.02] border border-white/5 rounded-xl p-3 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-xs font-black ${iq.endsWith('5') ? 'text-green-400' : iq.endsWith('4') ? 'text-amber-400' : 'text-red-400'}`}>{iq}</span>
+                              <span className="text-[8px] text-gray-500">{qLabel}</span>
+                            </div>
+                            <span className="text-[8px] text-gray-500">{data.total} pall. · avg A={data.avgAttackValue.toFixed(1)}</span>
+                          </div>
+                          {tempoData && (tempoData.primo + tempoData.alto) > 0 && (
+                            <div className="text-[7px] text-gray-500">1° tempo: <span className="text-amber-400 font-bold">{tempoData.primo}</span> | Palla alta: <span className="text-sky-400">{tempoData.alto}</span> ({((tempoData.primo / (tempoData.primo + tempoData.alto)) * 100).toFixed(0)}% 1°T)</div>
+                          )}
+                          {atks.slice(0, 4).map(([pNum, stats]) => {
+                            const pctV = (stats.total / data.total * 100);
+                            const effV = stats.total > 0 ? ((stats.pts - stats.err) / stats.total * 100) : 0;
+                            return (
+                              <div key={pNum} className="grid grid-cols-[90px,1fr,40px,40px] items-center gap-1">
+                                <span className="text-[8px] text-gray-300">#{pNum} {sd.byAttacker[pNum]?.name || ''} <span className={`font-bold ${roleCls(sd.byAttacker[pNum]?.role)}`}>{sd.byAttacker[pNum]?.role}</span></span>
+                                <div className="h-2.5 bg-white/5 rounded-full overflow-hidden"><div className={`h-full bg-${section.color}-500/30 rounded-full`} style={{ width: `${Math.max(2, pctV)}%` }} /></div>
+                                <span className="text-[7px] text-gray-400 text-right">{pctV.toFixed(0)}%</span>
+                                <span className={`text-[7px] font-bold text-right ${effV >= 25 ? 'text-green-400' : effV >= 10 ? 'text-amber-400' : 'text-red-400'}`}>{effV.toFixed(0)}%</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* QUANDO */}
+            {distView === 'quando' && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  {[{ l: 'Side-out', d: sd.byPhase.sideOut, c: 'sky' }, { l: 'Transizione', d: sd.byPhase.transition, c: 'orange' }].map(({ l, d, c }) => {
+                    const topA = Object.entries(d.byAttacker || {}).sort((a, b) => b[1].total - a[1].total).slice(0, 4);
+                    return (
+                      <div key={l} className="glass-card p-4 space-y-2">
+                        <div className={`text-xs font-bold text-${c}-400`}>{l}</div>
+                        <div className="text-xl font-black text-white">{d.total}</div>
+                        {topA.map(([pNum, stats]) => (
+                          <div key={pNum} className="flex items-center justify-between text-[8px]">
+                            <span className="text-gray-300">{sd.byAttacker[pNum]?.name} <span className={`font-bold ${roleCls(sd.byAttacker[pNum]?.role)}`}>{sd.byAttacker[pNum]?.role}</span></span>
+                            <span className={`font-bold text-${c}-400`}>{d.total > 0 ? (stats.total / d.total * 100).toFixed(0) : 0}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Attack number */}
+                <div className="glass-card p-4 space-y-3">
+                  <div className="text-[10px] font-bold text-white">Per Numero Attacco nel Rally</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[1, 2, 3, 4].map(n => {
+                      const d = sd.byAttackNumber[n];
+                      if (!d) return null;
+                      const eff = d.total > 0 ? ((d.pts - d.err) / d.total * 100) : 0;
+                      return (
+                        <div key={n} className={`bg-white/[0.02] border border-white/5 rounded-xl p-2.5 text-center ${d.total === 0 ? 'opacity-30' : ''}`}>
+                          <div className="text-base font-black text-white">{n === 4 ? '4+' : n}°</div>
+                          <div className="text-[8px] text-gray-400">{d.total} att.</div>
+                          {d.total > 0 && <div className={`text-[9px] font-bold ${eff >= 25 ? 'text-green-400' : eff >= 10 ? 'text-amber-400' : 'text-red-400'}`}>{eff.toFixed(0)}%</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                {/* SO vs Trans delta table */}
+                {sdTop.length > 0 && (
+                  <div className="glass-card p-4 space-y-2">
+                    <div className="text-[10px] font-bold text-white">Delta Distribuzione SO vs Transizione</div>
+                    <table className="w-full text-[8px]">
+                      <thead><tr className="text-gray-500 border-b border-white/5"><th className="text-left py-1">Giocatrice</th><th className="text-center">%SO</th><th className="text-center">%Trans</th><th className="text-center">Delta</th></tr></thead>
+                      <tbody>
+                        {sdTop.slice(0, 6).map(([pNum, a]) => {
+                          const soP = sd.byPhase.sideOut.total > 0 ? (a.byPhase.sideOut / sd.byPhase.sideOut.total * 100) : 0;
+                          const trP = sd.byPhase.transition.total > 0 ? (a.byPhase.transition / sd.byPhase.transition.total * 100) : 0;
+                          const d = trP - soP;
+                          return (
+                            <tr key={pNum} className="border-b border-white/[0.03]">
+                              <td className="py-1 text-white font-bold">{a.name} <span className={roleCls(a.role)}>{a.role}</span></td>
+                              <td className="text-center text-sky-400">{soP.toFixed(0)}%</td>
+                              <td className="text-center text-orange-400">{trP.toFixed(0)}%</td>
+                              <td className={`text-center font-bold ${Math.abs(d) > 10 ? (d > 0 ? 'text-orange-400' : 'text-sky-400') : 'text-gray-500'}`}>{d > 0 ? '+' : ''}{d.toFixed(0)}pp</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* PER ROTAZIONE */}
+            {distView === 'rotazione' && (
+              <div className="glass-card p-4 space-y-3">
+                <div className="text-[10px] font-bold text-white">Distribuzione per Rotazione</div>
+                <p className="text-[7px] text-gray-600">P1/P6/P5 = 3att in 1ª linea. P2/P3/P4 = 2att + palleggiatrice.</p>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                  {[1, 2, 3, 4, 5, 6].map(rot => {
+                    const rd = sd.byOurRotation[rot];
+                    if (!rd || rd.total === 0) return null;
+                    const top = Object.entries(rd.distribution || {}).sort((a, b) => b[1].total - a[1].total).slice(0, 4);
+                    return (
+                      <div key={rot} className="bg-white/[0.02] border border-white/5 rounded-lg p-2.5 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-black text-white">P{rot}</span>
+                          <span className={`text-[7px] px-1 py-0.5 rounded-full font-bold ${rd.mode === '3att' ? 'bg-green-500/15 text-green-400' : 'bg-amber-500/15 text-amber-400'}`}>{rd.mode}</span>
+                          <span className="text-[8px] text-gray-500 ml-auto">{rd.total}</span>
+                        </div>
+                        {top.map(([pNum, st]) => (
+                          <div key={pNum} className="flex items-center gap-1">
+                            <span className="text-[7px] text-gray-300 w-14 truncate">{sd.byAttacker[pNum]?.name}</span>
+                            <span className={`text-[6px] font-bold w-5 ${roleCls(st.role)}`}>{st.role}</span>
+                            <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden"><div className="h-full bg-sky-500/30 rounded-full" style={{ width: `${Math.max(3, (st.pct || 0) * 100)}%` }} /></div>
+                            <span className="text-[7px] text-gray-400 w-7 text-right">{((st.pct || 0) * 100).toFixed(0)}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* VS AVVERSARIO */}
+            {distView === 'avv' && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  {['2att', '3att'].map(mode => {
+                    const d = sd.byOppFrontRow[mode];
+                    if (!d || d.total === 0) return <div key={mode} className="glass-card p-3 text-center opacity-30"><div className="text-gray-600">{mode} — no data</div></div>;
+                    const topA = Object.entries(d.byAttacker || {}).sort((a, b) => b[1].total - a[1].total).slice(0, 4);
+                    return (
+                      <div key={mode} className="glass-card p-4 space-y-2">
+                        <div className={`text-sm font-black ${mode === '3att' ? 'text-green-400' : 'text-amber-400'}`}>Avv. {mode === '3att' ? '3 Att.' : '2 Att.'}</div>
+                        <p className="text-[7px] text-gray-600">{mode === '3att' ? 'Opposto avv. in 1ª linea (muro alto)' : 'Palleggiatore avv. in 1ª linea (muro debole zona 2)'}</p>
+                        <div className="text-[8px] text-gray-500">{d.total} palloni</div>
+                        {topA.map(([pNum, stats]) => (
+                          <div key={pNum} className="flex items-center justify-between text-[8px]">
+                            <span className="text-gray-300">{sd.byAttacker[pNum]?.name} <span className={`font-bold ${roleCls(sd.byAttacker[pNum]?.role)}`}>{sd.byAttacker[pNum]?.role}</span></span>
+                            <span className="text-gray-400">{(d.total > 0 ? stats.total / d.total * 100 : 0).toFixed(0)}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+                {Object.keys(sd.byOppSpecific || {}).length > 0 && (
+                  <div className="glass-card p-4 space-y-3">
+                    <div className="text-[10px] font-bold text-white">Per Ruolo Avversario a Muro</div>
+                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+                      {Object.entries(sd.byOppSpecific).filter(([, d]) => d.total >= 3).sort((a, b) => b[1].total - a[1].total).map(([specKey, d]) => {
+                        const oppRole = specKey.replace('_front', '');
+                        const roleLbl = { P: 'Palleggiatrice', B1: 'Banda 1', B2: 'Banda 2', C1: 'Centro 1', C2: 'Centro 2', O: 'Opposto' };
+                        const topA = Object.entries(d.byAttacker || {}).sort((a, b) => b[1].total - a[1].total).slice(0, 3);
+                        return (
+                          <div key={specKey} className="bg-white/[0.02] border border-white/5 rounded-lg p-2 space-y-1">
+                            <span className={`text-[9px] font-bold ${roleCls(oppRole)}`}>{roleLbl[oppRole] || oppRole} a muro</span>
+                            <span className="text-[7px] text-gray-500 ml-1">({d.total})</span>
+                            {topA.map(([pNum, stats]) => (
+                              <div key={pNum} className="flex justify-between text-[7px]"><span className="text-gray-300">{sd.byAttacker[pNum]?.name}</span><span className="text-gray-400">{(d.total > 0 ? stats.total / d.total * 100 : 0).toFixed(0)}%</span></div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </>)}
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          TAB 4: SETTIMANA
+          ═══════════════════════════════════════════════════════════════ */}
+      {tab === 'settimana' && (
+        <div className="space-y-4">
+          {/* Schedule config (collapsible) */}
+          <details className="glass-card p-4 group">
+            <summary className="flex items-center justify-between cursor-pointer">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Configurazione Settimanale</span>
+              <span className="text-[9px] text-gray-500">{totalSessions} sedute · {totalHours.toFixed(1).replace('.', ',')}h</span>
+            </summary>
+            <div className="space-y-2 mt-3">
+              {scheduleRows.map(({ day, cfg }) => (
+                <div key={day.id} className="grid grid-cols-[160px,1fr,1fr] gap-2 items-center bg-white/[0.02] border border-white/5 rounded-lg px-3 py-1.5">
+                  <label className="flex items-center gap-2 text-[10px] text-gray-200">
+                    <input type="checkbox" checked={!!cfg.enabled} onChange={e => updateDay(day.id, { enabled: e.target.checked })} className="accent-sky-500" />{day.label}
+                  </label>
+                  <select value={cfg.duration} disabled={!cfg.enabled} onChange={e => updateDay(day.id, { duration: Number(e.target.value) })}
+                    className="bg-white/[0.03] border border-white/10 rounded px-2 py-1 text-[10px] text-gray-200 disabled:opacity-40">
+                    {DURATION_OPTIONS.map(v => <option key={v} value={v}>{String(v).replace('.', ',')}h</option>)}
+                  </select>
+                  <select value={cfg.sessions} disabled={!cfg.enabled} onChange={e => updateDay(day.id, { sessions: Number(e.target.value) })}
+                    className="bg-white/[0.03] border border-white/10 rounded px-2 py-1 text-[10px] text-gray-200 disabled:opacity-40">
+                    {SESSIONS_OPTIONS.map(v => <option key={v} value={v}>{v} sed.</option>)}
+                  </select>
+                </div>
+              ))}
+              <label className="flex items-center gap-2 text-[9px] text-gray-300 mt-2">
+                <input type="checkbox" checked={preferRefinement} onChange={e => setPreferRefinement(e.target.checked)} className="accent-amber-500" />
+                Ultima seduta = rifinitura pre-gara
+              </label>
+            </div>
+          </details>
+
+          {/* Planned sessions */}
+          <div className="space-y-2">
+            {planned.length > 0 ? planned.map((row, idx) => (
+              <div key={`${row.dayId}-${idx}`} className={`glass-card p-4 space-y-2 ${row.isPre ? 'ring-1 ring-amber-500/30' : ''}`}>
+                {/* Header */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-white">{row.dayLabel}</span>
+                    <span className="text-[9px] text-gray-500">Sed. {row.sessionIdx}/{row.daySessions} · {String(row.duration).replace('.', ',')}h</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[7px] px-1.5 py-0.5 rounded-full font-bold ${axisCls(row.focus.axis)}`}>{axisLabel(row.focus.axis)}</span>
+                    {row.isPre && <span className="text-[7px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">PRE-GARA</span>}
+                  </div>
+                </div>
+                {/* Focus + desc */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-sky-400">{row.focus.title}</span>
+                  <span className={`text-[7px] px-1 py-0.5 rounded-full ${row.focus.int === 'alta' ? 'bg-red-500/10 text-red-400' : row.focus.int === 'media' ? 'bg-amber-500/10 text-amber-400' : 'bg-green-500/10 text-green-400'}`}>{row.focus.int}</span>
+                </div>
+                <p className="text-[9px] text-gray-400">{row.desc}</p>
+                {/* Time bar */}
+                <div className="flex gap-0.5 h-4 rounded-full overflow-hidden">
+                  <div className="bg-sky-500/30 flex items-center justify-center" style={{ width: `${row.structure.warmup / row.structure.total * 100}%` }}><span className="text-[6px] text-sky-300 font-bold">{row.structure.warmup}'</span></div>
+                  {row.structure.phys > 0 && <div className="bg-rose-500/30 flex items-center justify-center" style={{ width: `${row.structure.phys / row.structure.total * 100}%` }}><span className="text-[6px] text-rose-300 font-bold">{row.structure.phys}'</span></div>}
+                  <div className="bg-amber-500/30 flex items-center justify-center" style={{ width: `${row.structure.tech / row.structure.total * 100}%` }}><span className="text-[6px] text-amber-300 font-bold">{row.structure.tech}'</span></div>
+                  <div className="bg-purple-500/30 flex items-center justify-center" style={{ width: `${row.structure.tact / row.structure.total * 100}%` }}><span className="text-[6px] text-purple-300 font-bold">{row.structure.tact}'</span></div>
+                  <div className="bg-green-500/30 flex items-center justify-center" style={{ width: `${row.structure.game / row.structure.total * 100}%` }}><span className="text-[6px] text-green-300 font-bold">{row.structure.game}'</span></div>
+                  <div className="bg-cyan-500/30 flex items-center justify-center" style={{ width: `${row.structure.cooldown / row.structure.total * 100}%` }}><span className="text-[6px] text-cyan-300 font-bold">{row.structure.cooldown}'</span></div>
+                </div>
+                <div className="flex gap-2 text-[6px] text-gray-600 flex-wrap">
+                  <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-sky-500/40 inline-block" />Riscald.</span>
+                  {row.structure.phys > 0 && <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-rose-500/40 inline-block" />Fisico</span>}
+                  <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-amber-500/40 inline-block" />Tecn.</span>
+                  <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-purple-500/40 inline-block" />Tatt.</span>
+                  <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500/40 inline-block" />6vs6</span>
+                  <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-cyan-500/40 inline-block" />Defatic.</span>
+                </div>
+                {/* Note */}
+                <input type="text" value={sessionNotes[`${row.dayId}-${idx}`] || ''} onChange={e => setSessionNotes(p => ({ ...p, [`${row.dayId}-${idx}`]: e.target.value }))}
+                  placeholder="Note per questa seduta..." className="w-full bg-white/[0.02] border border-white/5 rounded px-2 py-1 text-[8px] text-gray-300 placeholder-gray-600 focus:outline-none focus:border-sky-500/30" />
+              </div>
+            )) : <div className="glass-card p-5 text-center text-[10px] text-gray-500">Configura le sedute per generare il piano.</div>}
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          TAB 5: GIOCATRICI
+          ═══════════════════════════════════════════════════════════════ */}
+      {tab === 'giocatrici' && (
+        <div className="space-y-3">
+          {selectedPlayerDetails && (
+            <div className="glass-card p-4 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[10px] font-bold text-white">
+                  Evidenza dati giocatrice {selectedPlayerDetails.card?.player?.name || `#${selectedPlayerDetails.pNum}`}
+                </div>
+                <button
+                  onClick={() => setSelectedPlayerNumber('')}
+                  className="text-[8px] px-2 py-1 rounded border border-white/10 text-gray-400 hover:text-white hover:bg-white/[0.05]"
+                >
+                  Reset
+                </button>
+              </div>
+              <ResponsiveContainer width="100%" height={210}>
+                <BarChart data={selectedPlayerDetails.chartData} margin={{ left: -12, right: 8, top: 8, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                  <XAxis dataKey="fund" tick={{ fill: '#94a3b8', fontSize: 9 }} />
+                  <YAxis tick={{ fill: '#64748b', fontSize: 9 }} tickFormatter={(v) => `${v.toFixed(0)}%`} domain={[0, 100]} />
+                  <Tooltip
+                    contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
+                    formatter={(v, n) => [v == null ? 'N/D' : `${Number(v).toFixed(1)}%`, ({
+                      season: 'Media stagione',
+                      recent: 'Media recente',
+                      weighted: 'Media pesata',
+                    }[n] || n)]}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Bar dataKey="season" name="season" fill="#38bdf8" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="recent" name="recent" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="weighted" name="weighted" fill="#a78bfa" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {playerCards.length > 0 ? playerCards.map(({ player, declining, improving, stable, suggestions: pS, sdData }) => (
+            <button
+              key={player.number}
+              onClick={() => setSelectedPlayerNumber(player.number)}
+              className={`glass-card p-4 space-y-2.5 w-full text-left transition-all ${selectedPlayerDetails?.pNum === player.number ? 'ring-1 ring-sky-400/40 bg-sky-500/[0.03]' : 'hover:bg-white/[0.03]'}`}
+            >
+              {/* Header */}
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-xs font-bold text-white">{player.number}</div>
+                <div>
+                  <div className="text-sm font-bold text-white">{player.name || player.fullName || `#${player.number}`}</div>
+                  <div className="text-[8px] text-gray-500">{player.role || 'N/D'}</div>
+                </div>
+                <div className="ml-auto flex gap-1">
+                  {declining.length > 0 && <span className="text-[7px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/15">{declining.length} in calo</span>}
+                  {improving.length > 0 && <span className="text-[7px] px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-400 border border-green-500/15">{improving.length} in crescita</span>}
+                </div>
+              </div>
+              {/* Trend chips */}
+              <div className="flex gap-1.5 flex-wrap">
+                {declining.map(d => <div key={d.fund} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-500/5 border border-red-500/10 text-[8px]"><span className="text-red-400 font-bold">▼</span><span className="text-red-300">{fundLabel[d.fund]}</span>{d.rawRecentAvg != null && <span className="text-red-400/60 font-mono">{(d.rawRecentAvg * 100).toFixed(0)}%</span>}</div>)}
+                {improving.map(d => <div key={d.fund} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-green-500/5 border border-green-500/10 text-[8px]"><span className="text-green-400 font-bold">▲</span><span className="text-green-300">{fundLabel[d.fund]}</span></div>)}
+                {stable.map(d => <div key={d.fund} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.03] border border-white/5 text-[8px]"><span className="text-gray-500">—</span><span className="text-gray-500">{fundLabel[d.fund]}</span></div>)}
+              </div>
+              {/* Setter distribution */}
+              {sdData && sdData.total >= 2 && (
+                <div className="bg-purple-500/[0.04] border border-purple-500/10 rounded-lg p-2 flex gap-4 text-[8px] text-gray-400 flex-wrap">
+                  <span className="text-purple-400 font-bold text-[7px] uppercase">Distribuzione</span>
+                  <span>Pall: <span className="text-white font-bold">{sdData.total}</span> ({(sdData.pctOfTotal * 100).toFixed(0)}%)</span>
+                  <span>Eff: <span className={`font-bold ${sdData.efficiency >= 0.25 ? 'text-green-400' : sdData.efficiency >= 0.1 ? 'text-amber-400' : 'text-red-400'}`}>{(sdData.efficiency * 100).toFixed(0)}%</span></span>
+                  <span>SO: {sdData.byPhase.sideOut} · Trans: {sdData.byPhase.transition}</span>
+                  {sdData.frontRow.total > 0 && <span>1ªL: {sdData.frontRow.total}</span>}
+                  {sdData.backRow.total > 0 && <span>2ªL: {sdData.backRow.total}</span>}
+                </div>
+              )}
+              {/* Suggestions */}
+              {pS.length > 0 && (
+                <div className="space-y-1">
+                  {pS.slice(0, 3).map((s, i) => (
+                    <div key={i} className="text-[8px] text-gray-400 bg-white/[0.02] rounded p-1.5 border border-white/5">
+                      <span className={`font-bold mr-1 ${s.priority >= 4 ? 'text-red-400' : s.priority >= 3 ? 'text-amber-400' : 'text-green-400'}`}>
+                        {s.priority >= 4 ? 'PRIORITÀ' : s.priority >= 3 ? 'ATTENZIONE' : 'OK'}
+                      </span>
+                      {s.action || s.message}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </button>
+          )) : <div className="glass-card p-5 text-center text-[10px] text-gray-500">Servono almeno 2 partite per le schede giocatrici.</div>}
+        </div>
+      )}
+
     </div>
   );
 }
@@ -1528,6 +2707,8 @@ function RallyLengthView({ rallyLength }) {
     </div>
   );
 }
+
+// ─── Setter Distribution Section ─────────────────────────────────────────────
 
 // ─── Chain Weekly Plan ────────────────────────────────────────────────────────
 

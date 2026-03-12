@@ -2277,3 +2277,635 @@ export function computePhaseRotationStats(rallies, roles) {
 
   return phaseStats;
 }
+
+// ============================================================================
+// SETTER DISTRIBUTION ANALYTICS
+// Analisi della distribuzione del palleggiatore: chi attacca, cosa, quando
+// ============================================================================
+
+/**
+ * Computes a comprehensive setter distribution analysis from rally quartine.
+ *
+ * Returns:
+ * - byAttacker: per player/role — how many balls, quality breakdown, efficiency
+ * - byInputQuality: distribution for each R3/R4/R5 and D3/D4/D5 → who gets the ball
+ * - byPhase: side-out vs transition distribution
+ * - byAttackNumber: 1st, 2nd, 3rd+ attack in rally
+ * - byOurRotation: distribution per our rotation (front/back row context)
+ * - byOppFrontRow: distribution vs opponent 2att/3att and specific front row roles
+ * - byAttackerRow: front row vs back row attacker distribution
+ * - tempo: first-tempo (centro) vs high-ball distribution by input quality
+ */
+export function analyzeSetterDistribution(allMatches, roster = []) {
+  const ROLE_ORDER = ['P', 'B1', 'C2', 'O', 'B2', 'C1'];
+
+  // ─── Helper: get role for player in a given set ──
+  function getRolesForMatch(match) {
+    const rolesBySet = {};
+    (match.sets || []).forEach(s => {
+      rolesBySet[s.number] = identifyRolesPerSet(s.rotations || []);
+    });
+    return rolesBySet;
+  }
+
+  // ─── Helper: determine if player is front row in given rotation ──
+  function isPlayerFrontRow(playerRole, rotation) {
+    if (!playerRole || !rotation) return null;
+    const meta = getRotationMeta(rotation);
+    return meta.frontRow.some(p => p.role === playerRole);
+  }
+
+  // ─── Helper: classify opponent front row ──
+  function classifyOppFrontRow(oppRotation) {
+    if (!oppRotation || oppRotation < 1 || oppRotation > 6) return null;
+    const meta = getRotationMeta(oppRotation);
+    // Opponent follows same ROLE_ORDER logic
+    return {
+      mode: meta.mode,           // '2att' or '3att'
+      attackerCount: meta.attackerCount,
+      frontRoles: meta.frontRow.map(p => p.role),
+      hasOpposto: meta.frontRow.some(p => p.role === 'O'),
+      hasBanda1: meta.frontRow.some(p => p.role === 'B1'),
+      hasBanda2: meta.frontRow.some(p => p.role === 'B2'),
+      hasCentro: meta.frontRow.some(p => p.role === 'C1' || p.role === 'C2'),
+    };
+  }
+
+  // ─── Result structures ──
+  const byAttacker = {};        // key: playerNumber
+  const byInputQuality = {};    // key: R3, R4, R5, D3, D4, D5
+  const byPhase = { sideOut: { total: 0, byAttacker: {} }, transition: { total: 0, byAttacker: {} } };
+  const byAttackNumber = {};    // key: 1, 2, 3 (attack ordinal in rally)
+  const byOurRotation = {};     // key: 1-6
+  const byOppFrontRow = { '2att': { total: 0, byAttacker: {} }, '3att': { total: 0, byAttacker: {} } };
+  const byOppSpecific = {};     // key: 'O_front' | 'B1_front' | 'B2_front' etc
+  const byAttackerRow = { front: { total: 0, pts: 0, err: 0 }, back: { total: 0, pts: 0, err: 0 } };
+  const tempo = {};             // key: inputQuality → { primo: count, alto: count }
+  const byContext = {};         // key: `${rot}_${phase}_${inputKey}` → { total, byAttacker: { pNum: { total, pts, err, sumVal } } }
+
+  for (const iq of ['R3', 'R4', 'R5', 'D3', 'D4', 'D5']) {
+    byInputQuality[iq] = { total: 0, byAttacker: {}, avgAttackValue: 0, sumValue: 0 };
+    tempo[iq] = { primo: 0, alto: 0 };
+  }
+  for (let r = 1; r <= 6; r++) {
+    byOurRotation[r] = { total: 0, byAttacker: {}, mode: getRotationMeta(r).mode };
+  }
+  for (let n = 1; n <= 4; n++) {
+    byAttackNumber[n] = { total: 0, pts: 0, err: 0, byAttacker: {} };
+  }
+
+  function ensureAttacker(pNum, role, name) {
+    if (!byAttacker[pNum]) {
+      byAttacker[pNum] = {
+        name: name || _getPlayerName(pNum, roster),
+        role: role || '',
+        total: 0, pts: 0, err: 0, sumValue: 0,
+        byInput: {},   // R3, R4, R5, D3, D4, D5
+        byPhase: { sideOut: 0, transition: 0 },
+        byAttackNum: { 1: 0, 2: 0, 3: 0 },
+        frontRow: { total: 0, pts: 0, err: 0 },
+        backRow: { total: 0, pts: 0, err: 0 },
+      };
+      for (const iq of ['R3', 'R4', 'R5', 'D3', 'D4', 'D5']) {
+        byAttacker[pNum].byInput[iq] = { total: 0, pts: 0, err: 0 };
+      }
+    }
+    // Update role if we have a better one
+    if (role && !byAttacker[pNum].role) byAttacker[pNum].role = role;
+  }
+
+  function addToNestedByAttacker(obj, pNum, value) {
+    if (!obj[pNum]) obj[pNum] = { total: 0, pts: 0, err: 0 };
+    obj[pNum].total++;
+    if (value >= 4) obj[pNum].pts++;
+    if (value === 1) obj[pNum].err++;
+  }
+
+  // ─── Main loop ──
+  for (const match of allMatches) {
+    const rolesBySet = getRolesForMatch(match);
+
+    // Annotate with opponent rotations if available
+    const oppStartPerSet = {};
+    (match.sets || []).forEach(s => {
+      if (s.oppStartRotation) oppStartPerSet[s.number] = s.oppStartRotation;
+    });
+    const rallies = Object.keys(oppStartPerSet).length > 0
+      ? trackOpponentRotations(match.rallies || [], oppStartPerSet)
+      : (match.rallies || []);
+
+    for (const rally of rallies) {
+      const { quartine, phase, rotation, set: setNum } = rally;
+      if (!quartine || quartine.length < 2) continue;
+
+      const roles = rolesBySet[setNum];
+      const oppRot = rally.oppRotation || null;
+      const oppFront = classifyOppFrontRow(oppRot);
+
+      // Find all R→A and D→A pairs in this rally
+      let attackOrdinal = 0;
+
+      // Scan for input actions (R or D) followed by attack (A)
+      const inputActions = []; // collect all {idx, fundamental, value}
+      for (let i = 0; i < quartine.length; i++) {
+        const q = quartine[i];
+        if (q.type !== 'action') continue;
+        if ((q.fundamental === 'r' || q.fundamental === 'd') && q.value >= 3) {
+          inputActions.push({ idx: i, fundamental: q.fundamental, value: q.value });
+        }
+      }
+
+      // For each input action, find the next attack
+      let lastProcessedAttackIdx = -1;
+      for (const input of inputActions) {
+        for (let j = input.idx + 1; j < quartine.length; j++) {
+          const next = quartine[j];
+          if (next.type !== 'action') continue;
+
+          // Skip if we hit another R or D before finding an A
+          if (next.fundamental === 'r' || next.fundamental === 'd') break;
+
+          if (next.fundamental === 'a' && next.player && next.value) {
+            // Only count if this is a new attack (not already processed)
+            if (j > lastProcessedAttackIdx) {
+              attackOrdinal++;
+              lastProcessedAttackIdx = j;
+            }
+
+            const pNum = next.player;
+            const aVal = next.value;
+            const playerRole = roles?.[pNum] || '';
+            const inputKey = `${input.fundamental === 'r' ? 'R' : 'D'}${input.value}`;
+            const isFront = isPlayerFrontRow(playerRole, rotation);
+            const attackNum = Math.min(attackOrdinal, 4); // cap at 4+
+
+            ensureAttacker(pNum, playerRole, null);
+
+            // ── 1. Global attacker stats ──
+            byAttacker[pNum].total++;
+            byAttacker[pNum].sumValue += aVal;
+            if (aVal >= 4) byAttacker[pNum].pts++;
+            if (aVal === 1) byAttacker[pNum].err++;
+
+            // ── 2. By input quality (R3/R4/R5/D3/D4/D5) ──
+            if (byInputQuality[inputKey]) {
+              byInputQuality[inputKey].total++;
+              byInputQuality[inputKey].sumValue += aVal;
+              addToNestedByAttacker(byInputQuality[inputKey].byAttacker, pNum, aVal);
+            }
+            if (byAttacker[pNum].byInput[inputKey]) {
+              byAttacker[pNum].byInput[inputKey].total++;
+              if (aVal >= 4) byAttacker[pNum].byInput[inputKey].pts++;
+              if (aVal === 1) byAttacker[pNum].byInput[inputKey].err++;
+            }
+
+            // ── 3. By phase ──
+            if (phase === 'r') {
+              byPhase.sideOut.total++;
+              addToNestedByAttacker(byPhase.sideOut.byAttacker, pNum, aVal);
+              byAttacker[pNum].byPhase.sideOut++;
+            } else if (phase === 'b') {
+              byPhase.transition.total++;
+              addToNestedByAttacker(byPhase.transition.byAttacker, pNum, aVal);
+              byAttacker[pNum].byPhase.transition++;
+            }
+
+            // ── 4. By attack number in rally ──
+            if (byAttackNumber[attackNum]) {
+              byAttackNumber[attackNum].total++;
+              if (aVal >= 4) byAttackNumber[attackNum].pts++;
+              if (aVal === 1) byAttackNumber[attackNum].err++;
+              addToNestedByAttacker(byAttackNumber[attackNum].byAttacker, pNum, aVal);
+            }
+            byAttacker[pNum].byAttackNum[Math.min(attackOrdinal, 3)] =
+              (byAttacker[pNum].byAttackNum[Math.min(attackOrdinal, 3)] || 0) + 1;
+
+            // ── 5. By our rotation ──
+            if (rotation >= 1 && rotation <= 6 && byOurRotation[rotation]) {
+              byOurRotation[rotation].total++;
+              addToNestedByAttacker(byOurRotation[rotation].byAttacker, pNum, aVal);
+            }
+
+            // ── 6. By opponent front row ──
+            if (oppFront) {
+              const oppMode = oppFront.mode;
+              byOppFrontRow[oppMode].total++;
+              addToNestedByAttacker(byOppFrontRow[oppMode].byAttacker, pNum, aVal);
+
+              // Specific opponent front-row composition tracking
+              for (const oppRole of oppFront.frontRoles) {
+                const specKey = `${oppRole}_front`;
+                if (!byOppSpecific[specKey]) byOppSpecific[specKey] = { total: 0, byAttacker: {} };
+                byOppSpecific[specKey].total++;
+                addToNestedByAttacker(byOppSpecific[specKey].byAttacker, pNum, aVal);
+              }
+            }
+
+            // ── 7. Front row vs back row attacker ──
+            if (isFront === true) {
+              byAttackerRow.front.total++;
+              if (aVal >= 4) byAttackerRow.front.pts++;
+              if (aVal === 1) byAttackerRow.front.err++;
+              byAttacker[pNum].frontRow.total++;
+              if (aVal >= 4) byAttacker[pNum].frontRow.pts++;
+              if (aVal === 1) byAttacker[pNum].frontRow.err++;
+            } else if (isFront === false) {
+              byAttackerRow.back.total++;
+              if (aVal >= 4) byAttackerRow.back.pts++;
+              if (aVal === 1) byAttackerRow.back.err++;
+              byAttacker[pNum].backRow.total++;
+              if (aVal >= 4) byAttacker[pNum].backRow.pts++;
+              if (aVal === 1) byAttacker[pNum].backRow.err++;
+            }
+
+            // ── 8. Tempo analysis: centro = primo tempo, others = alto ──
+            if (byInputQuality[inputKey]) {
+              const isCentrale = playerRole === 'C1' || playerRole === 'C2';
+              if (isCentrale && isFront) {
+                tempo[inputKey].primo++;
+              } else {
+                tempo[inputKey].alto++;
+              }
+            }
+
+            // ── 9. Context tracking: rotation × phase × inputQuality ──
+            if (rotation >= 1 && rotation <= 6) {
+              const phaseKey = phase === 'r' ? 'SO' : 'TR';
+              const ctxKey = `${rotation}_${phaseKey}_${inputKey}`;
+              if (!byContext[ctxKey]) byContext[ctxKey] = { rot: rotation, phase: phaseKey, input: inputKey, total: 0, byAttacker: {} };
+              byContext[ctxKey].total++;
+              if (!byContext[ctxKey].byAttacker[pNum]) byContext[ctxKey].byAttacker[pNum] = { total: 0, pts: 0, err: 0, sumVal: 0, role: playerRole };
+              byContext[ctxKey].byAttacker[pNum].total++;
+              byContext[ctxKey].byAttacker[pNum].sumVal += aVal;
+              if (aVal >= 4) byContext[ctxKey].byAttacker[pNum].pts++;
+              if (aVal === 1) byContext[ctxKey].byAttacker[pNum].err++;
+            }
+
+            break; // Only process first A after this R/D
+          }
+        }
+      }
+    }
+  }
+
+  // ─── Compute averages ──
+  for (const iq of Object.keys(byInputQuality)) {
+    const d = byInputQuality[iq];
+    d.avgAttackValue = d.total > 0 ? d.sumValue / d.total : 0;
+  }
+  for (const pNum of Object.keys(byAttacker)) {
+    const a = byAttacker[pNum];
+    a.avgValue = a.total > 0 ? a.sumValue / a.total : 0;
+    a.efficiency = a.total > 0 ? (a.pts - a.err) / a.total : 0;
+    a.pctOfTotal = 0; // will be computed below
+  }
+
+  // Compute share of total distribution
+  const grandTotal = Object.values(byAttacker).reduce((s, a) => s + a.total, 0);
+  for (const pNum of Object.keys(byAttacker)) {
+    byAttacker[pNum].pctOfTotal = grandTotal > 0 ? byAttacker[pNum].total / grandTotal : 0;
+  }
+
+  // ─── Compute per-rotation distribution percentages ──
+  for (let r = 1; r <= 6; r++) {
+    const rd = byOurRotation[r];
+    rd.distribution = {};
+    for (const [pNum, stats] of Object.entries(rd.byAttacker)) {
+      rd.distribution[pNum] = {
+        ...stats,
+        pct: rd.total > 0 ? stats.total / rd.total : 0,
+        role: byAttacker[pNum]?.role || '',
+      };
+    }
+  }
+
+  // ─── Build setter tendencies summary ──
+  const tendencies = _buildSetterTendencies(byAttacker, byInputQuality, byPhase, byAttackNumber, tempo, grandTotal);
+
+  return {
+    byAttacker,
+    byInputQuality,
+    byPhase,
+    byAttackNumber,
+    byOurRotation,
+    byOppFrontRow,
+    byOppSpecific,
+    byAttackerRow,
+    tempo,
+    byContext,
+    grandTotal,
+    tendencies,
+  };
+}
+
+/**
+ * Build human-readable setter tendency insights.
+ */
+function _buildSetterTendencies(byAttacker, byInputQuality, byPhase, byAttackNumber, tempo, grandTotal) {
+  const insights = [];
+
+  // 1. Most-fed attacker
+  const attackerEntries = Object.entries(byAttacker)
+    .filter(([, a]) => a.total >= 5)
+    .sort((a, b) => b[1].total - a[1].total);
+
+  if (attackerEntries.length > 0) {
+    const [topNum, topA] = attackerEntries[0];
+    insights.push({
+      type: 'top_target',
+      message: `Terminale preferito: ${topA.name} (${topA.role}) con ${(topA.pctOfTotal * 100).toFixed(0)}% dei palloni (${topA.total}/${grandTotal}), efficienza ${(topA.efficiency * 100).toFixed(0)}%.`,
+      playerNumber: topNum,
+      severity: topA.efficiency < 0.1 ? 'warning' : 'info',
+    });
+  }
+
+  // 2. Under-used efficient attacker
+  const underUsed = attackerEntries.find(([, a]) =>
+    a.efficiency > 0.25 && a.pctOfTotal < 0.15 && a.total >= 5 && a.role !== 'P'
+  );
+  if (underUsed) {
+    const [pNum, a] = underUsed;
+    insights.push({
+      type: 'under_used',
+      message: `${a.name} (${a.role}) ha efficienza ${(a.efficiency * 100).toFixed(0)}% ma riceve solo ${(a.pctOfTotal * 100).toFixed(0)}% dei palloni. Possibile risorsa sotto-utilizzata.`,
+      playerNumber: pNum,
+      severity: 'opportunity',
+    });
+  }
+
+  // 3. Over-fed inefficient attacker
+  const overFed = attackerEntries.find(([, a]) =>
+    a.efficiency < 0.05 && a.pctOfTotal > 0.25 && a.total >= 8
+  );
+  if (overFed) {
+    const [pNum, a] = overFed;
+    insights.push({
+      type: 'over_fed',
+      message: `${a.name} (${a.role}) riceve ${(a.pctOfTotal * 100).toFixed(0)}% dei palloni ma efficienza solo ${(a.efficiency * 100).toFixed(0)}%. Distribuzione troppo prevedibile?`,
+      playerNumber: pNum,
+      severity: 'warning',
+    });
+  }
+
+  // 4. Primo tempo usage on good reception
+  const r5Tempo = tempo['R5'];
+  const r4Tempo = tempo['R4'];
+  if (r5Tempo && (r5Tempo.primo + r5Tempo.alto) >= 5) {
+    const primoRate = r5Tempo.primo / (r5Tempo.primo + r5Tempo.alto);
+    if (primoRate < 0.15) {
+      insights.push({
+        type: 'low_primo_tempo',
+        message: `Su R5 (palla perfetta), solo ${(primoRate * 100).toFixed(0)}% va al primo tempo. Il palleggiatore potrebbe sfruttare di più la centrale.`,
+        severity: 'opportunity',
+      });
+    }
+  }
+
+  // 5. Distribution change in transition
+  if (byPhase.sideOut.total >= 10 && byPhase.transition.total >= 5) {
+    const soLeader = Object.entries(byPhase.sideOut.byAttacker).sort((a, b) => b[1].total - a[1].total)[0];
+    const trLeader = Object.entries(byPhase.transition.byAttacker).sort((a, b) => b[1].total - a[1].total)[0];
+    if (soLeader && trLeader && soLeader[0] !== trLeader[0]) {
+      const soName = byAttacker[soLeader[0]]?.name || `#${soLeader[0]}`;
+      const trName = byAttacker[trLeader[0]]?.name || `#${trLeader[0]}`;
+      insights.push({
+        type: 'phase_shift',
+        message: `Cambio distribuzione per fase: in side-out preferisce ${soName}, in transizione preferisce ${trName}.`,
+        severity: 'info',
+      });
+    }
+  }
+
+  // 6. Attack number deterioration
+  if (byAttackNumber[1]?.total >= 10 && byAttackNumber[2]?.total >= 5) {
+    const eff1 = byAttackNumber[1].total > 0 ? (byAttackNumber[1].pts - byAttackNumber[1].err) / byAttackNumber[1].total : 0;
+    const eff2 = byAttackNumber[2].total > 0 ? (byAttackNumber[2].pts - byAttackNumber[2].err) / byAttackNumber[2].total : 0;
+    if (eff1 - eff2 > 0.15) {
+      insights.push({
+        type: 'attack_deterioration',
+        message: `Calo efficacia dal 1° al 2° attacco nel rally: ${(eff1 * 100).toFixed(0)}% → ${(eff2 * 100).toFixed(0)}%. La distribuzione sul 2° attacco potrebbe essere migliorata.`,
+        severity: 'warning',
+      });
+    }
+  }
+
+  // 7. Front vs back row usage
+  const { front, back } = { front: { total: 0, pts: 0, err: 0 }, back: { total: 0, pts: 0, err: 0 } };
+  for (const a of Object.values(byAttacker)) {
+    front.total += a.frontRow.total; front.pts += a.frontRow.pts; front.err += a.frontRow.err;
+    back.total += a.backRow.total; back.pts += a.backRow.pts; back.err += a.backRow.err;
+  }
+  if (front.total + back.total >= 10) {
+    const backPct = back.total / (front.total + back.total);
+    const backEff = back.total > 0 ? (back.pts - back.err) / back.total : 0;
+    const frontEff = front.total > 0 ? (front.pts - front.err) / front.total : 0;
+    insights.push({
+      type: 'row_balance',
+      message: `Distribuzione 1ª linea ${(100 - backPct * 100).toFixed(0)}% (eff. ${(frontEff * 100).toFixed(0)}%) vs 2ª linea ${(backPct * 100).toFixed(0)}% (eff. ${(backEff * 100).toFixed(0)}%).`,
+      severity: backEff < frontEff * 0.5 && backPct > 0.25 ? 'warning' : 'info',
+    });
+  }
+
+  return insights;
+}
+
+// ─── Setter Diagnostics Engine ──────────────────────────────────────────────
+// Cross-references distribution data with rotation context and player trends
+// to produce actionable training recommendations.
+//
+// For each context (rotation × phase × input quality) where an attacker
+// underperforms, it determines:
+//   1. Was the setter's choice wrong? (another available player is better)
+//   2. Is the player in a negative trend? (was better before → needs recovery)
+//   3. Is the player growing but insufficient? (trending up but still low)
+//   4. Structural skill deficit? (needs analytical/synthetic technique work)
+// ────────────────────────────────────────────────────────────────────────────
+export function buildSetterDiagnostics(sd, playerTrends = {}, roster = []) {
+  if (!sd || !sd.byContext || sd.grandTotal < 10) return { diagnostics: [], contextMap: {} };
+
+  const ROLE_ORDER = ['P', 'B1', 'C2', 'O', 'B2', 'C1'];
+  const MIN_CTX_SAMPLE = 3;        // minimum attacks in a context to diagnose
+  const LOW_EFF_THRESHOLD = 0.10;  // below 10% efficiency = problematic
+  const GOOD_EFF_THRESHOLD = 0.25; // above 25% = solid
+  const BETTER_ALTERNATIVE_GAP = 0.15; // 15pp gap to declare setter error
+
+  const diagnostics = [];
+  const contextMap = {};  // enriched context for UI
+
+  // ─── Helper: get all attackers available in a rotation ──
+  function getAvailableAttackers(rotation) {
+    const meta = getRotationMeta(rotation);
+    const available = [];
+    // Front row attackers (exclude setter)
+    for (const p of meta.frontRow) {
+      if (p.role !== 'P') available.push({ ...p, row: 'front' });
+    }
+    // Back row attackers (exclude setter and libero zones)
+    for (const p of meta.backRow) {
+      if (p.role !== 'P' && p.role !== 'L') available.push({ ...p, row: 'back' });
+    }
+    return available;
+  }
+
+  // ─── Helper: find playerNumber by role from sd.byAttacker ──
+  function findPlayerByRole(role) {
+    for (const [pNum, a] of Object.entries(sd.byAttacker)) {
+      if (a.role === role) return pNum;
+    }
+    return null;
+  }
+
+  // ─── Helper: get attack trend for a player ──
+  function getAttackTrend(pNum) {
+    const pt = playerTrends[pNum];
+    if (!pt || !pt.trends?.attack) return null;
+    const t = pt.trends.attack;
+    return {
+      direction: t.weightedTrend || t.rawTrend || 'stable',
+      recentAvg: t.weightedRecentAvg ?? t.rawRecentAvg ?? null,
+      olderAvg: t.weightedOlderAvg ?? t.rawOlderAvg ?? null,
+      overall: t.weightedAvg ?? t.rawAvg ?? null,
+      matchCount: t.playedMatches || 0,
+    };
+  }
+
+  const phaseLabel = { SO: 'Side-out', TR: 'Transizione' };
+  const inputLabel = { R3: 'Ric. scarsa (bagher)', R4: 'Ric. media', R5: 'Ric. perfetta', D3: 'Dif. scarsa', D4: 'Dif. media', D5: 'Dif. perfetta' };
+
+  // ─── Analyze each context ──
+  for (const [ctxKey, ctx] of Object.entries(sd.byContext)) {
+    if (ctx.total < MIN_CTX_SAMPLE) continue;
+
+    const { rot, phase, input } = ctx;
+    const availableRoles = getAvailableAttackers(rot);
+
+    // Build efficiency per attacker in this context
+    const attackerStats = [];
+    for (const [pNum, stats] of Object.entries(ctx.byAttacker)) {
+      if (stats.total < 2) continue;
+      const eff = stats.total > 0 ? (stats.pts - stats.err) / stats.total : 0;
+      const avgVal = stats.total > 0 ? stats.sumVal / stats.total : 0;
+      const pShare = ctx.total > 0 ? stats.total / ctx.total : 0;
+      attackerStats.push({ pNum, ...stats, eff, avgVal, share: pShare, name: sd.byAttacker[pNum]?.name || `#${pNum}`, role: stats.role || sd.byAttacker[pNum]?.role || '' });
+    }
+
+    if (attackerStats.length === 0) continue;
+
+    // Sort by share (who gets most balls in this context)
+    attackerStats.sort((a, b) => b.share - a.share);
+
+    // Enrich context map for UI
+    contextMap[ctxKey] = {
+      rot, phase, input, total: ctx.total,
+      attackers: attackerStats,
+      availableRoles,
+      phaseLabel: phaseLabel[phase] || phase,
+      inputLabel: inputLabel[input] || input,
+    };
+
+    // ─── Diagnostic logic for each main recipient in this context ──
+    for (const attacker of attackerStats) {
+      if (attacker.total < 2) continue;
+      if (attacker.eff >= GOOD_EFF_THRESHOLD) continue; // performing well, no issue
+
+      // This attacker has low efficiency in this context
+      // Step 1: Is there a BETTER alternative in the same rotation?
+      const alternatives = attackerStats.filter(a => a.pNum !== attacker.pNum && a.total >= 2 && a.eff > attacker.eff + BETTER_ALTERNATIVE_GAP);
+
+      // Also check available roles that AREN'T being used in this context but have good overall stats on this input quality
+      const unusedAlternatives = [];
+      for (const avail of availableRoles) {
+        const altPNum = findPlayerByRole(avail.role);
+        if (!altPNum || altPNum === attacker.pNum) continue;
+        if (attackerStats.some(a => a.pNum === altPNum)) continue; // already in context stats
+        // Check this player's global efficiency on this input quality
+        const globalInput = sd.byAttacker[altPNum]?.byInput?.[input];
+        if (globalInput && globalInput.total >= 3) {
+          const altEff = globalInput.total > 0 ? (globalInput.pts - globalInput.err) / globalInput.total : 0;
+          if (altEff > attacker.eff + BETTER_ALTERNATIVE_GAP) {
+            unusedAlternatives.push({
+              pNum: altPNum,
+              name: sd.byAttacker[altPNum]?.name || `#${altPNum}`,
+              role: avail.role,
+              row: avail.row,
+              globalEff: altEff,
+              globalTotal: globalInput.total,
+            });
+          }
+        }
+      }
+
+      // Step 2: Check player trend
+      const trend = getAttackTrend(attacker.pNum);
+
+      // ─── Classify the diagnostic ──
+      if (alternatives.length > 0 || unusedAlternatives.length > 0) {
+        // SETTER CHOICE ISSUE: there's a better player available
+        const bestAlt = alternatives.length > 0
+          ? { ...alternatives[0], source: 'same_context' }
+          : { pNum: unusedAlternatives[0].pNum, name: unusedAlternatives[0].name, role: unusedAlternatives[0].role, eff: unusedAlternatives[0].globalEff, total: unusedAlternatives[0].globalTotal, source: 'global_input' };
+
+        diagnostics.push({
+          type: 'setter_wrong_choice',
+          severity: 'critical',
+          ctxKey,
+          rotation: rot,
+          phase,
+          inputQuality: input,
+          attacker: { pNum: attacker.pNum, name: attacker.name, role: attacker.role, eff: attacker.eff, total: attacker.total, share: attacker.share },
+          alternative: bestAlt,
+          allAlternatives: [...alternatives.map(a => ({ ...a, source: 'same_context' })), ...unusedAlternatives.map(a => ({ ...a, eff: a.globalEff, source: 'global_input' }))],
+          training: {
+            setter: `In P${rot} ${phaseLabel[phase]} su ${inputLabel[input]}: il palleggiatore sceglie ${attacker.name} (${attacker.role}, eff. ${(attacker.eff * 100).toFixed(0)}%) ma ${bestAlt.name} (${bestAlt.role}) ha eff. ${(bestAlt.eff * 100).toFixed(0)}%. Drill situazionale: simulare P${rot} con ${inputLabel[input].toLowerCase()}, insegnare a leggere chi è in condizione migliore.`,
+            player: attacker.eff < LOW_EFF_THRESHOLD
+              ? `${attacker.name}: tecnica analitica su attacco da ${inputLabel[input].toLowerCase()} — efficienza ${(attacker.eff * 100).toFixed(0)}% su ${attacker.total} palloni in P${rot} ${phaseLabel[phase]}.`
+              : null,
+          },
+        });
+      } else if (attacker.eff < LOW_EFF_THRESHOLD) {
+        // No better alternative — it's a PLAYER SKILL issue
+        let subType = 'player_skill_deficit';
+        let trendNote = '';
+
+        if (trend) {
+          if (trend.direction === 'declining') {
+            subType = 'player_skill_declining';
+            const drop = trend.olderAvg !== null && trend.recentAvg !== null
+              ? ((trend.olderAvg - trend.recentAvg) * 100).toFixed(0)
+              : null;
+            trendNote = drop ? ` Trend negativo: calo di ${drop}pp nelle ultime 3 partite.` : ' Trend in calo.';
+          } else if (trend.direction === 'improving') {
+            subType = 'player_skill_growing';
+            trendNote = ' Trend in crescita ma ancora insufficiente.';
+          }
+        }
+
+        diagnostics.push({
+          type: subType,
+          severity: subType === 'player_skill_declining' ? 'warning' : 'moderate',
+          ctxKey,
+          rotation: rot,
+          phase,
+          inputQuality: input,
+          attacker: { pNum: attacker.pNum, name: attacker.name, role: attacker.role, eff: attacker.eff, total: attacker.total, share: attacker.share },
+          trend: trend ? { direction: trend.direction, recentAvg: trend.recentAvg, olderAvg: trend.olderAvg } : null,
+          training: {
+            setter: null, // setter choice is correct, no setter drill
+            player: `${attacker.name} (${attacker.role}): ${subType === 'player_skill_declining' ? 'recupero performance' : subType === 'player_skill_growing' ? 'consolidamento crescita' : 'tecnica analitica e sintetica'} su attacco da ${inputLabel[input].toLowerCase()} in P${rot} ${phaseLabel[phase]}.${trendNote} Eff. ${(attacker.eff * 100).toFixed(0)}% su ${attacker.total} pall.`,
+          },
+        });
+      }
+    }
+  }
+
+  // ─── Sort diagnostics: critical first, then by sample size ──
+  diagnostics.sort((a, b) => {
+    const sevOrder = { critical: 0, warning: 1, moderate: 2 };
+    const sa = sevOrder[a.severity] ?? 3;
+    const sb = sevOrder[b.severity] ?? 3;
+    if (sa !== sb) return sa - sb;
+    return b.attacker.total - a.attacker.total;
+  });
+
+  return { diagnostics, contextMap };
+}

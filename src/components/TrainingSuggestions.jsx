@@ -117,7 +117,7 @@ export default function TrainingSuggestions({ analytics, matches, readOnly = fal
     );
   }
 
-  const { suggestions } = analytics;
+  const suggestions = analytics.trainingSuggestions || analytics.suggestions || [];
 
   // ─── Apply status filter ──────────────────────────────────────────────────
   const filteredSuggestions = suggestions.filter(s => {

@@ -7,7 +7,7 @@ import { analyzeRotationalChains } from '../utils/analyticsEngine';
 const ALL_OPPONENTS_ID = '__all_opponents__';
 const ALL_PLAYERS_ID = '__all_players__';
 
-export default function MatchReport({ analytics, matches, standings, selectedMatch, onSelectMatch, weights, dataMode = 'raw' }) {
+export default function MatchReport({ analytics, matches, standings, selectedMatch, onSelectMatch, weights, dataMode = 'raw', externalScoutOpponent = '', externalOpenCommentTick = 0 }) {
   const [activeSet, setActiveSet] = useState(null);
   const matchAnalytics = analytics?.matchAnalytics || [];
   const opponents = useMemo(() => (
@@ -17,8 +17,12 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
         .filter(Boolean)
     )].sort((a, b) => a.localeCompare(b))
   ), [matchAnalytics]);
-  const [selectedScoutOpponent, setSelectedScoutOpponent] = useState('');
+  const [selectedScoutOpponent, setSelectedScoutOpponent] = useState(ALL_OPPONENTS_ID);
   const [selectedScoutMatchId, setSelectedScoutMatchId] = useState('');
+  useEffect(() => {
+    if (!externalScoutOpponent) return;
+    setSelectedScoutOpponent(externalScoutOpponent);
+  }, [externalScoutOpponent]);
   const activeScoutOpponent = (
     selectedScoutOpponent === ALL_OPPONENTS_ID || opponents.includes(selectedScoutOpponent)
   ) ? selectedScoutOpponent : (opponents[0] || ALL_OPPONENTS_ID);
@@ -55,6 +59,7 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
           selectedMatchMA={selectedOpponentMA}
           selectedOpponentMatches={selectedOpponentMatches}
           dataMode={dataMode}
+          forceOpenCommentTick={externalOpenCommentTick}
         />
         <OpponentSelectedDetailsPanel
           ma={selectedOpponentMA}
@@ -829,8 +834,9 @@ function AggregatedScoutPanel({
   selectedMatchMA,
   selectedOpponentMatches = [],
   dataMode = 'raw',
+  forceOpenCommentTick = 0,
 }) {
-  const [lineMode, setLineMode] = useState('efficacia');
+  const [lineMode, setLineMode] = useState('attitude');
   const [showAttitudeInfo, setShowAttitudeInfo] = useState(false);
   // Close Attitude info dialog on Escape key
   useEffect(() => {
@@ -1090,6 +1096,7 @@ function AggregatedScoutPanel({
           seasonTeamAvg={seasonTeamAvg}
           latestMatchMA={latestMatchMA}
           lineMode={lineMode}
+          forceOpenCommentTick={forceOpenCommentTick}
         />
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <DetailedOppStatCard title="Battuta" data={cardsAgg.serve} type="serve" />
@@ -1940,11 +1947,17 @@ function OpponentScoutComparisonChart({
   activeOpponent,
   onSelectOpponent,
   lineMode = 'efficacia',
+  forceOpenCommentTick = 0,
 }) {
   const [showNoi, setShowNoi] = useState(true);
-  const [showNoiMedi, setShowNoiMedi] = useState(true);
-  const [showNoiOra, setShowNoiOra] = useState(true);
+  const [showNoiMedi, setShowNoiMedi] = useState(false);
+  const [showNoiOra, setShowNoiOra] = useState(false);
   const [showCommento, setShowCommento] = useState(false);
+  useEffect(() => {
+    if (!forceOpenCommentTick) return;
+    if (!selectedMatchMA) return;
+    setShowCommento(true);
+  }, [forceOpenCommentTick, selectedMatchMA]);
   const metricKey = lineMode === 'efficienza' ? 'efficiency' : 'efficacy';
   const selectedOppName = activeOpponent === ALL_OPPONENTS_ID ? 'Tutte le squadre' : activeOpponent;
 
@@ -2059,14 +2072,14 @@ function OpponentScoutComparisonChart({
           >
             Noi ora
           </button>
-          <div className="w-px h-4 bg-white/10" />
-          <button
-            onClick={() => setShowCommento(true)}
-            className={`text-[9px] px-2 py-1 rounded border ${showCommento ? 'bg-indigo-500/20 text-indigo-300 border-indigo-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
-          >
-            Commento
-          </button>
         </div>
+      <div className="relative">
+      <button
+        onClick={() => setShowCommento(true)}
+        className={`absolute top-2 right-2 z-10 text-[9px] px-2 py-1 rounded border ${showCommento ? 'bg-indigo-500/20 text-indigo-300 border-indigo-400/40' : 'bg-slate-900/70 text-gray-300 border-white/10 hover:text-white'}`}
+      >
+        Commento
+      </button>
       <ResponsiveContainer width="100%" height={240}>
         <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
@@ -2108,6 +2121,7 @@ function OpponentScoutComparisonChart({
           )}
         </LineChart>
       </ResponsiveContainer>
+      </div>
       </div>
       <div className="flex flex-wrap gap-1.5 mt-2">
         <button
