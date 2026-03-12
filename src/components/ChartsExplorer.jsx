@@ -200,7 +200,7 @@ export default function ChartsExplorer({
 
   const sharedProps = {
     sortedMA, radarData, matchBarData, teamTrendData, fundTrendData,
-    playerList, playerTrends, topPerformers, rosterRoleMap, onSelectPlayer,
+    playerList, playerTrends, topPerformers, rosterRoleMap, onSelectPlayer, dataMode,
   };
 
   const chartsByCategory = CATEGORIES.slice(1).map(cat => ({
@@ -328,7 +328,7 @@ function ChartCard({ meta, isPinned, onTogglePin, children }) {
 function ChartRenderer({ chartId, props }) {
   const {
     sortedMA, radarData, matchBarData, teamTrendData, fundTrendData,
-    playerList, playerTrends, topPerformers, rosterRoleMap, onSelectPlayer,
+    playerList, playerTrends, topPerformers, rosterRoleMap, onSelectPlayer, dataMode,
   } = props;
 
   switch (chartId) {

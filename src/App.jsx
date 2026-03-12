@@ -36,7 +36,7 @@ import WeightAdjuster from './components/WeightAdjuster';
 import ConfigPanel from './components/ConfigPanel';
 import DatasetManager from './components/DatasetManager';
 import TrainingSuggestions from './components/TrainingSuggestions';
-import SequenceAnalysis from './components/SequenceAnalysis';
+import SequenceAnalysis, { ChainTrainingPlan } from './components/SequenceAnalysis';
 import TeamTrends from './components/TeamTrends';
 import RotationAnalysis from './components/RotationAnalysis';
 import AttackAnalysis from './components/AttackAnalysis';
@@ -54,6 +54,7 @@ const NAV_ITEMS = [
   { id: 'attack',    label: 'Analisi attacco', icon: '⚔' },
   { id: 'training',  label: 'Allenamento',     icon: '⚙' },
   { id: 'sequences', label: 'Coach Brain',      icon: '🧠' },
+  { id: 'training_plan', label: 'Trainig plan', icon: '📅' },
   { id: 'data',      label: 'Dati',            icon: '☰' },
   { id: 'config',    label: 'Config',          icon: '🔧' },
   { id: 'glossary',  label: 'Glossario',       icon: '📖' },
@@ -666,10 +667,10 @@ export default function App() {
     <div className="h-screen flex flex-col overflow-hidden relative" onTouchStart={handleAppTouchStart} onTouchEnd={handleAppTouchEnd}>
       {/* Header — sticky TopAppBar */}
       <header
-        className="sticky top-0 z-50 flex-shrink-0 border-b border-white/5 px-3 sm:px-6 py-3 flex items-center justify-between"
+        className="sticky top-0 z-50 flex-shrink-0 border-b border-white/5 px-2.5 sm:px-6 py-3 flex items-center justify-between gap-2"
         style={{ background: 'linear-gradient(180deg, rgba(17,24,39,0.97), rgba(10,14,26,0.99))', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 min-w-0">
           {isMobilePortrait && (
             <button
               onClick={() => setIsSidebarOpen(v => !v)}
@@ -679,25 +680,16 @@ export default function App() {
               {isSidebarOpen ? '✕' : '☰'}
             </button>
           )}
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center text-lg"
-            style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
-            🏐
-          </div>
-          <div>
-            <h1 className="text-base font-bold tracking-tight" style={{ color: '#f59e0b' }}>{APP_NAME}</h1>
-            <p className="text-[10px] text-gray-500 tracking-widest uppercase">
+          <div className="min-w-0">
+            <h1 className="text-[14px] sm:text-base font-bold tracking-tight whitespace-nowrap truncate leading-none max-w-[185px] sm:max-w-none" style={{ color: '#f59e0b' }}>{APP_NAME}</h1>
+            <p className="text-[10px] text-gray-500 tracking-widest uppercase whitespace-nowrap truncate max-w-[185px] sm:max-w-none">
               v{APP_VERSION} · {matches.length} partite · {allPlayers.length} atlete
             </p>
           </div>
         </div>
 
         {/* Centro: status messaggio */}
-        <div className="flex-1 flex justify-center px-4">
-          {isSharedMode && (
-            <div className="text-[11px] text-sky-400">
-              Modalità sola lettura · Dataset condiviso
-            </div>
-          )}
+        <div className="hidden sm:flex flex-1 justify-center px-4">
           {isLoading && (
             <div className="flex items-center gap-2 text-xs text-amber-400">
               <div className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
@@ -714,30 +706,32 @@ export default function App() {
 
         {/* Utente loggato */}
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 p-0.5 rounded-lg border border-white/10 bg-white/[0.03]">
-            <button
-              onClick={() => setDataMode('raw')}
-              className={`text-[10px] px-2 py-1 rounded-md transition-all ${
-                dataMode === 'raw'
-                  ? 'bg-sky-500/20 text-sky-300'
-                  : 'text-gray-400 hover:text-gray-200'
-              }`}
-              title="Usa dati grezzi"
-            >
-              Grezzi
-            </button>
-            <button
-              onClick={() => setDataMode('weighted')}
-              className={`text-[10px] px-2 py-1 rounded-md transition-all ${
-                dataMode === 'weighted'
-                  ? 'bg-amber-500/20 text-amber-300'
-                  : 'text-gray-400 hover:text-gray-200'
-              }`}
-              title="Usa dati pesati"
-            >
-              Pesati
-            </button>
-          </div>
+          {activeTab !== 'matches' && (
+            <div className="flex items-center gap-1 p-0.5 rounded-lg border border-white/10 bg-white/[0.03]">
+              <button
+                onClick={() => setDataMode('raw')}
+                className={`text-[10px] px-2 py-1 rounded-md transition-all ${
+                  dataMode === 'raw'
+                    ? 'bg-sky-500/20 text-sky-300'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title="Usa dati grezzi"
+              >
+                Grezzi
+              </button>
+              <button
+                onClick={() => setDataMode('weighted')}
+                className={`text-[10px] px-2 py-1 rounded-md transition-all ${
+                  dataMode === 'weighted'
+                    ? 'bg-amber-500/20 text-amber-300'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title="Usa dati pesati"
+              >
+                Pesati
+              </button>
+            </div>
+          )}
           <div className="relative" ref={userMenuRef}>
             <button
               onClick={() => setUserMenuOpen(v => !v)}
@@ -756,6 +750,9 @@ export default function App() {
                   <p className="text-[11px] font-medium text-gray-200 truncate">{user.displayName || 'Account Google'}</p>
                   <p className="text-[10px] text-gray-500 truncate">{user.email || 'Email non disponibile'}</p>
                   <p className="text-[10px] text-sky-400/80 mt-0.5">Database in Cloud</p>
+                  {isSharedMode && (
+                    <p className="text-[10px] text-sky-300 mt-0.5">Modalità sola lettura · Dataset condiviso</p>
+                  )}
                 </div>
                 <button
                   onClick={handleShareOnWhatsApp}
@@ -953,6 +950,15 @@ export default function App() {
               chainSuggestions={analytics?.chainSuggestions}
               matches={matches}
               dataMode={dataMode}
+            />
+          )}
+
+          {activeTab === 'training_plan' && (
+            <ChainTrainingPlan
+              chainSuggestions={analytics?.chainSuggestions}
+              matches={matches}
+              calendar={calendar}
+              ownerTeamName={ownerTeamName}
             />
           )}
 
