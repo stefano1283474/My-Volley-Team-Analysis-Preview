@@ -867,6 +867,7 @@ function AggregatedScoutPanel({
       .sort((a, b) => (b?.match?.metadata?.date || '').localeCompare(a?.match?.metadata?.date || ''))[0] || null
   ), [matchAnalytics]);
   const cardsAgg = selectedOppAgg || agg;
+  const opponentHeaderLabel = activeOpponent === ALL_OPPONENTS_ID ? 'All Opponent' : (activeOpponent || 'Avversario');
 
   if (agg.matchCount === 0) return null;
 
@@ -876,10 +877,9 @@ function AggregatedScoutPanel({
         <div>
           <div className="flex items-center gap-2">
             <span className="text-purple-400 text-sm">●</span>
-            <span className="text-sm font-semibold text-gray-300">Avversario</span>
-            <span className="text-[10px] text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">{agg.matchCount} partite</span>
+            <span className="text-sm font-semibold text-gray-300">{opponentHeaderLabel}</span>
           </div>
-          {selectedMatchMA?.match?.metadata?.date && (
+          {activeOpponent !== ALL_OPPONENTS_ID && selectedMatchMA?.match?.metadata?.date && (
             <div className="mt-1.5 text-sm font-semibold text-gray-300">
               {selectedMatchMA.match.metadata.date}
             </div>
@@ -2039,8 +2039,8 @@ function OpponentScoutComparisonChart({
         </h4>
       </div>
 
-      <div className="relative">
-        <div className="absolute top-2 right-2 z-10 flex items-center gap-1 bg-slate-900/60 border border-white/10 rounded-md p-1">
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-1 bg-slate-900/60 border border-white/10 rounded-md p-1">
           <button
             onClick={() => setShowNoi(v => !v)}
             className={`text-[9px] px-2 py-1 rounded border ${showNoi ? 'bg-amber-500/20 text-amber-300 border-amber-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
@@ -2068,7 +2068,7 @@ function OpponentScoutComparisonChart({
           </button>
         </div>
       <ResponsiveContainer width="100%" height={240}>
-        <LineChart data={chartData} margin={{ top: 28, right: 8, left: 0, bottom: 0 }}>
+        <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
           <XAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 10 }} />
           <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
@@ -2084,9 +2084,9 @@ function OpponentScoutComparisonChart({
           />
           <Legend
             verticalAlign="top"
-            align="right"
-            height={28}
-            wrapperStyle={{ fontSize: 11 }}
+            align="left"
+            height={36}
+            wrapperStyle={{ fontSize: 10 }}
             formatter={(v) => ({
               oppSel: `Media ${selectedOppName}`,
               oppAll: 'Media tutte le squadre',
@@ -2137,13 +2137,13 @@ function OpponentScoutComparisonChart({
 
     </div>
     {showCommento && selectedMatchMA && (
-      <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-6">
+      <div className="fixed inset-0 z-[70] flex items-start sm:items-center justify-center p-2 sm:p-6 overflow-y-auto">
         <button
           onClick={() => setShowCommento(false)}
           className="absolute inset-0 bg-black/70"
           aria-label="Chiudi dialog commento"
         />
-        <div className="relative w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl border border-indigo-500/25 bg-slate-950/95 backdrop-blur-sm shadow-2xl">
+        <div className="relative mt-14 sm:mt-0 w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[85vh] overflow-y-auto rounded-xl border border-indigo-500/25 bg-slate-950/95 backdrop-blur-sm shadow-2xl">
           <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 bg-slate-900/90">
             <h5 className="text-xs font-semibold text-indigo-300 uppercase tracking-wide">Analisi Partita</h5>
             <button
