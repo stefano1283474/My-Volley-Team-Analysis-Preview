@@ -57,6 +57,10 @@ function normalizeTeamName(name) {
   return String(name || '').trim().toUpperCase();
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function createDefaultTrainingSchedule() {
   return TRAINING_DAYS.reduce((acc, day) => {
     const enabled = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].includes(day.id);
@@ -240,14 +244,35 @@ export default function SequenceAnalysis({ chainData, chainSuggestions, matches,
 }
 
 export function ChainTrainingPlan({ analytics, matches, calendar = [], standings = [], ownerTeamName = '', allPlayers = [], onOpenOpponentComment }) {
-  // ─── Data extraction ──
   const chainSuggestions = analytics?.chainSuggestions || [];
   const trainingSuggestions = analytics?.trainingSuggestions || [];
   const playerTrends = analytics?.playerTrends || {};
   const chainData = analytics?.chainData || {};
   const matchAnalytics = analytics?.matchAnalytics || [];
-  const sd = analytics?.setterDistribution || null;
-  const sdDiag = analytics?.setterDiagnostics || { diagnostics: [], contextMap: {} };
+  const rawSd = analytics?.setterDistribution;
+  const sd = useMemo(() => {
+    if (!isPlainObject(rawSd)) return null;
+    return {
+      ...rawSd,
+      grandTotal: Number(rawSd.grandTotal) || 0,
+      tendencies: Array.isArray(rawSd.tendencies) ? rawSd.tendencies : [],
+      byAttacker: isPlainObject(rawSd.byAttacker) ? rawSd.byAttacker : {},
+      byAttackerRow: {
+        front: isPlainObject(rawSd.byAttackerRow?.front) ? rawSd.byAttackerRow.front : { total: 0, pts: 0, err: 0 },
+        back: isPlainObject(rawSd.byAttackerRow?.back) ? rawSd.byAttackerRow.back : { total: 0, pts: 0, err: 0 },
+      },
+      byInputQuality: isPlainObject(rawSd.byInputQuality) ? rawSd.byInputQuality : {},
+      tempo: isPlainObject(rawSd.tempo) ? rawSd.tempo : {},
+      byPhase: isPlainObject(rawSd.byPhase) ? rawSd.byPhase : {},
+      byRotation: isPlainObject(rawSd.byRotation) ? rawSd.byRotation : {},
+      vsOpponent: isPlainObject(rawSd.vsOpponent) ? rawSd.vsOpponent : {},
+    };
+  }, [rawSd]);
+  const rawSdDiag = analytics?.setterDiagnostics;
+  const sdDiag = useMemo(() => ({
+    diagnostics: Array.isArray(rawSdDiag?.diagnostics) ? rawSdDiag.diagnostics : [],
+    contextMap: isPlainObject(rawSdDiag?.contextMap) ? rawSdDiag.contextMap : {},
+  }), [rawSdDiag]);
 
   const allSuggestions = useMemo(() => {
     const merged = [...chainSuggestions, ...trainingSuggestions];
@@ -1315,16 +1340,16 @@ export function ChainTrainingPlan({ analytics, matches, calendar = [], standings
 
                         {/* Training prescription */}
                         <div className="space-y-1.5">
-                          {diag.training.setter && (
+                          {diag.training?.setter && (
                             <div className="bg-red-500/[0.04] border border-red-500/10 rounded-lg p-2.5">
                               <div className="text-[7px] text-red-400/70 font-bold uppercase mb-0.5">🎯 Lavoro Palleggiatore</div>
-                              <p className="text-[9px] text-gray-300 leading-relaxed">{diag.training.setter}</p>
+                              <p className="text-[9px] text-gray-300 leading-relaxed">{diag.training?.setter}</p>
                             </div>
                           )}
-                          {diag.training.player && (
+                          {diag.training?.player && (
                             <div className="bg-sky-500/[0.04] border border-sky-500/10 rounded-lg p-2.5">
                               <div className="text-[7px] text-sky-400/70 font-bold uppercase mb-0.5">🔧 Lavoro Tecnico Attaccante</div>
-                              <p className="text-[9px] text-gray-300 leading-relaxed">{diag.training.player}</p>
+                              <p className="text-[9px] text-gray-300 leading-relaxed">{diag.training?.player}</p>
                             </div>
                           )}
                         </div>
