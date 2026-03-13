@@ -2735,23 +2735,23 @@ function OpponentScoutComparisonChart({
 
     </div>
     {showCommento && selectedMatchMA && (
-      <div className="fixed inset-0 z-[70] flex items-start sm:items-center justify-center p-2 sm:p-6 overflow-y-auto">
+      <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
         <button
           onClick={() => setShowCommento(false)}
-          className="absolute inset-0 bg-black/70"
+          className="absolute inset-0 bg-black/75 backdrop-blur-[2px]"
           aria-label="Chiudi dialog commento"
         />
-        <div className="relative mt-14 sm:mt-0 w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[85vh] overflow-y-auto rounded-xl border border-indigo-500/25 bg-slate-950/95 backdrop-blur-sm shadow-2xl">
-          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 bg-slate-900/90">
-            <h5 className="text-xs font-semibold text-indigo-300 uppercase tracking-wide">Analisi Partita</h5>
+        <div className="relative w-full max-w-4xl max-h-[88dvh] overflow-y-auto rounded-2xl border border-indigo-300/35 bg-slate-950/95 backdrop-blur-md shadow-[0_24px_80px_rgba(0,0,0,0.65)] ring-1 ring-indigo-400/25">
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4 border-b border-white/10 bg-slate-900/95">
+            <h5 className="text-sm sm:text-base font-bold text-indigo-200 uppercase tracking-wider">Analisi Partita</h5>
             <button
               onClick={() => setShowCommento(false)}
-              className="text-[11px] px-2 py-1 rounded border bg-white/[0.03] text-gray-300 border-white/10 hover:text-white"
+              className="text-xs sm:text-sm px-3 py-1.5 rounded-lg border bg-white/[0.05] text-gray-200 border-white/15 hover:text-white hover:bg-white/[0.09] transition-colors"
             >
               Chiudi
             </button>
           </div>
-          <div className="p-4">
+          <div className="p-5 sm:p-6">
             <CommentoPanel
               selectedMatchMA={selectedMatchMA}
               selectedOppAgg={selectedOppAgg}
@@ -2769,11 +2769,11 @@ function OpponentScoutComparisonChart({
 function InfoTooltip({ label, values }) {
   return (
     <span className="relative group inline-flex items-center align-middle">
-      <span className="text-sky-400 cursor-help ml-1 text-[10px] font-bold leading-none">ⓘ</span>
-      <span className="hidden group-hover:block absolute z-50 bottom-full left-0 mb-1.5 min-w-[190px] max-w-[260px] bg-slate-900 border border-white/20 rounded-lg p-2.5 text-[10px] shadow-2xl pointer-events-none">
+      <span className="text-sky-400 cursor-help ml-1 text-[11px] font-bold leading-none">ⓘ</span>
+      <span className="hidden group-hover:block absolute z-50 bottom-full left-0 mb-1.5 min-w-[220px] max-w-[320px] bg-slate-900 border border-white/20 rounded-lg p-3 text-[11px] shadow-2xl pointer-events-none">
         {label && <span className="block font-semibold text-white mb-1.5 border-b border-white/10 pb-1">{label}</span>}
         {(values || []).map((v, i) => (
-          <span key={i} className="block text-gray-400 leading-relaxed">{v}</span>
+          <span key={i} className="block text-gray-300 leading-relaxed">{v}</span>
         ))}
       </span>
     </span>
@@ -2784,7 +2784,7 @@ function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, activeO
   const sections = generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, activeOpponent);
 
   if (!sections) {
-    return <p className="text-xs text-gray-400 italic">Dati insufficienti per generare un'analisi completa.</p>;
+    return <p className="text-sm text-gray-300 italic">Dati insufficienti per generare un'analisi completa.</p>;
   }
 
   const colorMap = {
@@ -2796,23 +2796,23 @@ function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, activeO
   };
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-3">
       {sections.map((section) => {
         const c = colorMap[section.color] || colorMap.indigo;
         return (
-          <div key={section.id} className={`rounded-lg border ${c.border} ${c.bg} p-2.5`}>
-            <h6 className={`text-[9px] font-bold uppercase tracking-widest ${c.title} mb-2`}>
+          <div key={section.id} className={`rounded-xl border ${c.border} ${c.bg} p-3.5 sm:p-4`}>
+            <h6 className={`text-[11px] sm:text-xs font-bold uppercase tracking-widest ${c.title} mb-2.5`}>
               {section.title}
             </h6>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {section.items.map((item, idx) => (
-                <p key={idx} className={`text-[11px] leading-relaxed ${
+                <p key={idx} className={`text-[13px] sm:text-sm leading-relaxed ${
                   item.positive === true  ? 'text-gray-200' :
-                  item.positive === false ? 'text-gray-400' :
-                  'text-gray-300'
+                  item.positive === false ? 'text-gray-300' :
+                  'text-gray-200'
                 } ${item.highlight ? 'font-medium' : ''}`}>
-                  {item.positive === true  && <span className="text-emerald-400 mr-1 text-[10px]">▲</span>}
-                  {item.positive === false && <span className="text-rose-400 mr-1 text-[10px]">▼</span>}
+                  {item.positive === true  && <span className="text-emerald-400 mr-1 text-xs">▲</span>}
+                  {item.positive === false && <span className="text-rose-400 mr-1 text-xs">▼</span>}
                   {item.text}
                   {item.tooltip && (
                     <InfoTooltip label={item.tooltip.label} values={item.tooltip.values} />
