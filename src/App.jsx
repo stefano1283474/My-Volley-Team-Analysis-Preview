@@ -45,9 +45,11 @@ import RotationAnalysis from './components/RotationAnalysis';
 import AttackAnalysis from './components/AttackAnalysis';
 import LoginPage from './components/LoginPage';
 import Glossary from './components/Glossary';
+import AnalisiPage from './components/AnalisiPage';
 
 // ─── Navigation tabs ─────────────────────────────────────────────────────────
 const NAV_ITEMS = [
+  { id: 'analisi',   label: 'Analisi',         icon: '🔬' },
   { id: 'dashboard', label: 'Dashboard',       icon: '◉' },
   { id: 'grafici',   label: 'Grafici',         icon: '📊' },
   { id: 'matches',   label: 'Partite',         icon: '⚡' },
@@ -868,7 +870,17 @@ export default function App() {
         </nav>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+        <main className={`flex-1 ${activeTab === 'analisi' ? 'overflow-hidden' : 'overflow-y-auto p-4 sm:p-6'}`}>
+          {activeTab === 'analisi' && (
+            <AnalisiPage
+              analytics={analytics}
+              matches={matches}
+              standings={standings}
+              dataMode={dataMode}
+              allPlayers={allPlayers}
+            />
+          )}
+
           {activeTab === 'data' && (
             <DatasetManager
               matches={matches}
