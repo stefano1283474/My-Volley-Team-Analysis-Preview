@@ -1,16 +1,15 @@
 // ============================================================================
-// ANALISI PAGE — Pagina di analisi con navigazione a tab nella bottom bar
+// EVIDENCE PAGE — Pagina delle evidenze con navigazione a tab nella bottom bar
 // ============================================================================
 import { useState } from 'react';
-import GiocoAnalysis from './GiocoAnalysis';
 
 // ─── Sub-tab definitions ─────────────────────────────────────────────────────
-const ANALISI_TABS = [
-  { id: 'partite',   label: 'Partite',   icon: '⚡' },
-  { id: 'avversari', label: 'Avversari', icon: '🎯' },
-  { id: 'mio_team',  label: 'Mio Team',  icon: '🛡' },
-  { id: 'player',    label: 'Player',    icon: '★'  },
-  { id: 'gioco',     label: 'Gioco',     icon: '🏐' },
+const EVIDENCE_TABS = [
+  { id: 'trend',         label: 'Trend',         icon: '📈' },
+  { id: 'rotazioni',     label: 'Rotazioni',     icon: '🔄' },
+  { id: 'suggerimenti',  label: 'Suggerimenti',  icon: '💡' },
+  { id: 'coach_brain',   label: 'Coach Brain',   icon: '🧠' },
+  { id: 'allenamento',   label: 'Allenamento',   icon: '🏋️' },
 ];
 
 // ─── Placeholder panel ───────────────────────────────────────────────────────
@@ -24,42 +23,21 @@ function EmptyTab({ label }) {
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
-export default function AnalisiPage({
+export default function EvidencePage({
   analytics,
   matches = [],
   standings = [],
   dataMode = 'raw',
   allPlayers = [],
 }) {
-  const [activeTab, setActiveTab] = useState('partite');
-
-  // Build roster from all matches (union of all players seen)
-  const roster = (() => {
-    const seen = {};
-    for (const m of matches) {
-      for (const p of m.roster || []) {
-        if (p.number && !seen[p.number]) seen[p.number] = p;
-      }
-    }
-    return Object.values(seen);
-  })();
+  const [activeTab, setActiveTab] = useState('trend');
 
   return (
     <div className="flex flex-col h-full">
 
       {/* ── Scrollable content area ─────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-        {activeTab === 'partite'   && <EmptyTab label="Partite" />}
-        {activeTab === 'avversari' && <EmptyTab label="Avversari" />}
-        {activeTab === 'mio_team'  && <EmptyTab label="Mio Team" />}
-        {activeTab === 'player'    && <EmptyTab label="Player" />}
-        {activeTab === 'gioco'     && (
-          <GiocoAnalysis
-            matches={matches}
-            standings={standings}
-            roster={roster}
-          />
-        )}
+        <EmptyTab label={EVIDENCE_TABS.find(t => t.id === activeTab)?.label} />
       </div>
 
       {/* ── Bottom tab bar ──────────────────────────────────────────────── */}
@@ -71,7 +49,7 @@ export default function AnalisiPage({
           WebkitBackdropFilter: 'blur(12px)',
         }}
       >
-        {ANALISI_TABS.map(tab => {
+        {EVIDENCE_TABS.map(tab => {
           const active = activeTab === tab.id;
           return (
             <button

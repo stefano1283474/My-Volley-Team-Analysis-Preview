@@ -46,10 +46,14 @@ import AttackAnalysis from './components/AttackAnalysis';
 import LoginPage from './components/LoginPage';
 import Glossary from './components/Glossary';
 import AnalisiPage from './components/AnalisiPage';
+import EvidencePage from './components/EvidencePage';
+import TrainPage from './components/TrainPage';
 
 // ─── Navigation tabs ─────────────────────────────────────────────────────────
 const NAV_ITEMS = [
   { id: 'analisi',   label: 'Analisi',         icon: '🔬' },
+  { id: 'evidence',  label: 'Evidence',        icon: '🔍' },
+  { id: 'train',     label: 'Train',           icon: '🏋️' },
   { id: 'dashboard', label: 'Dashboard',       icon: '◉' },
   { id: 'grafici',   label: 'Grafici',         icon: '📊' },
   { id: 'matches',   label: 'Partite',         icon: '⚡' },
@@ -96,6 +100,21 @@ export default function App() {
   const [standings, setStandings]         = useState([]);
   const [weights, setWeights]             = useState(DEFAULT_WEIGHTS);
   const [dataMode, setDataMode]           = useState('raw');
+  const [capFilterEnabled, setCapFilterEnabled] = useState(() => {
+    try { return localStorage.getItem('vpa_cap_filter_enabled') === '1'; } catch { return false; }
+  });
+  const [capMinPriority, setCapMinPriority] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem('vpa_cap_min_priority'));
+      return Number.isFinite(v) ? Math.min(5, Math.max(1, Math.round(v))) : 2;
+    } catch { return 2; }
+  });
+  const [capMaxPriority, setCapMaxPriority] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem('vpa_cap_max_priority'));
+      return Number.isFinite(v) ? Math.min(5, Math.max(1, Math.round(v))) : 4;
+    } catch { return 4; }
+  });
 
   // ── FNC & Profile state ──────────────────────────────────────────────────
   const [fncConfig, setFncConfig] = useState(() => {
@@ -132,6 +151,15 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('vpa_fnc_config', JSON.stringify(fncConfig)); } catch {}
   }, [fncConfig]);
+  useEffect(() => {
+    try { localStorage.setItem('vpa_cap_filter_enabled', capFilterEnabled ? '1' : '0'); } catch {}
+  }, [capFilterEnabled]);
+  useEffect(() => {
+    try { localStorage.setItem('vpa_cap_min_priority', String(capMinPriority)); } catch {}
+  }, [capMinPriority]);
+  useEffect(() => {
+    try { localStorage.setItem('vpa_cap_max_priority', String(capMaxPriority)); } catch {}
+  }, [capMaxPriority]);
 
   const handleFncConfigChange = useCallback((updater) => {
     setFncConfig(prev => {
@@ -870,9 +898,19 @@ export default function App() {
         </nav>
 
         {/* Main Content */}
-        <main className={`flex-1 ${activeTab === 'analisi' ? 'overflow-hidden' : 'overflow-y-auto p-4 sm:p-6'}`}>
+        <main className={`flex-1 ${['analisi', 'evidence'].includes(activeTab) ? 'overflow-hidden' : 'overflow-y-auto p-4 sm:p-6'}`}>
           {activeTab === 'analisi' && (
             <AnalisiPage
+              analytics={analytics}
+              matches={matches}
+              standings={standings}
+              dataMode={dataMode}
+              allPlayers={allPlayers}
+            />
+          )}
+
+          {activeTab === 'evidence' && (
+            <EvidencePage
               analytics={analytics}
               matches={matches}
               standings={standings}
@@ -1001,6 +1039,20 @@ export default function App() {
               dataMode={dataMode}
               readOnly={!canEditDataset}
               datasetOwnerUid={dataOwnerUid}
+              capFilterEnabled={capFilterEnabled}
+              onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
+              capMinPriority={capMinPriority}
+              capMaxPriority={capMaxPriority}
+              onCapMinChange={(v) => {
+                const next = Math.min(5, Math.max(1, Math.round(Number(v) || 1)));
+                setCapMinPriority(next);
+                if (next > capMaxPriority) setCapMaxPriority(next);
+              }}
+              onCapMaxChange={(v) => {
+                const next = Math.min(5, Math.max(1, Math.round(Number(v) || 5)));
+                setCapMaxPriority(next);
+                if (next < capMinPriority) setCapMinPriority(next);
+              }}
             />
           )}
 
@@ -1028,6 +1080,32 @@ export default function App() {
               chainSuggestions={analytics?.chainSuggestions}
               matches={matches}
               dataMode={dataMode}
+              capFilterEnabled={capFilterEnabled}
+              onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
+              capMinPriority={capMinPriority}
+              capMaxPriority={capMaxPriority}
+              onCapMinChange={(v) => {
+                const next = Math.min(5, Math.max(1, Math.round(Number(v) || 1)));
+                setCapMinPriority(next);
+                if (next > capMaxPriority) setCapMaxPriority(next);
+              }}
+              onCapMaxChange={(v) => {
+                const next = Math.min(5, Math.max(1, Math.round(Number(v) || 5)));
+                setCapMaxPriority(next);
+                if (next < capMinPriority) setCapMinPriority(next);
+              }}
+            />
+          )}
+
+          {activeTab === 'train' && (
+            <TrainPage 
+              analytics={analytics}
+              matches={matches}
+              calendar={calendar}
+              standings={standings}
+              ownerTeamName={ownerTeamName}
+              allPlayers={allPlayers}
+              onOpenOpponentComment={handleOpenOpponentCommentFromTrainingPlan}
             />
           )}
 

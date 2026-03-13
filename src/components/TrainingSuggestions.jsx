@@ -5,7 +5,7 @@
 // Sistema di revisione: Visto / Da vedere / Ignora — persistito su Firestore
 // ============================================================================
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { COLORS } from '../utils/constants';
 import { useAuth } from '../context/AuthContext';
@@ -61,9 +61,32 @@ function suggKey(s) {
   return `${s.playerNumber || 'team'}_${s.fundamental || 'general'}_${s.type}`;
 }
 
+function applyCapFilter(suggestions, enabled, minPriority, maxPriority) {
+  if (!enabled) return suggestions;
+  const minP = Number.isFinite(Number(minPriority)) ? Number(minPriority) : 1;
+  const maxP = Number.isFinite(Number(maxPriority)) ? Number(maxPriority) : 5;
+  return (suggestions || []).filter(s => {
+    const p = Number(s?.priority);
+    if (!Number.isFinite(p)) return true;
+    return p >= minP && p <= maxP;
+  });
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
-export default function TrainingSuggestions({ analytics, matches, readOnly = false, datasetOwnerUid = '', dataMode = 'raw' }) {
+export default function TrainingSuggestions({
+  analytics,
+  matches,
+  readOnly = false,
+  datasetOwnerUid = '',
+  dataMode = 'raw',
+  capFilterEnabled = false,
+  onToggleCapFilter = () => {},
+  capMinPriority = 2,
+  capMaxPriority = 4,
+  onCapMinChange = () => {},
+  onCapMaxChange = () => {},
+}) {
   const { user } = useAuth();
 
   const [activeView,    setActiveView]    = useState('all');
@@ -117,7 +140,11 @@ export default function TrainingSuggestions({ analytics, matches, readOnly = fal
     );
   }
 
-  const suggestions = analytics.trainingSuggestions || analytics.suggestions || [];
+  const baseSuggestions = analytics.trainingSuggestions || analytics.suggestions || [];
+  const suggestions = useMemo(
+    () => applyCapFilter(baseSuggestions, capFilterEnabled, capMinPriority, capMaxPriority),
+    [baseSuggestions, capFilterEnabled, capMinPriority, capMaxPriority]
+  );
 
   // ─── Apply status filter ──────────────────────────────────────────────────
   const filteredSuggestions = suggestions.filter(s => {
@@ -158,7 +185,19 @@ export default function TrainingSuggestions({ analytics, matches, readOnly = fal
 
       {/* Header */}
       <div>
-        <h2 className="text-xl font-bold text-white mb-1">Suggerimenti Allenamento</h2>
+        <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+          <h2 className="text-xl font-bold text-white">Suggerimenti Allenamento</h2>
+          <button
+            onClick={onToggleCapFilter}
+            className={`text-[10px] px-2.5 py-1 rounded border transition-all ${
+              capFilterEnabled
+                ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                : 'bg-white/[0.03] text-gray-400 border-white/10 hover:text-gray-200'
+            }`}
+          >
+            CAP {capFilterEnabled ? 'ON' : 'OFF'}
+          </button>
+        </div>
         <p className="text-sm text-gray-400">
           {matches.length} partite analizzate · {suggestions.length} suggerimenti ·{' '}
           <span className="text-green-400">{counts.visto} visti</span>
@@ -175,6 +214,45 @@ export default function TrainingSuggestions({ analytics, matches, readOnly = fal
             ⚖ I suggerimenti sono generati dall'analisi pesata: i trend e le soglie tengono conto del contesto delle partite.
           </p>
         )}
+        {capFilterEnabled && (
+          <p className="text-[11px] text-amber-300/80 mt-1">
+            Filtro CAP attivo: incluse solo priorità da P{capMinPriority} a P{capMaxPriority}.
+          </p>
+        )}
+        <div className={`mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 ${capFilterEnabled ? '' : 'opacity-60'}`}>
+          <label className="glass-card px-3 py-2 block">
+            <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
+              <span>CAP basso</span>
+              <span className="text-gray-300 font-mono">P{capMinPriority}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={5}
+              step={1}
+              value={capMinPriority}
+              onChange={(e) => onCapMinChange(Number(e.target.value))}
+              disabled={!capFilterEnabled}
+              className="w-full accent-amber-400"
+            />
+          </label>
+          <label className="glass-card px-3 py-2 block">
+            <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
+              <span>CAP alto</span>
+              <span className="text-gray-300 font-mono">P{capMaxPriority}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={5}
+              step={1}
+              value={capMaxPriority}
+              onChange={(e) => onCapMaxChange(Number(e.target.value))}
+              disabled={!capFilterEnabled}
+              className="w-full accent-amber-400"
+            />
+          </label>
+        </div>
       </div>
 
       {/* View tabs */}

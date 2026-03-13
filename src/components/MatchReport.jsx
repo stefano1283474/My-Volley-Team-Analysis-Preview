@@ -2652,9 +2652,13 @@ function OpponentScoutComparisonChart({
       <div className="relative">
       <button
         onClick={() => setShowCommento(true)}
-        className={`absolute top-2 right-2 z-10 text-[9px] px-2 py-1 rounded border ${showCommento ? 'bg-indigo-500/20 text-indigo-300 border-indigo-400/40' : 'bg-slate-900/70 text-gray-300 border-white/10 hover:text-white'}`}
+        className={`absolute top-2 right-2 z-10 text-[11px] px-3 py-1.5 rounded-lg border font-semibold tracking-wide shadow-lg transition-all ${
+          showCommento
+            ? 'bg-indigo-500/35 text-white border-indigo-300/70 shadow-indigo-500/30 ring-1 ring-indigo-300/40'
+            : 'bg-indigo-500/20 text-indigo-100 border-indigo-300/55 hover:bg-indigo-500/30 hover:text-white hover:scale-[1.03] shadow-indigo-500/20'
+        }`}
       >
-        Commento
+        💬 Commento
       </button>
       <ResponsiveContainer width="100%" height={240}>
         <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>

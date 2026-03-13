@@ -152,9 +152,31 @@ function totalInMatrix(m) {
   return Object.values(m).reduce((s, v) => s + v, 0);
 }
 
+function applyCapFilter(suggestions, enabled, minPriority, maxPriority) {
+  if (!enabled) return suggestions;
+  const minP = Number.isFinite(Number(minPriority)) ? Number(minPriority) : 1;
+  const maxP = Number.isFinite(Number(maxPriority)) ? Number(maxPriority) : 5;
+  return (suggestions || []).filter(s => {
+    const p = Number(s?.priority);
+    if (!Number.isFinite(p)) return true;
+    return p >= minP && p <= maxP;
+  });
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function SequenceAnalysis({ chainData, chainSuggestions, matches, dataMode = 'raw' }) {
+export default function SequenceAnalysis({
+  chainData,
+  chainSuggestions,
+  matches,
+  dataMode = 'raw',
+  capFilterEnabled = false,
+  onToggleCapFilter = () => {},
+  capMinPriority = 2,
+  capMaxPriority = 4,
+  onCapMinChange = () => {},
+  onCapMaxChange = () => {},
+}) {
   const [activeTab, setActiveTab] = useState('suggestions');
 
   if (!chainData || matches.length < 2) {
@@ -169,18 +191,34 @@ export default function SequenceAnalysis({ chainData, chainSuggestions, matches,
     );
   }
 
-  const suggestions = chainSuggestions || [];
+  const baseSuggestions = chainSuggestions || [];
+  const suggestions = useMemo(
+    () => applyCapFilter(baseSuggestions, capFilterEnabled, capMinPriority, capMaxPriority),
+    [baseSuggestions, capFilterEnabled, capMinPriority, capMaxPriority]
+  );
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
 
       {/* Header */}
       <div>
-        <div className="flex items-center gap-3 mb-1">
-          <h2 className="text-xl font-bold text-white">Coach Brain</h2>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20">
-            NUOVO
-          </span>
+        <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold text-white">Coach Brain</h2>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20">
+              NUOVO
+            </span>
+          </div>
+          <button
+            onClick={onToggleCapFilter}
+            className={`text-[10px] px-2.5 py-1 rounded border transition-all ${
+              capFilterEnabled
+                ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                : 'bg-white/[0.03] text-gray-400 border-white/10 hover:text-gray-200'
+            }`}
+          >
+            CAP {capFilterEnabled ? 'ON' : 'OFF'}
+          </button>
         </div>
         <p className="text-sm text-gray-400">
           {matches.length} partite · analisi delle catene di gioco dalle quartine scout ·{' '}
@@ -198,6 +236,45 @@ export default function SequenceAnalysis({ chainData, chainSuggestions, matches,
         <p className="text-[11px] text-gray-600 mt-0.5">
           KPI basati su R→A (side-out), D→A (transizione), catena battuta→difesa, rally lunghi e analisi per rotazione.
         </p>
+        {capFilterEnabled && (
+          <p className="text-[11px] text-amber-300/80 mt-0.5">
+            Filtro CAP attivo: incluse solo priorità da P{capMinPriority} a P{capMaxPriority}.
+          </p>
+        )}
+        <div className={`mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 ${capFilterEnabled ? '' : 'opacity-60'}`}>
+          <label className="glass-card px-3 py-2 block">
+            <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
+              <span>CAP basso</span>
+              <span className="text-gray-300 font-mono">P{capMinPriority}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={5}
+              step={1}
+              value={capMinPriority}
+              onChange={(e) => onCapMinChange(Number(e.target.value))}
+              disabled={!capFilterEnabled}
+              className="w-full accent-amber-400"
+            />
+          </label>
+          <label className="glass-card px-3 py-2 block">
+            <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
+              <span>CAP alto</span>
+              <span className="text-gray-300 font-mono">P{capMaxPriority}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={5}
+              step={1}
+              value={capMaxPriority}
+              onChange={(e) => onCapMaxChange(Number(e.target.value))}
+              disabled={!capFilterEnabled}
+              className="w-full accent-amber-400"
+            />
+          </label>
+        </div>
       </div>
 
       {/* Tab bar */}
