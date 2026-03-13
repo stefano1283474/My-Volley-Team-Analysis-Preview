@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, LineChart, Line } from 'recharts';
+  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, LineChart, Line, ReferenceLine } from 'recharts';
 import { COLORS } from '../utils/constants';
 import { analyzeRotationalChains } from '../utils/analyticsEngine';
 
@@ -9,7 +9,7 @@ const ALL_PLAYERS_ID = '__all_players__';
 
 export default function MatchReport({ analytics, matches, standings, selectedMatch, onSelectMatch, weights, dataMode = 'raw', externalScoutOpponent = '', externalOpenCommentTick = 0 }) {
   const [activeSet, setActiveSet] = useState(null);
-  const matchAnalytics = analytics?.matchAnalytics || [];
+  const matchAnalytics = (analytics?.matchAnalytics || []).filter(ma => ma?.match);
   const opponents = useMemo(() => (
     [...new Set(
       (matchAnalytics || [])
@@ -33,14 +33,14 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
           ? true
           : (ma?.match?.metadata?.opponent || '') === activeScoutOpponent
       ))
-      .sort((a, b) => (b.match.metadata?.date || '').localeCompare(a.match.metadata?.date || ''))
+      .sort((a, b) => (b?.match?.metadata?.date || '').localeCompare(a?.match?.metadata?.date || ''))
   ), [matchAnalytics, activeScoutOpponent]);
   const activeScoutMatchId = selectedOpponentMatches.some(ma => ma?.match?.id === selectedScoutMatchId)
     ? selectedScoutMatchId
     : (selectedOpponentMatches[0]?.match?.id || '');
   const selectedOpponentMA = selectedOpponentMatches.find(ma => ma?.match?.id === activeScoutMatchId) || null;
 
-  if (!analytics || matches.length === 0) {
+  if (!analytics || !Array.isArray(matches) || matches.length === 0) {
     return <EmptyState message="Carica almeno una partita per vedere il report." />;
   }
 
@@ -61,42 +61,62 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
           dataMode={dataMode}
           forceOpenCommentTick={externalOpenCommentTick}
         />
-        <OpponentSelectedDetailsPanel
-          ma={selectedOpponentMA}
-          allMatchesVsOpponent={selectedOpponentMatches}
-          onSelectMatch={onSelectMatch}
-          matchAnalytics={matchAnalytics}
-          selectedOpponent={activeScoutOpponent}
-          dataMode={dataMode}
-        />
+        {activeScoutOpponent === ALL_OPPONENTS_ID ? (
+          <AllTeamsComparisonPanel
+            matchAnalytics={matchAnalytics}
+            standings={standings}
+          />
+        ) : (
+          <OpponentSelectedDetailsPanel
+            ma={selectedOpponentMA}
+            allMatchesVsOpponent={selectedOpponentMatches}
+            onSelectMatch={onSelectMatch}
+            matchAnalytics={matchAnalytics}
+            selectedOpponent={activeScoutOpponent}
+            dataMode={dataMode}
+          />
+        )}
       </div>
     );
   }
 
-  const ma = analytics.matchAnalytics.find(a => a.match.id === selectedMatch.id);
-  if (!ma) return <EmptyState message="Partita non trovata nell'analisi." />;
+  const ma = matchAnalytics.find(a => a.match.id === selectedMatch.id);
+  if (!ma?.match) return <EmptyState message="Partita non trovata nell'analisi." />;
 
-  const { match, matchWeight, report, chains, playerStats, oppStats, fundWeights } = ma;
+  const {
+    match,
+    matchWeight = { final: 1, components: {} },
+    report = { summary: '', oppAssessment: '', keyFindings: [], concerns: [] },
+    chains = { sideOut: { pct: 0, won: 0, total: 0 }, breakPoint: { pct: 0, won: 0, total: 0 } },
+    playerStats = [],
+    oppStats = {},
+    fundWeights = {},
+  } = ma;
   const setsWon = (match.sets || []).filter(s => s.won).length;
   const setsLost = (match.sets || []).filter(s => !s.won).length;
 
   // Player stats comparison data
   const playerCompData = playerStats
-    .filter(p => (p.raw.attack.tot > 0 || p.raw.serve.tot > 0 || p.raw.reception.tot > 0 || p.raw.defense.tot > 0))
+    .filter(p => (
+      (p?.raw?.attack?.tot || 0) > 0 ||
+      (p?.raw?.serve?.tot || 0) > 0 ||
+      (p?.raw?.reception?.tot || 0) > 0 ||
+      (p?.raw?.defense?.tot || 0) > 0
+    ))
     .map(p => ({
       name: p.name,
-      attRaw: (p.raw.attack.efficacy * 100),
-      attWeighted: (p.weighted.attack.efficacy * 100),
-      serRaw: (p.raw.serve.efficacy * 100),
-      serWeighted: (p.weighted.serve.efficacy * 100),
-      recRaw: (p.raw.reception.efficacy * 100),
-      recWeighted: (p.weighted.reception.efficacy * 100),
-      defRaw: (p.raw.defense.efficacy * 100),
-      defWeighted: (p.weighted.defense.efficacy * 100),
+      attRaw: ((p?.raw?.attack?.efficacy || 0) * 100),
+      attWeighted: ((p?.weighted?.attack?.efficacy || 0) * 100),
+      serRaw: ((p?.raw?.serve?.efficacy || 0) * 100),
+      serWeighted: ((p?.weighted?.serve?.efficacy || 0) * 100),
+      recRaw: ((p?.raw?.reception?.efficacy || 0) * 100),
+      recWeighted: ((p?.weighted?.reception?.efficacy || 0) * 100),
+      defRaw: ((p?.raw?.defense?.efficacy || 0) * 100),
+      defWeighted: ((p?.weighted?.defense?.efficacy || 0) * 100),
     }));
 
   // Weight breakdown data
-  const weightBreakdown = Object.entries(matchWeight.components).map(([key, val]) => ({
+  const weightBreakdown = Object.entries(matchWeight.components || {}).map(([key, val]) => ({
     name: {
       opponentStrength: 'Forza Avv.',
       opponentPerformance: 'Performance Avv.',
@@ -751,7 +771,7 @@ function computeTeamFundAverages(matchAnalytics) {
       acc[key].efficiency.push(effncy * 100);
       // Media Ponderata — our team has all individual values (kill=5, pos=4, exc=3, neg=2, err=1)
       const mpRaw = (1*(data.err||0) + 2*(data.neg||0) + 3*(data.exc||0) + 4*(data.pos||0) + 5*(data.kill||0)) / total;
-      acc[key].mediaPond.push((mpRaw / 5) * 100); // normalize to 0–100 for chart parity
+      acc[key].mediaPond.push(mpRaw);
     }
     // Attitude per match
     const att = computeAttitude(ma?.match);
@@ -781,7 +801,7 @@ function getMatchTeamValue(selectedMatchMA, key, metric) {
   if (metric === 'mediaPond') {
     // Our team has full individual values: err=1, neg=2, exc=3, pos=4, kill=5
     const mp = (1*(data.err||0) + 2*(data.neg||0) + 3*(data.exc||0) + 4*(data.pos||0) + 5*(data.kill||0)) / tot;
-    return Number.isFinite(mp) ? roundValue((mp / 5) * 100) : null;
+    return Number.isFinite(mp) ? roundValue(mp) : null;
   }
   if (key === 'defense' || key === 'reception') {
     const pos45 = (data.kill || 0) + (data.pos || 0);
@@ -791,6 +811,87 @@ function getMatchTeamValue(selectedMatchMA, key, metric) {
     value = metric === 'efficacy' ? kill / tot : (kill - (data.err || 0)) / tot;
   }
   return Number.isFinite(value) ? roundValue(value * 100) : null;
+}
+
+// ─── computeExpectedMP ────────────────────────────────────────────────────────
+// Computes expected mediaPond per opponent based on standings position + points.
+// Formula:
+//   posScore = 1 − (rank−1) / (n−1)          (1st → 1.0, last → 0.0)
+//   ptsScore = pts / maxPts                   (leader → 1.0)
+//   score    = 0.5 * posScore + 0.5 * ptsScore
+//   expectedMP(fund) = mpMin(fund) + score * (mpMax(fund) − mpMin(fund))
+// Returns { opponentName: { serve, attack, defense, reception } }
+function computeExpectedMP(standings, matchAnalytics) {
+  if (!standings || standings.length === 0 || !matchAnalytics || matchAnalytics.length === 0) {
+    return {};
+  }
+  const funds = ['serve', 'attack', 'defense', 'reception'];
+  const opponentNames = [...new Set(
+    matchAnalytics.map(ma => ma?.match?.metadata?.opponent || '').filter(Boolean)
+  )];
+
+  // Compute actual average mediaPond per opponent (deduced opponent stats)
+  const opponentMPs = {};
+  for (const opp of opponentNames) {
+    const oppMatches = matchAnalytics.filter(ma => (ma?.match?.metadata?.opponent || '') === opp);
+    const agg = computeAggregatedScout(oppMatches);
+    opponentMPs[opp] = {
+      serve:     Number.isFinite(agg.serve?.mediaPond)     ? agg.serve.mediaPond     : null,
+      attack:    Number.isFinite(agg.attack?.mediaPond)    ? agg.attack.mediaPond    : null,
+      defense:   Number.isFinite(agg.defense?.mediaPond)   ? agg.defense.mediaPond   : null,
+      reception: Number.isFinite(agg.reception?.mediaPond) ? agg.reception.mediaPond : null,
+    };
+  }
+
+  // Compute observed MP range per fundamental across all opponents
+  const mpRanges = {};
+  for (const fund of funds) {
+    const vals = Object.values(opponentMPs)
+      .map(mp => mp[fund])
+      .filter(v => v !== null && Number.isFinite(v));
+    if (vals.length >= 2) {
+      mpRanges[fund] = { min: Math.min(...vals), max: Math.max(...vals) };
+    } else if (vals.length === 1) {
+      mpRanges[fund] = { min: vals[0], max: vals[0] };
+    } else {
+      mpRanges[fund] = null;
+    }
+  }
+
+  const n = standings.length;
+  const maxPts = Math.max(...standings.map(t => t.pts || 0), 1);
+
+  // Normalize: uppercase + underscores→spaces + collapse whitespace
+  // Handles mismatches like "Numia_VeroVolley" vs "Numia VeroVolley"
+  const normName = (s) => (s || '').toUpperCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const result = {};
+  for (const opp of opponentNames) {
+    const oppNorm = normName(opp);
+    const entry = standings.find(t => {
+      const tNorm = normName(t.name);
+      return tNorm === oppNorm || tNorm.includes(oppNorm) || oppNorm.includes(tNorm);
+    });
+    if (!entry) continue;
+
+    const rank    = entry.rank || 1;
+    const pts     = entry.pts  || 0;
+    const posScore = n > 1 ? 1 - (rank - 1) / (n - 1) : 0.5;
+    const ptsScore = pts / maxPts;
+    const score    = 0.5 * posScore + 0.5 * ptsScore;
+
+    result[opp] = {};
+    for (const fund of funds) {
+      const range = mpRanges[fund];
+      if (!range) { result[opp][fund] = null; continue; }
+      if (range.max > range.min) {
+        result[opp][fund] = parseFloat((range.min + score * (range.max - range.min)).toFixed(3));
+      } else {
+        result[opp][fund] = range.min;
+      }
+    }
+  }
+  return result;
 }
 
 function buildPlayerCatalog(matchAnalytics) {
@@ -900,6 +1001,11 @@ function AggregatedScoutPanel({
   const latestMatchMA = useMemo(() => (
     [...(matchAnalytics || [])]
       .sort((a, b) => (b?.match?.metadata?.date || '').localeCompare(a?.match?.metadata?.date || ''))[0] || null
+  ), [matchAnalytics]);
+  // Oldest match (earliest date) — used as "Noi" anchor when ALL_OPPONENTS_ID is active
+  const earliestMatchMA = useMemo(() => (
+    [...(matchAnalytics || [])]
+      .sort((a, b) => (a?.match?.metadata?.date || '').localeCompare(b?.match?.metadata?.date || ''))[0] || null
   ), [matchAnalytics]);
   const cardsAgg = selectedOppAgg || agg;
   const opponentHeaderLabel = activeOpponent === ALL_OPPONENTS_ID ? 'All Opponent' : (activeOpponent || 'Avversario');
@@ -1127,7 +1233,7 @@ function AggregatedScoutPanel({
           activeOpponent={activeOpponent}
           onSelectOpponent={onSelectOpponent}
           selectedOppAgg={selectedOppAgg}
-          selectedMatchMA={selectedMatchMA}
+          selectedMatchMA={activeOpponent === ALL_OPPONENTS_ID ? earliestMatchMA : selectedMatchMA}
           seasonTeamAvg={seasonTeamAvg}
           latestMatchMA={latestMatchMA}
           lineMode={lineMode}
@@ -1140,6 +1246,375 @@ function AggregatedScoutPanel({
           <DetailedOppStatCard title="Ricezione" data={cardsAgg.reception} type="reception" />
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── AllTeamsComparisonPanel ──────────────────────────────────────────────────
+// Shown when "Tutte le squadre" is selected.
+// Grouped bar chart: one group per opponent team, 3 bars each:
+//   Atteso     — expected mediaPond from standings position + points
+//   Media camp — season average mediaPond across all opponents
+//   Rilevato   — actual observed mediaPond deduced from scout
+// 4 multi-select fundamental filters (no Muro); aggregated when multiple selected.
+function AllTeamsComparisonPanel({ matchAnalytics = [], standings = [] }) {
+  const FUND_OPTIONS = [
+    { key: 'serve',     label: 'Battuta',   color: '#38bdf8' },
+    { key: 'attack',    label: 'Attacco',   color: '#f59e0b' },
+    { key: 'defense',   label: 'Difesa',    color: '#34d399' },
+    { key: 'reception', label: 'Ricezione', color: '#a78bfa' },
+  ];
+  const [selectedFunds, setSelectedFunds] = useState(['serve', 'attack', 'defense', 'reception']);
+
+  const opponents = useMemo(() => (
+    [...new Set(
+      matchAnalytics.map(ma => ma?.match?.metadata?.opponent || '').filter(Boolean)
+    )].sort((a, b) => a.localeCompare(b))
+  ), [matchAnalytics]);
+
+  // Compute deduced (rilevato) mediaPond per opponent
+  const opponentAggs = useMemo(() => {
+    const result = {};
+    for (const opp of opponents) {
+      const oppMatches = matchAnalytics.filter(ma => (ma?.match?.metadata?.opponent || '') === opp);
+      result[opp] = computeAggregatedScout(oppMatches);
+    }
+    return result;
+  }, [matchAnalytics, opponents]);
+
+  // Season average mediaPond (combined all matches)
+  const seasonAvgMP = useMemo(() => {
+    const seasonAgg = computeAggregatedScout(matchAnalytics);
+    return {
+      serve:     seasonAgg.serve?.mediaPond     ?? null,
+      attack:    seasonAgg.attack?.mediaPond    ?? null,
+      defense:   seasonAgg.defense?.mediaPond   ?? null,
+      reception: seasonAgg.reception?.mediaPond ?? null,
+    };
+  }, [matchAnalytics]);
+
+  // Expected mediaPond from standings
+  const expectedMP = useMemo(
+    () => computeExpectedMP(standings, matchAnalytics),
+    [standings, matchAnalytics]
+  );
+
+  // Helper: average of selected fundamentals from a {serve,attack,defense,reception} object
+  const aggFunds = (source, keys) => {
+    const vals = keys.map(k => source?.[k]).filter(v => v !== null && Number.isFinite(v));
+    return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+
+  // Season average reference line value (aggregated over selected fundamentals)
+  const refLineValue = useMemo(() => {
+    const v = aggFunds(seasonAvgMP, selectedFunds);
+    return v !== null ? parseFloat(v.toFixed(3)) : null;
+  }, [seasonAvgMP, selectedFunds]);
+
+  // Build chart data (no mediaCamp bar — shown as reference line instead)
+  const chartData = useMemo(() => (
+    opponents.map(opp => {
+      const agg = opponentAggs[opp];
+      const exp = expectedMP[opp];
+      const rilevato = aggFunds(
+        { serve: agg?.serve?.mediaPond, attack: agg?.attack?.mediaPond, defense: agg?.defense?.mediaPond, reception: agg?.reception?.mediaPond },
+        selectedFunds
+      );
+      const atteso    = exp ? aggFunds(exp, selectedFunds) : null;
+      const shortName = opp.length > 10 ? opp.substring(0, 10) + '…' : opp;
+      return {
+        team:     shortName,
+        teamFull: opp,
+        atteso:   atteso   !== null ? parseFloat(atteso.toFixed(2))   : null,
+        rilevato: rilevato !== null ? parseFloat(rilevato.toFixed(2)) : null,
+      };
+    })
+  ), [opponents, opponentAggs, expectedMP, selectedFunds]);
+
+  // Dynamic Y-axis domain (include reference line value)
+  const yDomain = useMemo(() => {
+    const vals = chartData
+      .flatMap(d => [d.atteso, d.rilevato])
+      .concat(refLineValue !== null ? [refLineValue] : [])
+      .filter(v => v !== null && Number.isFinite(v));
+    if (vals.length === 0) return [1, 5];
+    const mn = Math.min(...vals);
+    const mx = Math.max(...vals);
+    const margin = Math.max(0.15, (mx - mn) * 0.15);
+    return [
+      Math.max(1, parseFloat((mn - margin).toFixed(2))),
+      Math.min(5, parseFloat((mx + margin).toFixed(2))),
+    ];
+  }, [chartData, refLineValue]);
+
+  // ── Frequency tables (one per fundamental, no block) ─────────────────────────
+  // Columns: for serve/attack → B1…B5; for defense/reception → B1, B2, B3, B4+5
+  const FREQ_FUNDS = [
+    { key: 'serve',     label: 'Battuta',   isSplit: false },
+    { key: 'attack',    label: 'Attacco',   isSplit: false },
+    { key: 'defense',   label: 'Difesa',    isSplit: true  },
+    { key: 'reception', label: 'Ricezione', isSplit: true  },
+  ];
+  const freqTableData = useMemo(() => {
+    return FREQ_FUNDS.map(({ key, label, isSplit }) => {
+      const rows = opponents.map(opp => {
+        const fund = opponentAggs[opp]?.[key] || {};
+        const total = fund.total || 0;
+        const v1 = fund.val1 || 0;
+        const v2 = fund.val2 || 0;
+        const v3 = fund.val3 || 0;
+        const v4  = !isSplit ? (fund.val4  || 0) : null;
+        const v5  = !isSplit ? (fund.val5  || 0) : null;
+        const v45 = isSplit  ? (fund['val4+5'] || 0) : null;
+        // Media Ponderata (1–5 scale) — same formula used in computeAggregatedScout
+        const mp = total > 0
+          ? (!isSplit
+              ? (v1 + 2*v2 + 3*v3 + 4*v4 + 5*v5) / total
+              : (v1 + 2*v2 + 3*v3 + (14/3)*v45)  / total)
+          : null;
+        const mediaPond = mp !== null ? parseFloat(mp.toFixed(2)) : null;
+        const pct = (n) => total > 0 ? ((n / total) * 100).toFixed(0) : '—';
+        return { opp, total, v1, v2, v3, v4, v5, v45, mediaPond, pct };
+      });
+      return { key, label, isSplit, rows };
+    });
+  }, [opponents, opponentAggs]);
+
+  const toggleFund = (key) => {
+    setSelectedFunds(prev => {
+      if (prev.includes(key)) {
+        if (prev.length === 1) return prev; // keep at least one
+        return prev.filter(k => k !== key);
+      }
+      return [...prev, key];
+    });
+  };
+
+  // ── Per-table sort state ────────────────────────────────────────────────────
+  const [tableSorts, setTableSorts] = useState({
+    serve:     { col: 'opp', dir: 'asc' },
+    attack:    { col: 'opp', dir: 'asc' },
+    defense:   { col: 'opp', dir: 'asc' },
+    reception: { col: 'opp', dir: 'asc' },
+  });
+  const handleSort = (fundKey, col) => {
+    setTableSorts(prev => {
+      const cur = prev[fundKey];
+      return { ...prev, [fundKey]: { col, dir: cur.col === col ? (cur.dir === 'asc' ? 'desc' : 'asc') : 'desc' } };
+    });
+  };
+  const getSortedRows = (rows, sort) => {
+    const { col, dir } = sort;
+    return [...rows].sort((a, b) => {
+      if (col === 'opp') return dir === 'asc' ? a.opp.localeCompare(b.opp) : b.opp.localeCompare(a.opp);
+      const av = a[col] ?? -1, bv = b[col] ?? -1;
+      return dir === 'asc' ? av - bv : bv - av;
+    });
+  };
+  const getAvgRow = (rows, isSplit) => {
+    if (rows.length === 0) return null;
+    const n = rows.length;
+    const mean = (key) => parseFloat((rows.reduce((s, r) => s + (r[key] || 0), 0) / n).toFixed(1));
+    const meanNullable = (key) => {
+      const vals = rows.map(r => r[key]).filter(v => v !== null && Number.isFinite(v));
+      return vals.length > 0 ? parseFloat((vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(2)) : null;
+    };
+    const avgTotal = mean('total');
+    const avgV1 = mean('v1'), avgV2 = mean('v2'), avgV3 = mean('v3');
+    const avgV4  = !isSplit ? mean('v4')  : null;
+    const avgV5  = !isSplit ? mean('v5')  : null;
+    const avgV45 = isSplit  ? mean('v45') : null;
+    const avgMP  = meanNullable('mediaPond');
+    const pct = (v) => avgTotal > 0 ? ((v / avgTotal) * 100).toFixed(0) : '—';
+    return { opp: 'Squadra media', total: avgTotal, v1: avgV1, v2: avgV2, v3: avgV3, v4: avgV4, v5: avgV5, v45: avgV45, mediaPond: avgMP, pct, isAvg: true };
+  };
+  const SortIcon = ({ fundKey, col }) => {
+    const s = tableSorts[fundKey];
+    if (s.col !== col) return <span className="text-gray-700 ml-0.5 text-[8px]">⇅</span>;
+    return <span className="text-amber-400 ml-0.5 text-[8px]">{s.dir === 'asc' ? '▲' : '▼'}</span>;
+  };
+
+  if (opponents.length === 0) {
+    return (
+      <div className="glass-card p-5 text-center text-gray-500 text-sm">
+        Nessun avversario disponibile.
+      </div>
+    );
+  }
+
+  return (
+    <div className="glass-card p-4 space-y-3">
+
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        <span className="text-violet-400 text-sm">●</span>
+        <h4 className="text-sm font-semibold text-gray-200">Confronto tutte le squadre — Media Ponderata</h4>
+      </div>
+
+      {/* Fundamental selector chips */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {FUND_OPTIONS.map(f => (
+          <button
+            key={f.key}
+            onClick={() => toggleFund(f.key)}
+            className={`text-[10px] px-2.5 py-1 rounded-full border transition-all ${
+              selectedFunds.includes(f.key)
+                ? 'bg-violet-500/20 text-violet-300 border-violet-400/40'
+                : 'bg-white/[0.03] text-gray-400 border-white/10 hover:text-gray-200'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+        {selectedFunds.length > 1 && (
+          <span className="text-[9px] text-gray-500 ml-1">dato aggregato</span>
+        )}
+      </div>
+
+      {/* Warning if no standings */}
+      {(!standings || standings.length === 0) && (
+        <p className="text-[10px] text-amber-400/70 italic">
+          ⚠ Carica la classifica nella sezione Dati per visualizzare i valori attesi.
+        </p>
+      )}
+
+      {/* Grouped bar chart — 2 bars + reference line */}
+      <ResponsiveContainer width="100%" height={300}>
+        <BarChart
+          data={chartData}
+          margin={{ top: 8, right: 8, left: 0, bottom: 40 }}
+          barGap={2}
+          barCategoryGap="25%"
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+          <XAxis
+            dataKey="team"
+            tick={{ fill: '#9ca3af', fontSize: 9 }}
+            angle={-35}
+            textAnchor="end"
+            interval={0}
+            height={52}
+          />
+          <YAxis
+            tick={{ fill: '#6b7280', fontSize: 10 }}
+            domain={yDomain}
+            tickFormatter={v => v.toFixed(1)}
+          />
+          <Tooltip
+            contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
+            formatter={(v, n) => [v !== null ? Number(v).toFixed(2) : '—', n]}
+            labelFormatter={(l, p) => p?.[0]?.payload?.teamFull || l}
+          />
+          <Legend
+            verticalAlign="top"
+            align="left"
+            height={28}
+            wrapperStyle={{ fontSize: 10 }}
+          />
+          {refLineValue !== null && (
+            <ReferenceLine
+              y={refLineValue}
+              stroke="#94a3b8"
+              strokeDasharray="6 3"
+              strokeWidth={1.5}
+              label={{ value: `⌀ ${refLineValue.toFixed(2)}`, position: 'insideTopRight', fill: '#94a3b8', fontSize: 9 }}
+            />
+          )}
+          <Bar dataKey="atteso"   name="Atteso"   fill="#38bdf8" opacity={0.80} radius={[2,2,0,0]} />
+          <Bar dataKey="rilevato" name="Rilevato" fill="#a855f7" opacity={0.90} radius={[2,2,0,0]} />
+        </BarChart>
+      </ResponsiveContainer>
+
+      {/* Legend note */}
+      <p className="text-[9px] text-gray-500 leading-relaxed">
+        <span className="text-sky-400">Atteso</span>: MP stimato dalla posizione + punti in classifica ·{' '}
+        <span className="text-slate-400">— ⌀</span>: media ponderata stagionale (linea tratteggiata) ·{' '}
+        <span className="text-violet-400">Rilevato</span>: MP effettivo dedotto dallo scout
+      </p>
+
+      {/* ── 4 frequency tables (one per fundamental, no block) ─────────────── */}
+      <div className="space-y-4 pt-2">
+        <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
+          Frequenza valori per squadra
+        </h5>
+        {freqTableData.map(({ key, label, isSplit, rows }) => {
+          const sort    = tableSorts[key];
+          const avgRow  = getAvgRow(rows, isSplit);
+          const allRows = avgRow ? [...rows, avgRow] : rows;
+          const sorted  = getSortedRows(allRows, sort);
+          const prefix  = key === 'serve' ? 'B' : key === 'attack' ? 'A' : key === 'defense' ? 'D' : 'R';
+          const thBtn   = (col, label, colorCls) => (
+            <th
+              key={col}
+              onClick={() => handleSort(key, col)}
+              className={`text-center py-1 px-1.5 font-medium cursor-pointer select-none hover:text-white transition-colors ${colorCls}`}
+            >
+              {label}<SortIcon fundKey={key} col={col} />
+            </th>
+          );
+          const DataCell = ({ val, total }) => (
+            <td className="text-center py-1 px-1.5">
+              <span className="text-gray-200">{typeof val === 'number' ? val : '—'}</span>
+              {total > 0 && typeof val === 'number' && (
+                <span className="text-gray-600 ml-0.5">{((val / total) * 100).toFixed(0)}%</span>
+              )}
+            </td>
+          );
+          return (
+            <div key={key}>
+              <p className="text-[10px] font-semibold text-gray-300 mb-1.5">{label}</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[10px] border-collapse">
+                  <thead>
+                    <tr className="text-gray-500 border-b border-white/10">
+                      <th
+                        onClick={() => handleSort(key, 'opp')}
+                        className="text-left py-1 px-2 font-medium cursor-pointer select-none hover:text-white transition-colors"
+                      >
+                        Squadra<SortIcon fundKey={key} col="opp" />
+                      </th>
+                      {thBtn('v1', `${prefix}1 err`, 'text-rose-400/80')}
+                      {thBtn('v2', `${prefix}2 neg`, 'text-orange-400/80')}
+                      {thBtn('v3', `${prefix}3 exc`, 'text-yellow-400/80')}
+                      {!isSplit && thBtn('v4', `${prefix}4 pos`, 'text-emerald-400/80')}
+                      {!isSplit && thBtn('v5', `${prefix}5 kill`, 'text-sky-400/80')}
+                      {isSplit  && thBtn('v45', `${prefix}4+5 pos`, 'text-emerald-400/80')}
+                      {thBtn('mediaPond', 'MP ⌀', 'text-violet-400/80')}
+                      {thBtn('total', 'Tot', 'text-gray-400')}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map(({ opp, total, v1, v2, v3, v4, v5, v45, mediaPond, isAvg }) => (
+                      <tr
+                        key={opp}
+                        className={isAvg
+                          ? 'border-y border-amber-500/30 bg-amber-500/[0.06]'
+                          : 'border-b border-white/[0.04] hover:bg-white/[0.02]'
+                        }
+                      >
+                        <td className={`py-1 px-2 font-medium truncate max-w-[120px] ${isAvg ? 'text-amber-400' : 'text-gray-300'}`}>
+                          {isAvg ? `⌀ ${opp}` : opp}
+                        </td>
+                        <DataCell val={v1} total={total} />
+                        <DataCell val={v2} total={total} />
+                        <DataCell val={v3} total={total} />
+                        {!isSplit && <DataCell val={v4} total={total} />}
+                        {!isSplit && <DataCell val={v5} total={total} />}
+                        {isSplit  && <DataCell val={v45} total={total} />}
+                        <td className={`text-center py-1 px-1.5 font-mono font-semibold ${isAvg ? 'text-violet-300' : 'text-violet-400'}`}>
+                          {mediaPond !== null && Number.isFinite(mediaPond) ? mediaPond.toFixed(2) : '—'}
+                        </td>
+                        <td className={`text-center py-1 px-1.5 font-mono ${isAvg ? 'text-amber-500/70' : 'text-gray-500'}`}>{total}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
     </div>
   );
 }
@@ -1188,7 +1663,7 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
       return Number.isFinite(fund.attitude) ? roundValue(fund.attitude * 100) : null;
     }
     if (playerLineMode === 'mediaPond') {
-      return Number.isFinite(fund.mediaPond) ? roundValue((fund.mediaPond / 5) * 100) : null;
+      return Number.isFinite(fund.mediaPond) ? roundValue(fund.mediaPond) : null;
     }
     const metric = playerLineMode === 'efficienza' ? fund.efficiency : fund.efficacy;
     return Number.isFinite(metric) ? roundValue(metric * 100) : null;
@@ -1230,6 +1705,28 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
     ? selectedPlayerNumber
     : (playerOptions[0]?.number || '');
   const activePlayerData = playerOptions.find(p => p.number === activePlayerNumber) || null;
+  const playerIsMediaPond = playerLineMode === 'mediaPond';
+  const formatPlayerAxisValue = (v) => playerIsMediaPond ? Number(v).toFixed(1) : `${v}%`;
+
+  // Dynamic Y-axis domain for mediaPond in player chart
+  const playerMediaPondDomain = (() => {
+    if (!playerIsMediaPond) return ['auto', 'auto'];
+    const data = activePlayerData?.data || [];
+    const keys = ['oppSel', 'oppAll', 'playerMatch', 'playerLast3'];
+    const vals = data.flatMap(d => keys.map(k => d[k]).filter(v => typeof v === 'number' && isFinite(v)));
+    if (!vals.length) return [1, 5];
+    const mn = Math.min(...vals);
+    const mx = Math.max(...vals);
+    const margin = Math.max(0.15, (mx - mn) * 0.15);
+    return [
+      Math.max(1, parseFloat((mn - margin).toFixed(2))),
+      Math.min(5, parseFloat((mx + margin).toFixed(2))),
+    ];
+  })();
+  const formatPlayerTooltipValue = (v) => {
+    if (v === null || v === undefined) return 'N/D';
+    return playerIsMediaPond ? Number(v).toFixed(2) : `${Number(v).toFixed(1)}%`;
+  };
 
   return (
     <div className="glass-card p-4 space-y-4">
@@ -1362,10 +1859,14 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
             <LineChart data={activePlayerData?.data || []}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
               <XAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
+              <YAxis
+                tick={{ fill: '#6b7280', fontSize: 10 }}
+                tickFormatter={formatPlayerAxisValue}
+                domain={playerMediaPondDomain}
+              />
               <Tooltip
                 contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
-                formatter={(v, n) => [v === null || v === undefined ? 'N/D' : `${Number(v).toFixed(1)}%`, ({
+                formatter={(v, n) => [formatPlayerTooltipValue(v), ({
                   oppSel: `Media ${selectedOppName}`,
                   oppAll: 'Media tutte le squadre',
                   playerMatch: 'Media giocatrice in questa partita',
@@ -2007,8 +2508,7 @@ function OpponentScoutComparisonChart({
       return Number.isFinite(fundData.attitude) ? roundValue(fundData.attitude * 100) : null;
     }
     if (lineMode === 'mediaPond') {
-      // mediaPond stored on 1–5 scale; normalize to 0–100 for chart parity
-      return Number.isFinite(fundData.mediaPond) ? roundValue((fundData.mediaPond / 5) * 100) : null;
+      return Number.isFinite(fundData.mediaPond) ? roundValue(fundData.mediaPond) : null;
     }
     return Number.isFinite(fundData[metricKey]) ? roundValue(fundData[metricKey] * 100) : null;
   };
@@ -2020,7 +2520,7 @@ function OpponentScoutComparisonChart({
       return Number.isFinite(teamData.attitude) ? teamData.attitude : null;
     }
     if (lineMode === 'mediaPond') {
-      // Already stored as 0–100 normalized in computeTeamFundAverages
+      // Already stored on 1–5 scale in computeTeamFundAverages
       return Number.isFinite(teamData.mediaPond) ? teamData.mediaPond : null;
     }
     return lineMode === 'efficienza' ? teamData.efficiency : teamData.efficacy;
@@ -2093,6 +2593,31 @@ function OpponentScoutComparisonChart({
     attitude:   'Confronto squadre (AI Score)',
     mediaPond:  'Confronto squadre (media ponderata)',
   }[lineMode] || 'Confronto squadre';
+  const isMediaPondMode = lineMode === 'mediaPond';
+  // When ALL opponents selected, "Noi" shows the earliest match (starting point of the season)
+  const isAllOpponents = activeOpponent === ALL_OPPONENTS_ID;
+  const noiLabel    = isAllOpponents ? 'Prima partita' : 'Noi';
+  const noiOraLabel = isAllOpponents ? 'Ultima partita' : 'Noi ora';
+  const formatAxisValue = (v) => isMediaPondMode ? Number(v).toFixed(1) : `${v}%`;
+
+  // Dynamic Y-axis domain for mediaPond: auto-scale to actual data range + margin
+  const mediaPondDomain = (() => {
+    if (!isMediaPondMode) return ['auto', 'auto'];
+    const keys = ['oppSel', 'oppAll', 'noi', 'noiMedi', 'noiOra'];
+    const vals = chartData.flatMap(d => keys.map(k => d[k]).filter(v => typeof v === 'number' && isFinite(v)));
+    if (!vals.length) return [1, 5];
+    const mn = Math.min(...vals);
+    const mx = Math.max(...vals);
+    const margin = Math.max(0.15, (mx - mn) * 0.15);
+    return [
+      Math.max(1, parseFloat((mn - margin).toFixed(2))),
+      Math.min(5, parseFloat((mx + margin).toFixed(2))),
+    ];
+  })();
+  const formatTooltipValue = (v) => {
+    if (v === null || v === undefined) return 'N/D';
+    return isMediaPondMode ? Number(v).toFixed(2) : `${Number(v).toFixed(1)}%`;
+  };
 
   return (
     <>
@@ -2109,7 +2634,7 @@ function OpponentScoutComparisonChart({
             onClick={() => setShowNoi(v => !v)}
             className={`text-[9px] px-2 py-1 rounded border ${showNoi ? 'bg-amber-500/20 text-amber-300 border-amber-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
           >
-            Noi
+            {noiLabel}
           </button>
           <button
             onClick={() => setShowNoiMedi(v => !v)}
@@ -2121,7 +2646,7 @@ function OpponentScoutComparisonChart({
             onClick={() => setShowNoiOra(v => !v)}
             className={`text-[9px] px-2 py-1 rounded border ${showNoiOra ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
           >
-            Noi ora
+            {noiOraLabel}
           </button>
         </div>
       <div className="relative">
@@ -2135,15 +2660,19 @@ function OpponentScoutComparisonChart({
         <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
           <XAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 10 }} />
-          <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
+          <YAxis
+            tick={{ fill: '#6b7280', fontSize: 10 }}
+            tickFormatter={formatAxisValue}
+            domain={mediaPondDomain}
+          />
           <Tooltip
             contentStyle={{ background: 'rgba(17,24,39,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 11 }}
-            formatter={(v, n) => [v === null || v === undefined ? 'N/D' : `${Number(v).toFixed(1)}%`, ({
+            formatter={(v, n) => [formatTooltipValue(v), ({
               oppSel: `Media ${selectedOppName}`,
               oppAll: 'Media tutte le squadre',
-              noi: 'Noi',
+              noi: noiLabel,
               noiMedi: 'Noi medi',
-              noiOra: 'Noi ora',
+              noiOra: noiOraLabel,
             }[n] || n)]}
           />
           <Legend
@@ -2154,9 +2683,9 @@ function OpponentScoutComparisonChart({
             formatter={(v) => ({
               oppSel: `Media ${selectedOppName}`,
               oppAll: 'Media tutte le squadre',
-              noi: 'Noi',
+              noi: noiLabel,
               noiMedi: 'Noi medi',
-              noiOra: 'Noi ora',
+              noiOra: noiOraLabel,
             }[v] || v)}
           />
           <Line type="monotone" dataKey="oppSel" stroke="#a855f7" strokeWidth={2.2} dot={{ r: 3.2, fill: '#a855f7' }} activeDot={{ r: 4.5 }} name="oppSel" />

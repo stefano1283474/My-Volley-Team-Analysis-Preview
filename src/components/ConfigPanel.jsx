@@ -448,6 +448,152 @@ function FncDeltaChart({ analytics, baselines, fncConfig }) {
   );
 }
 
+// ─── Opponent MP coefficient helpers ─────────────────────────────────────────
+// Build per-match opponent mediaPond data + grand averages, given oppWeights.
+// oppWeights = { reception, attack, defense, serve } — sums to 1.
+// oppIntensity amplifies the deviation of the coefficient from the neutral 1.0:
+//   C_eff = 1 + intensity × (C_raw − 1)
+//   0 → no effect   1 → unmodified C_raw   >1 → amplified   <1 → dampened
+function buildOppCoeffData(analytics, oppWeights, oppIntensity = 1) {
+  if (!analytics?.matchAnalytics?.length) return [];
+
+  const mas = analytics.matchAnalytics;
+
+  // Per-match raw mediaPond for each fundamental (from deduced opponent stats)
+  const perMatch = mas.map(ma => ({
+    ma,
+    serve:     ma.oppStats?.deduced?.serve?.mediaPond     || 0,
+    attack:    ma.oppStats?.deduced?.attack?.mediaPond    || 0,
+    defense:   ma.oppStats?.deduced?.defense?.mediaPond   || 0,
+    reception: ma.oppStats?.deduced?.reception?.mediaPond || 0,
+  }));
+
+  // Grand average per fundamental (exclude zero entries)
+  const avg = (key) => {
+    const vals = perMatch.map(d => d[key]).filter(v => v > 0);
+    return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 1;
+  };
+  const avgS = avg('serve');
+  const avgA = avg('attack');
+  const avgD = avg('defense');
+  const avgR = avg('reception');
+
+  return [...perMatch]
+    .sort((a, b) => (a.ma.match.metadata?.date || '').localeCompare(b.ma.match.metadata?.date || ''))
+    .map(({ ma, serve, attack, defense, reception }) => {
+      // Ratio vs grand average (1.0 = average opponent)
+      const rS = avgS > 0 ? serve     / avgS : 1;
+      const rA = avgA > 0 ? attack    / avgA : 1;
+      const rD = avgD > 0 ? defense   / avgD : 1;
+      const rR = avgR > 0 ? reception / avgR : 1;
+
+      // Weighted composite coefficient (raw, naturally close to 1.0)
+      const coeffRaw = oppWeights.serve     * rS
+                     + oppWeights.attack    * rA
+                     + oppWeights.defense   * rD
+                     + oppWeights.reception * rR;
+
+      // Amplify the deviation from neutral: C_eff = 1 + intensity × (C_raw − 1)
+      const coeff = 1 + oppIntensity * (coeffRaw - 1);
+
+      // Raw team performance average (same as WeightImpactChart)
+      const funds = ['attack', 'serve', 'reception', 'defense', 'block'];
+      const rawVals = funds.map(f => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
+      const rawTeam = rawVals.length ? rawVals.reduce((s, v) => s + v, 0) / rawVals.length * 100 : 0;
+
+      return {
+        id:        ma.match.id,
+        opponent:  (ma.match.metadata?.opponent || 'N/D').substring(0, 12),
+        date:      ma.match.metadata?.date || '',
+        coeffRaw:  +coeffRaw.toFixed(3),
+        coeff:     +coeff.toFixed(3),
+        raw:       +rawTeam.toFixed(1),
+        weighted:  +(rawTeam * coeff).toFixed(1),
+        // per-fundamental ratios for tooltip
+        rS: +rS.toFixed(2), rA: +rA.toFixed(2), rD: +rD.toFixed(2), rR: +rR.toFixed(2),
+      };
+    });
+}
+
+// ─── OppCoeffImpactChart ──────────────────────────────────────────────────────
+function OppCoeffImpactChart({ chartData }) {
+  if (!chartData.length) return null;
+  const getColor = (c) => {
+    const ratio = Math.max(0, Math.min(1, (c - 0.5) / 1.0));
+    return `hsl(${(1 - ratio) * 120}, 75%, 45%)`;
+  };
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] text-gray-400">
+        Coefficiente avversario per partita (verde = avversario debole, rosso = avversario forte)
+      </p>
+      <div className="h-32">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+            <XAxis dataKey="opponent" tick={{ fill: '#6b7280', fontSize: 9 }} angle={-18} textAnchor="end" interval={0} height={34} />
+            <YAxis domain={[0.5, 1.5]} tick={{ fill: '#6b7280', fontSize: 9 }} tickFormatter={v => v.toFixed(2)} width={32} />
+            <Tooltip
+              contentStyle={TOOLTIP_STYLE}
+              formatter={(v, n, p) => [Number(v).toFixed(3), 'Coeff. Avv.']}
+              labelFormatter={(l, p) => {
+                const d = p?.[0]?.payload;
+                return d ? `${l} · ${d.date}` : l;
+              }}
+            />
+            <ReferenceLine y={1} stroke="rgba(245,158,11,0.6)" strokeDasharray="4 3" />
+            <Bar dataKey="coeff" radius={[3, 3, 0, 0]}>
+              {chartData.map(e => <Cell key={e.id} fill={getColor(e.coeff)} />)}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// ─── OppRawVsWeightedOppChart ─────────────────────────────────────────────────
+function OppRawVsWeightedOppChart({ chartData }) {
+  if (!chartData.length) return null;
+  return (
+    <div className="h-24">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 20 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+          <XAxis dataKey="opponent" tick={{ fill: '#6b7280', fontSize: 9 }} angle={-18} textAnchor="end" interval={0} height={30} />
+          <YAxis tick={{ fill: '#6b7280', fontSize: 9 }} width={28} tickFormatter={v => `${v}%`} />
+          <Tooltip
+            contentStyle={TOOLTIP_STYLE}
+            formatter={(v, n) => [`${Number(v).toFixed(1)}%`, n === 'raw' ? 'Grezza' : 'Pesata (avv.)']}
+          />
+          <Line type="monotone" dataKey="raw"      stroke="#38bdf8" strokeWidth={1.5} dot={{ r: 2, fill: '#38bdf8' }} name="raw" />
+          <Line type="monotone" dataKey="weighted" stroke="#a78bfa" strokeWidth={1.5} dot={{ r: 2, fill: '#a78bfa' }} strokeDasharray="5 3" name="weighted" />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ─── Interlocked slider handler ───────────────────────────────────────────────
+function adjustInterlocked(prev, key, newValue) {
+  const clamped   = Math.max(0, Math.min(1, newValue));
+  const oldValue  = prev[key];
+  const delta     = clamped - oldValue;
+  const otherKeys = Object.keys(prev).filter(k => k !== key);
+  const otherTot  = otherKeys.reduce((s, k) => s + prev[k], 0);
+
+  const next = { ...prev, [key]: clamped };
+  if (otherTot > 1e-6) {
+    otherKeys.forEach(k => {
+      next[k] = Math.max(0, prev[k] - delta * (prev[k] / otherTot));
+    });
+  }
+  // Renormalize so sum === exactly 1
+  const total = Object.values(next).reduce((s, v) => s + v, 0);
+  if (total > 1e-6) Object.keys(next).forEach(k => { next[k] = next[k] / total; });
+  return next;
+}
+
 // ─── Main ConfigPanel ─────────────────────────────────────────────────────────
 
 export default function ConfigPanel({
@@ -465,7 +611,21 @@ export default function ConfigPanel({
   onProfileReset,
   hasUnsavedChanges,
 }) {
-  const [activeSection, setActiveSection] = useState('weights'); // 'weights' | 'fnc'
+  const [activeSection, setActiveSection] = useState('opp_weights'); // 'opp_weights' | 'weights' | 'fnc'
+
+  // ── Opponent-based weighting (Media Ponderata) ──────────────────────────────
+  const [oppWeights, setOppWeights] = useState({ reception: 0.25, attack: 0.25, defense: 0.25, serve: 0.25 });
+  const [oppIntensity, setOppIntensity] = useState(1); // 0 = no effect, 1 = base, 5 = max amplification
+
+  const handleOppWeightChange = (key, newValue) => {
+    setOppWeights(prev => adjustInterlocked(prev, key, newValue));
+  };
+
+  const oppChartData = useMemo(
+    () => buildOppCoeffData(analytics, oppWeights, oppIntensity),
+    [analytics, oppWeights, oppIntensity],
+  );
+  // ────────────────────────────────────────────────────────────────────────────
 
   const totalWeightImpact = Object.values(weights).reduce((s, v) => s + v, 0);
 
@@ -478,8 +638,9 @@ export default function ConfigPanel({
   };
 
   const tabs = [
-    { id: 'weights', label: 'Pesi Partita', icon: '⚖' },
-    { id: 'fnc', label: 'Normalizzazione FNC', icon: '📐' },
+    { id: 'opp_weights', label: 'Pesi Avversari', icon: '🎯' },
+    { id: 'weights',     label: 'Pesi Partita',   icon: '⚖' },
+    { id: 'fnc',         label: 'FNC',             icon: '📐' },
   ];
 
   return (
@@ -531,6 +692,187 @@ export default function ConfigPanel({
           </button>
         ))}
       </div>
+
+      {/* ── Sezione Pesi Avversari (Media Ponderata) ── */}
+      {activeSection === 'opp_weights' && (
+        <div className="space-y-3">
+
+          {/* Grafico 1 — performance grezza vs. pesata per avversario */}
+          <div className="glass-card px-4 pt-3 pb-2">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                Performance squadra — grezza vs. pesata (avversario)
+              </h3>
+              <span className="text-[10px] text-gray-600">
+                <span className="text-sky-400">━</span> grezza &nbsp;
+                <span className="text-violet-400">╌</span> pesata avv.
+              </span>
+            </div>
+            {oppChartData.length > 0
+              ? <OppRawVsWeightedOppChart chartData={oppChartData} />
+              : <p className="text-xs text-gray-600 italic py-3">Carica partite per vedere il grafico.</p>}
+          </div>
+
+          {/* Grafico 2 — coefficiente avversario per partita */}
+          <div className="glass-card px-4 pt-3 pb-2">
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">
+              Coefficiente avversario per partita
+            </h3>
+            {oppChartData.length > 0
+              ? <OppCoeffImpactChart chartData={oppChartData} />
+              : <p className="text-xs text-gray-600 italic py-3">Carica partite per vedere il grafico.</p>}
+          </div>
+
+          {/* Slider interlacciati */}
+          <div className="glass-card p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-300">Peso per fondamentale avversario</h3>
+                <p className="text-[10px] text-gray-500 mt-0.5">
+                  Gli slider sono interlacciati: la somma è sempre 100%.
+                  Spostando uno slider gli altri si ridistribuiscono proporzionalmente.
+                </p>
+              </div>
+              <button
+                onClick={() => { setOppWeights({ reception: 0.25, attack: 0.25, defense: 0.25, serve: 0.25 }); setOppIntensity(1); }}
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-0.5 rounded hover:bg-white/5 flex-shrink-0"
+              >
+                ↺ Reset
+              </button>
+            </div>
+
+            {/* ── Incidenza slider ─────────────────────────────────── */}
+            <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">⚡</span>
+                  <div>
+                    <p className="text-sm font-semibold text-amber-300">Incidenza del coefficiente</p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">
+                      Amplifica la deviazione del coefficiente dal valore neutro (1.0).
+                      A 0× il coefficiente non ha effetto; a 1× effetto base; oltre 1× l'impatto cresce.
+                    </p>
+                  </div>
+                </div>
+                <span className="text-lg font-mono font-bold text-amber-300 min-w-[3rem] text-right">
+                  {oppIntensity.toFixed(1)}×
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-gray-600 w-4">0×</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={5}
+                  step={0.1}
+                  value={oppIntensity}
+                  onChange={e => setOppIntensity(parseFloat(e.target.value))}
+                  className="flex-1 accent-amber-400"
+                />
+                <span className="text-[9px] text-gray-600 w-4 text-right">5×</span>
+              </div>
+              {/* Visual scale bar */}
+              <div className="w-full h-1.5 rounded-full bg-white/5 overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-150 bg-amber-400"
+                  style={{ width: `${(oppIntensity / 5) * 100}%`, opacity: 0.7 }}
+                />
+              </div>
+              {/* Preview del range effettivo del coefficiente */}
+              {oppChartData.length > 0 && (() => {
+                const coeffs = oppChartData.map(d => d.coeff);
+                const cMin = Math.min(...coeffs).toFixed(3);
+                const cMax = Math.max(...coeffs).toFixed(3);
+                return (
+                  <p className="text-[10px] text-gray-500">
+                    Range attuale coefficiente: <span className="font-mono text-sky-400">{cMin}</span>
+                    {' '}–{' '}
+                    <span className="font-mono text-rose-400">{cMax}</span>
+                    {' '}· (1.0 = neutro)
+                  </p>
+                );
+              })()}
+            </div>
+
+            <div className="space-y-4">
+              {[
+                { key: 'reception', label: 'Ricezione avv.',  icon: '🤲', color: '#0ea5e9',
+                  desc: 'Quanto conta la ricezione avversaria? Avversari con ricezione alta sono più pericolosi in fase di cambio palla.' },
+                { key: 'attack',    label: 'Attacco avv.',    icon: '⚔',  color: '#f43f5e',
+                  desc: 'Quanto conta l\'efficacia in attacco dell\'avversario? Squadre con alto attacco rendono più difficile difendersi.' },
+                { key: 'defense',   label: 'Difesa avv.',     icon: '🛡',  color: '#10b981',
+                  desc: 'Quanto conta la difesa avversaria? Una difesa solida limita i punti diretti e prolunga i rally.' },
+                { key: 'serve',     label: 'Servizio avv.',   icon: '🎯',  color: '#8b5cf6',
+                  desc: 'Quanto conta il servizio avversario? Un servizio aggressivo mette in difficoltà la nostra ricezione.' },
+              ].map(({ key, label, icon, color, desc }) => (
+                <div key={key} className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm">{icon}</span>
+                      <span className="text-sm font-medium" style={{ color }}>{label}</span>
+                    </div>
+                    <span className="text-[11px] font-mono font-bold" style={{ color }}>
+                      {(oppWeights[key] * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-gray-500 leading-relaxed">{desc}</p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] text-gray-600 w-4">0%</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={oppWeights[key]}
+                      onChange={e => handleOppWeightChange(key, parseFloat(e.target.value))}
+                      className="flex-1"
+                      style={{ accentColor: color }}
+                    />
+                    <span className="text-[9px] text-gray-600 w-8 text-right">100%</span>
+                  </div>
+                  {/* Visual proportional bar */}
+                  <div className="w-full h-1 rounded-full bg-white/5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-150"
+                      style={{ width: `${(oppWeights[key] * 100).toFixed(1)}%`, background: color, opacity: 0.7 }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Sum check indicator */}
+            <div className="pt-3 border-t border-white/5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {(['reception','attack','defense','serve']).map(k => {
+                  const colors = { reception: '#0ea5e9', attack: '#f43f5e', defense: '#10b981', serve: '#8b5cf6' };
+                  const labels = { reception: 'Ric.', attack: 'Att.', defense: 'Dif.', serve: 'Serv.' };
+                  return (
+                    <div key={k} className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: colors[k] }} />
+                      <span className="text-[10px] font-mono text-gray-400">{labels[k]} {(oppWeights[k]*100).toFixed(0)}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <span className="text-[10px] font-mono text-green-400">
+                Σ = {(Object.values(oppWeights).reduce((s,v)=>s+v,0)*100).toFixed(0)}%
+              </span>
+            </div>
+          </div>
+
+          {/* Formula note */}
+          <div className="glass-card p-4 text-[10px] text-gray-500 space-y-1 leading-relaxed">
+            <p className="text-xs text-gray-400 font-medium mb-1">Come funziona il coefficiente avversario</p>
+            <p>• Per ogni partita viene calcolata la <span className="text-violet-300">Media Ponderata</span> (MP) dell'avversario per ciascun fondamentale (scala 1–5).</p>
+            <p>• Ogni MP viene confrontata con la <span className="text-amber-400">media del campionato</span>: <span className="font-mono text-amber-400/80">ratio_f = MP_avv / MP_media</span></p>
+            <p>• Coefficiente base (vicino a 1.0): <span className="font-mono text-amber-400/80">C_raw = w_R·r_R + w_A·r_A + w_D·r_D + w_S·r_S</span></p>
+            <p>• <span className="text-amber-300 font-medium">Incidenza</span> amplifica la deviazione dal neutro: <span className="font-mono text-amber-400/80">C_eff = 1 + k × (C_raw − 1)</span></p>
+            <p>• C_eff &gt; 1 → avversario sopra media (partita più difficile) · C_eff &lt; 1 → avversario sotto media</p>
+          </div>
+
+        </div>
+      )}
 
       {/* ── Sezione Pesi Partita ── */}
       {activeSection === 'weights' && (
