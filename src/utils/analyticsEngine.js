@@ -56,6 +56,7 @@ function deduceOpponentServe(ourReception, rallies) {
     total,
     efficacy: total > 0 ? (serve5 - serve1) / total : 0,
     efficiency: total > 0 ? (serve5 + serve4 - serve1) / total : 0,
+    mediaPond: total > 0 ? (serve1 + 2*serve2 + 3*serve3 + 4*serve4 + 5*serve5) / total : 0,
   };
 }
 
@@ -96,28 +97,37 @@ function deduceOpponentAttack(ourDefense, rallies, ourBlock) {
     total,
     efficacy: total > 0 ? (attack5 - attack1) / total : 0,
     efficiency: total > 0 ? (attack5 + attack4 - attack1) / total : 0,
+    mediaPond: total > 0 ? (attack1 + 2*attack2 + 3*attack3 + 4*attack4 + 5*attack5) / total : 0,
   };
 }
 
 function deduceOpponentDefense(ourAttack) {
   // Our A5 → their Defense 1, A4 → Defense 2, A3 → Defense 3, A2 → Defense 4+5
+  const v1 = ourAttack.kill || 0;
+  const v2 = ourAttack.pos  || 0;
+  const v3 = ourAttack.exc  || 0;
+  const v45 = ourAttack.neg || 0;   // A2 → D4+5 (combined)
+  const total = v1 + v2 + v3 + v45;
+  // For val4+5 combined: estimate val4 = combined/3, val5 = 2*combined/3
+  // Weighted contribution = 4*(combined/3) + 5*(2*combined/3) = (14/3)*combined
   return {
-    val1: ourAttack.kill || 0,      // A5 → D1
-    val2: ourAttack.pos || 0,       // A4 → D2 (freeball)
-    val3: ourAttack.exc || 0,       // A3 → D3
-    'val4+5': ourAttack.neg || 0,   // A2 → D4+5 (combined)
-    total: (ourAttack.kill || 0) + (ourAttack.pos || 0) + (ourAttack.exc || 0) + (ourAttack.neg || 0),
+    val1: v1, val2: v2, val3: v3, 'val4+5': v45, total,
+    mediaPond: total > 0 ? (v1 + 2*v2 + 3*v3 + (14/3)*v45) / total : 0,
   };
 }
 
 function deduceOpponentReception(ourServe) {
   // Our B5 → their Reception 1, B4 → Reception 2, B3 → Reception 3, B2 → Reception 4+5
+  const v1 = ourServe.kill || 0;
+  const v2 = ourServe.pos  || 0;
+  const v3 = ourServe.exc  || 0;
+  const v45 = ourServe.neg || 0;   // B2 → R4+5 (combined)
+  const total = v1 + v2 + v3 + v45;
+  // For val4+5 combined: estimate val4 = combined/3, val5 = 2*combined/3
+  // Weighted contribution = 4*(combined/3) + 5*(2*combined/3) = (14/3)*combined
   return {
-    val1: ourServe.kill || 0,      // B5 → R1
-    val2: ourServe.pos || 0,       // B4 → R2
-    val3: ourServe.exc || 0,       // B3 → R3
-    'val4+5': ourServe.neg || 0,   // B2 → R4+5 (combined)
-    total: (ourServe.kill || 0) + (ourServe.pos || 0) + (ourServe.exc || 0) + (ourServe.neg || 0),
+    val1: v1, val2: v2, val3: v3, 'val4+5': v45, total,
+    mediaPond: total > 0 ? (v1 + 2*v2 + 3*v3 + (14/3)*v45) / total : 0,
   };
 }
 

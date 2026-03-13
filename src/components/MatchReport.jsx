@@ -598,6 +598,26 @@ function computeAggregatedScout(matchAnalytics) {
   agg.defense.attitude   = td > 0 ? (agg.defense['val4+5'] + agg.defense.val3) / td : 0;
   agg.reception.attitude = tr > 0 ? (agg.reception['val4+5'] + agg.reception.val3) / tr : 0;
 
+  // ── Media Ponderata ──────────────────────────────────────────────────────────
+  // Weighted average of outcome values on the 1–5 scale.
+  // Serve/Attack: all individual values available → standard weighted average.
+  // Defense/Reception: val4 and val5 are combined → estimate:
+  //   val4_est = combined/3, val5_est = 2*combined/3
+  //   Weight contribution = 4*(combined/3) + 5*(2*combined/3) = (14/3)*combined
+  agg.serve.mediaPond = t > 0
+    ? (agg.serve.val1 + 2*agg.serve.val2 + 3*agg.serve.val3 + 4*agg.serve.val4 + 5*agg.serve.val5) / t
+    : 0;
+  agg.attack.mediaPond = ta > 0
+    ? (agg.attack.val1 + 2*agg.attack.val2 + 3*agg.attack.val3 + 4*agg.attack.val4 + 5*agg.attack.val5) / ta
+    : 0;
+  agg.defense.mediaPond = td > 0
+    ? (agg.defense.val1 + 2*agg.defense.val2 + 3*agg.defense.val3 + (14/3)*agg.defense['val4+5']) / td
+    : 0;
+  agg.reception.mediaPond = tr > 0
+    ? (agg.reception.val1 + 2*agg.reception.val2 + 3*agg.reception.val3 + (14/3)*agg.reception['val4+5']) / tr
+    : 0;
+  agg.block.mediaPond = null; // block not deduced
+
   return agg;
 }
 
@@ -695,11 +715,11 @@ function computeAttitude(match) {
 
 function computeTeamFundAverages(matchAnalytics) {
   const acc = {
-    serve:     { efficacy: [], efficiency: [], attitude: [] },
-    attack:    { efficacy: [], efficiency: [], attitude: [] },
-    defense:   { efficacy: [], efficiency: [], attitude: [] },
-    reception: { efficacy: [], efficiency: [], attitude: [] },
-    block:     { efficacy: [], efficiency: [], attitude: [] },
+    serve:     { efficacy: [], efficiency: [], attitude: [], mediaPond: [] },
+    attack:    { efficacy: [], efficiency: [], attitude: [], mediaPond: [] },
+    defense:   { efficacy: [], efficiency: [], attitude: [], mediaPond: [] },
+    reception: { efficacy: [], efficiency: [], attitude: [], mediaPond: [] },
+    block:     { efficacy: [], efficiency: [], attitude: [], mediaPond: [] },
   };
   for (const ma of matchAnalytics || []) {
     const team = ma?.match?.riepilogo?.team;
@@ -729,6 +749,9 @@ function computeTeamFundAverages(matchAnalytics) {
       }
       acc[key].efficacy.push(effcy * 100);
       acc[key].efficiency.push(effncy * 100);
+      // Media Ponderata — our team has all individual values (kill=5, pos=4, exc=3, neg=2, err=1)
+      const mpRaw = (1*(data.err||0) + 2*(data.neg||0) + 3*(data.exc||0) + 4*(data.pos||0) + 5*(data.kill||0)) / total;
+      acc[key].mediaPond.push((mpRaw / 5) * 100); // normalize to 0–100 for chart parity
     }
     // Attitude per match
     const att = computeAttitude(ma?.match);
@@ -741,9 +764,10 @@ function computeTeamFundAverages(matchAnalytics) {
   }
   return Object.fromEntries(
     Object.entries(acc).map(([k, v]) => [k, {
-      efficacy:  roundValue(avgValue(v.efficacy)),
-      efficiency: roundValue(avgValue(v.efficiency)),
-      attitude:  roundValue(avgValue(v.attitude)),
+      efficacy:   roundValue(avgValue(v.efficacy)),
+      efficiency:  roundValue(avgValue(v.efficiency)),
+      attitude:   roundValue(avgValue(v.attitude)),
+      mediaPond:  roundValue(avgValue(v.mediaPond)),
     }])
   );
 }
@@ -754,6 +778,11 @@ function getMatchTeamValue(selectedMatchMA, key, metric) {
   if (!data || !data.tot || data.tot <= 0) return null;
   const tot = data.tot;
   let value;
+  if (metric === 'mediaPond') {
+    // Our team has full individual values: err=1, neg=2, exc=3, pos=4, kill=5
+    const mp = (1*(data.err||0) + 2*(data.neg||0) + 3*(data.exc||0) + 4*(data.pos||0) + 5*(data.kill||0)) / tot;
+    return Number.isFinite(mp) ? roundValue((mp / 5) * 100) : null;
+  }
   if (key === 'defense' || key === 'reception') {
     const pos45 = (data.kill || 0) + (data.pos || 0);
     value = metric === 'efficacy' ? pos45 / tot : (pos45 - (data.err || 0)) / tot;
@@ -909,6 +938,12 @@ function AggregatedScoutPanel({
             className={`text-[10px] px-2 py-1 rounded border ${lineMode === 'attitude' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
           >
             AI Score
+          </button>
+          <button
+            onClick={() => setLineMode('mediaPond')}
+            className={`text-[10px] px-2 py-1 rounded border ${lineMode === 'mediaPond' ? 'bg-violet-500/20 text-violet-300 border-violet-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
+          >
+            Media Pond.
           </button>
           {/* Info icon for AI Score explanation */}
           <button
@@ -1152,6 +1187,9 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
       // Use pre-computed opponent attitude from computeAggregatedScout
       return Number.isFinite(fund.attitude) ? roundValue(fund.attitude * 100) : null;
     }
+    if (playerLineMode === 'mediaPond') {
+      return Number.isFinite(fund.mediaPond) ? roundValue((fund.mediaPond / 5) * 100) : null;
+    }
     const metric = playerLineMode === 'efficienza' ? fund.efficiency : fund.efficacy;
     return Number.isFinite(metric) ? roundValue(metric * 100) : null;
   };
@@ -1298,6 +1336,7 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
             <button onClick={() => setPlayerLineMode('efficacia')} className={`text-[10px] px-2 py-1 rounded border ${playerLineMode === 'efficacia' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}>Efficacia</button>
             <button onClick={() => setPlayerLineMode('efficienza')} className={`text-[10px] px-2 py-1 rounded border ${playerLineMode === 'efficienza' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}>Efficienza</button>
             <button onClick={() => setPlayerLineMode('attitude')} className={`text-[10px] px-2 py-1 rounded border ${playerLineMode === 'attitude' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}>AI Score</button>
+            <button onClick={() => setPlayerLineMode('mediaPond')} className={`text-[10px] px-2 py-1 rounded border ${playerLineMode === 'mediaPond' ? 'bg-violet-500/20 text-violet-300 border-violet-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}>Media Pond.</button>
           </div>
         </div>
         <div className="glass-card p-3">
@@ -1961,20 +2000,28 @@ function OpponentScoutComparisonChart({
   const metricKey = lineMode === 'efficienza' ? 'efficiency' : 'efficacy';
   const selectedOppName = activeOpponent === ALL_OPPONENTS_ID ? 'Tutte le squadre' : activeOpponent;
 
-  // For opponent lines: read pre-computed attitude or standard metric
+  // For opponent lines: read pre-computed attitude/mediaPond or standard metric
   const getFundMetric = (fundData) => {
     if (!fundData) return null;
     if (lineMode === 'attitude') {
       return Number.isFinite(fundData.attitude) ? roundValue(fundData.attitude * 100) : null;
     }
+    if (lineMode === 'mediaPond') {
+      // mediaPond stored on 1–5 scale; normalize to 0–100 for chart parity
+      return Number.isFinite(fundData.mediaPond) ? roundValue((fundData.mediaPond / 5) * 100) : null;
+    }
     return Number.isFinite(fundData[metricKey]) ? roundValue(fundData[metricKey] * 100) : null;
   };
 
-  // For "Noi medi" line: season average (includes attitude from computeTeamFundAverages)
+  // For "Noi medi" line: season average (includes attitude/mediaPond from computeTeamFundAverages)
   const getTeamAvgMetric = (teamData) => {
     if (!teamData) return null;
     if (lineMode === 'attitude') {
       return Number.isFinite(teamData.attitude) ? teamData.attitude : null;
+    }
+    if (lineMode === 'mediaPond') {
+      // Already stored as 0–100 normalized in computeTeamFundAverages
+      return Number.isFinite(teamData.mediaPond) ? teamData.mediaPond : null;
     }
     return lineMode === 'efficienza' ? teamData.efficiency : teamData.efficacy;
   };
@@ -1987,6 +2034,9 @@ function OpponentScoutComparisonChart({
       if (!att) return null;
       const v = att[key];
       return Number.isFinite(v) ? roundValue(v * 100) : null;
+    }
+    if (lineMode === 'mediaPond') {
+      return getMatchTeamValue(ma, key, 'mediaPond');
     }
     return getMatchTeamValue(ma, key, metricKey);
   };
@@ -2041,6 +2091,7 @@ function OpponentScoutComparisonChart({
     efficacia:  'Confronto squadre (efficacia)',
     efficienza: 'Confronto squadre (efficienza)',
     attitude:   'Confronto squadre (AI Score)',
+    mediaPond:  'Confronto squadre (media ponderata)',
   }[lineMode] || 'Confronto squadre';
 
   return (

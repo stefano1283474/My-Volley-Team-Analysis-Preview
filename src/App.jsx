@@ -309,10 +309,20 @@ export default function App() {
 
   const handleOpenOpponentReportFromDashboard = useCallback((opponentName) => {
     if (!opponentName) return;
+    // Fuzzy-match the standings name against the match metadata opponent names
+    // (standings team names may differ from the short names used in match data)
+    const normalize = (s) => String(s || '').trim().toUpperCase();
+    const oppNorm = normalize(opponentName);
+    const matchOpponentName = matches
+      .map(m => m.metadata?.opponent || '')
+      .find(opp => {
+        const n = normalize(opp);
+        return n === oppNorm || n.includes(oppNorm) || oppNorm.includes(n);
+      }) || opponentName;
     setSelectedMatch(null);
-    setMatchReportIntent({ opponent: opponentName, openCommentTick: 0 });
+    setMatchReportIntent({ opponent: matchOpponentName, openCommentTick: 0 });
     setActiveTab('matches');
-  }, []);
+  }, [matches]);
 
   useEffect(() => {
     if (!standings.length) return;
