@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { APP_NAME, APP_VERSION } from '../utils/constants';
 
 export default function LoginPage() {
-  const { signInWithGoogle } = useAuth();
+  const { signInWithGoogle, authError } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -103,8 +103,8 @@ export default function LoginPage() {
             )}
           </button>
 
-          {error && (
-            <p className="text-xs text-red-400 text-center">{error}</p>
+          {(error || authError) && (
+            <p className="text-xs text-red-400 text-center">{error || authError}</p>
           )}
         </div>
 
