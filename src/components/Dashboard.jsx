@@ -16,7 +16,7 @@ import { applyFNCToEfficacy } from '../utils/analyticsEngine';
 import { usePin } from '../context/PinContext';
 import { useProfile } from '../context/ProfileContext';
 import DataModeSelector from './DataModeSelector';
-import NewsSection from './NewsSection';
+import NewsBacheca from './NewsBacheca';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ function findStandingTeamByName(standings, teamName) {
 // ─── Main Dashboard component ─────────────────────────────────────────────────
 
 export default function Dashboard({
-  analytics, matches, standings, weights, fncConfig, baselines,
+  analytics, matches, standings, calendar, weights, fncConfig, baselines,
   onSelectMatch, onSelectPlayer,
   dashboardConfig, onConfigChange,
   onOpenGrafici,
@@ -94,6 +94,8 @@ export default function Dashboard({
   onNewsChange,
   canEditNews = false,
   newsAuthorEmail = '',
+  teamOffers = [],
+  onOffersChange,
 }) {
   const hasData = !!analytics && matches.length > 0;
 
@@ -274,13 +276,20 @@ export default function Dashboard({
   if (!hasData) {
     return (
       <div className="space-y-6 max-w-6xl mx-auto">
-        <NewsSection
+        <NewsBacheca
+          standings={standings}
+          calendar={calendar}
+          analytics={analytics}
+          ownerTeamName={ownerTeamName || null}
           posts={teamNews}
           onPostsChange={onNewsChange}
           canEdit={canEditNews}
-          teamName={ownerTeamName || null}
           authorEmail={newsAuthorEmail}
+          offers={teamOffers}
+          onOffersChange={onOffersChange}
           onScrollToStandings={scrollToStandings}
+          onSelectMatch={onSelectMatch}
+          onSelectPlayer={onSelectPlayer}
         />
         <div className="flex flex-col items-center justify-center h-72 text-gray-500 text-sm">
           <div className="text-5xl mb-4">🏐</div>
@@ -454,13 +463,18 @@ export default function Dashboard({
     <div className="space-y-6 max-w-6xl mx-auto">
 
       {/* ── Bacheca Squadra ───────────────────────────────────────────────── */}
-      <NewsSection
+      <NewsBacheca
+        standings={standings}
+        calendar={calendar}
+        analytics={analytics}
+        ownerTeamName={ownerTeamName || null}
         posts={teamNews}
         onPostsChange={onNewsChange}
         canEdit={canEditNews}
-        teamName={ownerTeamName || null}
         authorEmail={newsAuthorEmail}
         onScrollToStandings={scrollToStandings}
+        onSelectMatch={onSelectMatch}
+        onSelectPlayer={onSelectPlayer}
       />
 
       {/* ── Header ───────────────────────────────────────────────────────── */}

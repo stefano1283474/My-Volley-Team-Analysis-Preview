@@ -82,6 +82,42 @@ service cloud.firestore {
       allow create, update, delete: if isOwner(ownerUid) || isAllowedWriter(ownerUid);
     }
 
+    // Offerte team per dataset owner
+    match /volley_team_analysis_6_0_offers/{ownerUid} {
+      allow read: if isOwner(ownerUid) || isAllowedReader(ownerUid);
+      allow create, update, delete: if isOwner(ownerUid) || isAllowedWriter(ownerUid);
+    }
+
+    // Telemetria utilizzo utente (per dashboard admin)
+    match /volley_team_analysis_6_0_user_usage/{uid} {
+      allow get: if isOwnUserDoc(uid) || isAdminUser();
+      allow list: if isAdminUser();
+      allow create, update: if isOwnUserDoc(uid)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == requesterEmail();
+      allow delete: if isAdminUser();
+    }
+
+    match /volley_team_analysis_6_0_profile_requests/{uid} {
+      allow get: if isOwnUserDoc(uid) || isAdminUser();
+      allow list: if isAdminUser();
+      allow create: if isOwnUserDoc(uid)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == requesterEmail()
+        && request.resource.data.currentProfile in ['base', 'pro', 'promax']
+        && request.resource.data.targetProfile in ['pro', 'promax']
+        && request.resource.data.status == 'pending';
+      allow update: if isAdminUser()
+        || (isOwnUserDoc(uid)
+            && resource.data.status == 'pending'
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.email == resource.data.email
+            && request.resource.data.currentProfile in ['base', 'pro', 'promax']
+            && request.resource.data.targetProfile in ['pro', 'promax']
+            && request.resource.data.status == 'pending');
+      allow delete: if isAdminUser();
+    }
+
     // Documento shared_access (configurazione condivisione dell'owner)
     // Usa resource.data direttamente per evitare get() ricorsivo sullo stesso doc
     match /volley_team_analysis_6_0_shared_access/{ownerUid} {

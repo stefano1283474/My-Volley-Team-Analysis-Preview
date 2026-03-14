@@ -19,7 +19,7 @@
 
 import {
   doc, collection,
-  setDoc, getDoc, getDocs, deleteDoc,
+  setDoc, getDoc, getDocs, deleteDoc, writeBatch,
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -31,6 +31,8 @@ const CALENDAR_DOC_ID = 'calendar_meta';
 const SHARED_ACCESS_COLLECTION = 'volley_team_analysis_6_0_shared_access';
 const SHARE_TOKENS_COLLECTION = 'volley_team_analysis_6_0_share_tokens';
 const USERS_ACCESS_COLLECTION = 'volley_team_analysis_6_0_users';
+const PROFILE_REQUESTS_COLLECTION = 'volley_team_analysis_6_0_profile_requests';
+const USER_USAGE_COLLECTION = 'volley_team_analysis_6_0_user_usage';
 const PROFILE_VALUES = ['base', 'pro', 'promax'];
 // Email di bootstrap: ottiene role='admin' automaticamente al PRIMO login.
 // Logins successivi non sovrascrivono il ruolo (già nel documento).
@@ -62,6 +64,22 @@ function usersAccessCol() {
 
 function userAccessDocRef(uid) {
   return doc(db, USERS_ACCESS_COLLECTION, uid);
+}
+
+function profileRequestsCol() {
+  return collection(db, PROFILE_REQUESTS_COLLECTION);
+}
+
+function profileRequestDocRef(uid) {
+  return doc(db, PROFILE_REQUESTS_COLLECTION, uid);
+}
+
+function userUsageCol() {
+  return collection(db, USER_USAGE_COLLECTION);
+}
+
+function userUsageDocRef(uid) {
+  return doc(db, USER_USAGE_COLLECTION, uid);
 }
 
 // ─── Utility: strip undefined fields (Firestore non li accetta) ──────────────
@@ -97,6 +115,10 @@ function normalizeAssignedProfile(profile) {
 
 function normalizeUserRole(role) {
   return role === 'admin' ? 'admin' : 'user';
+}
+
+function normalizeRequestStatus(status) {
+  return ['pending', 'approved', 'rejected'].includes(status) ? status : 'pending';
 }
 
 // ─── Match operations ────────────────────────────────────────────────────────
@@ -562,6 +584,8 @@ export async function loadAllUsersAccess() {
       role: normalizeUserRole(data.role),
       assignedProfile: normalizeAssignedProfile(data.assignedProfile),
       lastLoginAt: data.lastLoginAt || null,
+      createdAt: data.createdAt || null,
+      updatedAt: data.updatedAt || null,
     };
     const key = user.email || `uid:${user.uid}`;
     const prev = usersByKey.get(key);
@@ -584,6 +608,107 @@ export async function loadAllUsersAccess() {
     if (byEmail !== 0) return byEmail;
     return (a.uid || '').localeCompare(b.uid || '');
   });
+}
+
+export async function submitProfileUpgradeRequest({
+  uid,
+  email,
+  displayName = '',
+  currentProfile = 'base',
+  targetProfile = 'pro',
+  message = '',
+}) {
+  if (!uid) throw new Error('Utente non valido');
+  const current = normalizeAssignedProfile(currentProfile);
+  const target = normalizeAssignedProfile(targetProfile);
+  if (!['pro', 'promax'].includes(target)) throw new Error('Profilo richiesto non valido');
+  await setDoc(profileRequestDocRef(uid), sanitize({
+    uid,
+    email: normalizeEmail(email),
+    displayName: displayName || '',
+    currentProfile: current,
+    targetProfile: target,
+    message: String(message || '').trim(),
+    status: 'pending',
+    requestedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    resolvedAt: null,
+    resolverUid: '',
+    resolverEmail: '',
+  }), { merge: true });
+}
+
+export async function loadMyProfileUpgradeRequest(uid) {
+  if (!uid) return null;
+  const snap = await getDoc(profileRequestDocRef(uid));
+  if (!snap.exists()) return null;
+  const data = snap.data() || {};
+  return {
+    uid: snap.id,
+    email: normalizeEmail(data.email),
+    displayName: data.displayName || '',
+    currentProfile: normalizeAssignedProfile(data.currentProfile),
+    targetProfile: normalizeAssignedProfile(data.targetProfile),
+    message: data.message || '',
+    status: normalizeRequestStatus(data.status),
+    requestedAt: data.requestedAt || null,
+    updatedAt: data.updatedAt || null,
+    resolvedAt: data.resolvedAt || null,
+    resolverUid: data.resolverUid || '',
+    resolverEmail: data.resolverEmail || '',
+  };
+}
+
+export async function loadAllProfileUpgradeRequests() {
+  const snap = await getDocs(profileRequestsCol());
+  const requests = [];
+  snap.forEach((d) => {
+    const data = d.data() || {};
+    requests.push({
+      uid: d.id,
+      email: normalizeEmail(data.email),
+      displayName: data.displayName || '',
+      currentProfile: normalizeAssignedProfile(data.currentProfile),
+      targetProfile: normalizeAssignedProfile(data.targetProfile),
+      message: data.message || '',
+      status: normalizeRequestStatus(data.status),
+      requestedAt: data.requestedAt || null,
+      updatedAt: data.updatedAt || null,
+      resolvedAt: data.resolvedAt || null,
+      resolverUid: data.resolverUid || '',
+      resolverEmail: data.resolverEmail || '',
+    });
+  });
+  return requests.sort((a, b) => timestampToMs(b.requestedAt) - timestampToMs(a.requestedAt));
+}
+
+export async function resolveProfileUpgradeRequest(uid, decision, resolver = {}) {
+  if (!uid) throw new Error('Richiesta non valida');
+  const status = decision === 'approved' ? 'approved' : 'rejected';
+  const reqSnap = await getDoc(profileRequestDocRef(uid));
+  if (!reqSnap.exists()) throw new Error('Richiesta non trovata');
+  const reqData = reqSnap.data() || {};
+  const batch = writeBatch(db);
+
+  batch.set(profileRequestDocRef(uid), sanitize({
+    status,
+    updatedAt: serverTimestamp(),
+    resolvedAt: serverTimestamp(),
+    resolverUid: resolver.uid || '',
+    resolverEmail: normalizeEmail(resolver.email),
+  }), { merge: true });
+
+  if (status === 'approved') {
+    const target = normalizeAssignedProfile(reqData.targetProfile);
+    if (['pro', 'promax'].includes(target)) {
+      batch.set(userAccessDocRef(uid), sanitize({
+        assignedProfile: target,
+        updatedAt: serverTimestamp(),
+      }), { merge: true });
+    }
+  }
+
+  await batch.commit();
 }
 
 export async function updateUserAssignedProfile(uid, assignedProfile) {
@@ -630,6 +755,41 @@ export async function saveTeamNews(ownerUid, posts) {
   await setDoc(newsDocRef(ownerUid), sanitize({ posts, updatedAt: serverTimestamp() }));
 }
 
+// ─── Team Offerte ─────────────────────────────────────────────────────────────
+
+const OFFERS_COLLECTION = 'volley_team_analysis_6_0_offers';
+
+function offersDocRef(ownerUid) {
+  return doc(db, OFFERS_COLLECTION, ownerUid);
+}
+
+/**
+ * Carica le offerte per un dataset owner.
+ * Restituisce un array di offerte.
+ */
+export async function loadTeamOffers(ownerUid) {
+  if (!ownerUid) return [];
+  try {
+    const snap = await getDoc(offersDocRef(ownerUid));
+    if (!snap.exists()) return [];
+    return snap.data()?.offers || [];
+  } catch (err) {
+    if (err?.code !== 'permission-denied') {
+      console.error('[Offers] loadTeamOffers:', err);
+    }
+    return [];
+  }
+}
+
+/**
+ * Salva l'intero array di offerte.
+ * Sovrascrive il documento con il nuovo array.
+ */
+export async function saveTeamOffers(ownerUid, offers) {
+  if (!ownerUid) throw new Error('ownerUid mancante');
+  await setDoc(offersDocRef(ownerUid), sanitize({ offers, updatedAt: serverTimestamp() }));
+}
+
 // ─── User role management ─────────────────────────────────────────────────────
 
 /**
@@ -648,4 +808,78 @@ export async function updateUserRole(uid, role) {
   });
 
   await setDoc(userAccessDocRef(uid), payload, { merge: true });
+}
+
+export async function recordUserLoginUsage(user, access = {}, context = {}) {
+  if (!user?.uid) return;
+  const uid = user.uid;
+  const ref = userUsageDocRef(uid);
+  let existing = {};
+  try {
+    const snap = await getDoc(ref);
+    existing = snap.exists() ? (snap.data() || {}) : {};
+  } catch {}
+
+  const loginCount = Math.max(0, Number(existing.loginCount || 0)) + 1;
+  const payload = sanitize({
+    uid,
+    email: normalizeEmail(user.email),
+    displayName: user.displayName || '',
+    role: normalizeUserRole(access.role),
+    assignedProfile: normalizeAssignedProfile(access.assignedProfile || 'pro'),
+    firstLoginAt: existing.firstLoginAt || serverTimestamp(),
+    lastLoginAt: serverTimestamp(),
+    lastSeenAt: serverTimestamp(),
+    loginCount,
+    lastSection: String(context.section || existing.lastSection || ''),
+    lastAppVersion: String(context.appVersion || existing.lastAppVersion || ''),
+    lastUserAgent: String(context.userAgent || existing.lastUserAgent || ''),
+    sectionCounters: existing.sectionCounters || {},
+    updatedAt: serverTimestamp(),
+  });
+  await setDoc(ref, payload, { merge: true });
+}
+
+export async function recordUserSectionUsage(uid, sectionId) {
+  if (!uid || !sectionId) return;
+  const ref = userUsageDocRef(uid);
+  let existing = {};
+  try {
+    const snap = await getDoc(ref);
+    existing = snap.exists() ? (snap.data() || {}) : {};
+  } catch {}
+  const counters = { ...(existing.sectionCounters || {}) };
+  counters[sectionId] = Math.max(0, Number(counters[sectionId] || 0)) + 1;
+  await setDoc(ref, sanitize({
+    uid,
+    sectionCounters: counters,
+    lastSection: sectionId,
+    lastSeenAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }), { merge: true });
+}
+
+export async function loadAllUserUsageStats() {
+  const snap = await getDocs(userUsageCol());
+  const rows = [];
+  snap.forEach((d) => {
+    const data = d.data() || {};
+    rows.push({
+      uid: d.id,
+      email: normalizeEmail(data.email),
+      displayName: data.displayName || '',
+      role: normalizeUserRole(data.role),
+      assignedProfile: normalizeAssignedProfile(data.assignedProfile || 'pro'),
+      loginCount: Math.max(0, Number(data.loginCount || 0)),
+      lastSection: data.lastSection || '',
+      sectionCounters: data.sectionCounters || {},
+      firstLoginAt: data.firstLoginAt || null,
+      lastLoginAt: data.lastLoginAt || null,
+      lastSeenAt: data.lastSeenAt || null,
+      lastAppVersion: data.lastAppVersion || '',
+      lastUserAgent: data.lastUserAgent || '',
+      updatedAt: data.updatedAt || null,
+    });
+  });
+  return rows.sort((a, b) => timestampToMs(b.lastSeenAt) - timestampToMs(a.lastSeenAt));
 }

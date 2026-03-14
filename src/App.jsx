@@ -33,8 +33,17 @@ import {
   loadAllUsersAccess,
   updateUserAssignedProfile,
   updateUserRole,
+  submitProfileUpgradeRequest,
+  loadMyProfileUpgradeRequest,
+  loadAllProfileUpgradeRequests,
+  resolveProfileUpgradeRequest,
+  recordUserLoginUsage,
+  recordUserSectionUsage,
+  loadAllUserUsageStats,
   loadTeamNews,
   saveTeamNews,
+  loadTeamOffers,
+  saveTeamOffers,
 } from './utils/firestoreService';
 import { useAuth } from './context/AuthContext';
 import { PinProvider } from './context/PinContext';
@@ -59,6 +68,9 @@ import TeamAnalysis from './components/TeamAnalysis';
 import GiocoAnalysis from './components/GiocoAnalysis';
 import GuidePage from './components/GuidePage';
 import AdminUsersPanel from './components/AdminUsersPanel';
+import AdminRequestsPanel from './components/AdminRequestsPanel';
+import AdminContentPanel from './components/AdminContentPanel';
+import AdminUsageStatsPanel from './components/AdminUsageStatsPanel';
 
 // ─── Profile system ───────────────────────────────────────────────────────────
 const PROFILE_ORDER = { base: 0, pro: 1, promax: 2 };
@@ -75,8 +87,12 @@ const SECTIONS = [
   { id: 'evidenze', label: 'Evidenze', icon: '📈', minProfile: 'pro'  },
   { id: 'training', label: 'Training', icon: '🏋️', minProfile: 'base' },
   { id: 'sistema',  label: 'Sistema',  icon: '⚙️', minProfile: 'base' },
-  { id: 'admin',    label: 'Utenti Admin', icon: '🛡️', minProfile: 'base' },
+  { id: 'admin_users',    label: 'Gestione Utenti',    icon: '🛡️', minProfile: 'base' },
+  { id: 'admin_requests', label: 'Richieste Upgrade',  icon: '📨', minProfile: 'base' },
+  { id: 'admin_content',  label: 'Bacheca & Offerte',  icon: '📋', minProfile: 'base' },
+  { id: 'admin_stats',    label: 'Statistiche Utilizzo', icon: '📊', minProfile: 'base' },
 ];
+const ADMIN_SECTION_IDS = ['admin', 'admin_users', 'admin_requests', 'admin_content', 'admin_stats'];
 
 const SECTION_TABS = {
   analisi: [
@@ -273,7 +289,21 @@ export default function App() {
   const [sharedAccess, setSharedAccess] = useState(null);
   const [userAccess, setUserAccess] = useState(null);
   const [adminUsers, setAdminUsers] = useState([]);
+  const [adminUsageStats, setAdminUsageStats] = useState([]);
+  const [profileRequests, setProfileRequests] = useState([]);
   const [isAdminSaving, setIsAdminSaving] = useState(false);
+  const [isRequestSaving, setIsRequestSaving] = useState(false);
+  const [adminViewMode, setAdminViewMode] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vpa_admin_view_mode');
+      return saved === 'user' ? 'user' : 'admin';
+    } catch {
+      return 'admin';
+    }
+  });
+  const [myProfileRequest, setMyProfileRequest] = useState(null);
+  const [requestTargetProfile, setRequestTargetProfile] = useState('pro');
+  const [requestMessage, setRequestMessage] = useState('');
   const [isAccessReady, setIsAccessReady] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
@@ -286,6 +316,7 @@ export default function App() {
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const swipeStartRef = useRef(null);
+  const lastTrackedSectionRef = useRef('');
   const [profileReveal, setProfileReveal] = useState({ sections: [], tabs: [] });
   const [ownerTeamName, setOwnerTeamName] = useState(() => {
     try { return localStorage.getItem('vpa_owner_team') || ''; } catch { return ''; }
@@ -313,9 +344,35 @@ export default function App() {
     ? `${window.location.origin}${window.location.pathname}?share=${shareInfo.token}`
     : '';
   const isAdmin = userAccess?.role === 'admin';
+  const canUseAdminUi = isAdmin && adminViewMode === 'admin';
+  const assignedProfile = userAccess?.assignedProfile || 'pro';
+  const availableUpgradeTargets = useMemo(
+    () => Object.keys(PROFILE_META).filter(p => PROFILE_ORDER[p] > PROFILE_ORDER[assignedProfile]),
+    [assignedProfile]
+  );
+
+  useEffect(() => {
+    if (availableUpgradeTargets.length === 0) return;
+    if (availableUpgradeTargets.includes(requestTargetProfile)) return;
+    setRequestTargetProfile(availableUpgradeTargets[0]);
+  }, [availableUpgradeTargets, requestTargetProfile]);
 
   // ─── Team News (bacheca) ──────────────────────────────────────────────────
   const [teamNews, setTeamNews] = useState([]);
+  const toMs = useCallback((ts) => {
+    const d = ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null);
+    if (!d || Number.isNaN(d.getTime())) return 0;
+    return d.getTime();
+  }, []);
+  const formatItDateTime = useCallback((ts) => {
+    const ms = toMs(ts);
+    if (!ms) return '';
+    try {
+      return new Intl.DateTimeFormat('it-IT', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(ms));
+    } catch {
+      return '';
+    }
+  }, [toMs]);
   const handleNewsChange = useCallback(async (newPosts) => {
     const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
     if (!ownerUid) return;
@@ -325,17 +382,112 @@ export default function App() {
     }
   }, [isSharedMode, sharedAccess, user]);
 
+  const addSystemNotification = useCallback(async ({ metaKey, type = 'comunicazione', text }) => {
+    if (!metaKey || !text) return;
+    const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
+    if (!ownerUid) return;
+    const exists = teamNews.some((p) => p?.metaKey === metaKey);
+    if (exists) return;
+    const nextPost = {
+      id: `sys_${metaKey}`,
+      metaKey,
+      type,
+      text,
+      eventDate: null,
+      createdAt: new Date().toISOString(),
+      authorEmail: 'sistema@auto',
+    };
+    const next = [...teamNews, nextPost];
+    setTeamNews(next);
+    try { await saveTeamNews(ownerUid, next); } catch (err) {
+      console.error('[App] saveSystemNotification:', err);
+    }
+  }, [isSharedMode, sharedAccess, user, teamNews]);
+
+  const profileLabel = useCallback((profile) => (
+    profile === 'promax' ? 'Pro Max' : profile === 'pro' ? 'Pro' : 'Base'
+  ), []);
+
+  // ─── Team Offerte ─────────────────────────────────────────────────────────
+  const [teamOffers, setTeamOffers] = useState([]);
+  const handleOffersChange = useCallback(async (newOffers) => {
+    const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
+    if (!ownerUid) return;
+    setTeamOffers(newOffers);
+    try { await saveTeamOffers(ownerUid, newOffers); } catch (err) {
+      console.error('[App] saveTeamOffers:', err);
+    }
+  }, [isSharedMode, sharedAccess, user]);
+
+  useEffect(() => {
+    if (!user?.uid || isAdmin || !myProfileRequest) return;
+    const status = String(myProfileRequest.status || '').toLowerCase();
+    if (!['pending', 'approved', 'rejected'].includes(status)) return;
+    const requestedMs = toMs(myProfileRequest.requestedAt);
+    const resolvedMs = toMs(myProfileRequest.resolvedAt);
+    const stamp = status === 'pending'
+      ? (requestedMs || toMs(myProfileRequest.updatedAt))
+      : (resolvedMs || toMs(myProfileRequest.updatedAt) || requestedMs);
+    const eventKey = `profile_req_${status}_${user.uid}_${myProfileRequest.targetProfile || ''}_${stamp || 0}`;
+    const seenStorageKey = `vpa_profile_request_notice_seen_${user.uid}`;
+    let seenKeys = [];
+    try { seenKeys = JSON.parse(localStorage.getItem(seenStorageKey) || '[]'); } catch {}
+    if (seenKeys.includes(eventKey)) return;
+
+    const targetLabel = myProfileRequest.targetProfile === 'promax' ? 'Pro Max' : 'Pro';
+    const when = status === 'pending'
+      ? formatItDateTime(myProfileRequest.requestedAt)
+      : formatItDateTime(myProfileRequest.resolvedAt || myProfileRequest.updatedAt);
+    const text = status === 'pending'
+      ? `Richiesta upgrade profilo inviata: passaggio a ${targetLabel}${when ? ` il ${when}` : ''}.`
+      : status === 'approved'
+        ? `Upgrade profilo approvato: ora sei abilitato a ${targetLabel}${when ? ` (approvazione ${when})` : ''}.`
+        : `Richiesta upgrade profilo non approvata${when ? ` (${when})` : ''}.`;
+
+    const type = status === 'approved' ? 'risultato' : status === 'rejected' ? 'avviso' : 'info';
+    seenKeys = [...seenKeys, eventKey].slice(-50);
+    try { localStorage.setItem(seenStorageKey, JSON.stringify(seenKeys)); } catch {}
+    addSystemNotification({ metaKey: eventKey, type, text });
+  }, [user, isAdmin, myProfileRequest, toMs, formatItDateTime, addSystemNotification]);
+
+  useEffect(() => {
+    if (!user?.uid || isAdmin) return;
+    const storageKey = `vpa_last_assigned_profile_${user.uid}`;
+    let prevProfile = 'base';
+    try { prevProfile = localStorage.getItem(storageKey) || 'base'; } catch {}
+    if (!PROFILE_ORDER[assignedProfile] && assignedProfile !== 'base') return;
+    if (PROFILE_ORDER[assignedProfile] > PROFILE_ORDER[prevProfile]) {
+      const eventKey = `profile_level_up_${user.uid}_${prevProfile}_${assignedProfile}`;
+      addSystemNotification({
+        metaKey: eventKey,
+        type: 'risultato',
+        text: `Upgrade profilo attivato: da ${profileLabel(prevProfile)} a ${profileLabel(assignedProfile)}.`,
+      });
+    }
+    try { localStorage.setItem(storageKey, assignedProfile); } catch {}
+  }, [user, isAdmin, assignedProfile, addSystemNotification, profileLabel]);
+
   useEffect(() => {
     if (!isAdmin) return;
-    if (activeSection === 'admin') return;
-    setActiveSection('admin');
-    try { localStorage.setItem('vpa_active_section', 'admin'); } catch {}
-  }, [isAdmin, activeSection]);
+    if (canUseAdminUi) {
+      if (ADMIN_SECTION_IDS.includes(activeSection)) return;
+      setActiveSection('admin_users');
+      try { localStorage.setItem('vpa_active_section', 'admin_users'); } catch {}
+      return;
+    }
+    if (!ADMIN_SECTION_IDS.includes(activeSection)) return;
+    setActiveSection('home');
+    try { localStorage.setItem('vpa_active_section', 'home'); } catch {}
+  }, [isAdmin, canUseAdminUi, activeSection]);
 
   useEffect(() => {
     if (!user) {
       setUserAccess(null);
       setAdminUsers([]);
+      setAdminUsageStats([]);
+      setProfileRequests([]);
+      setMyProfileRequest(null);
+      lastTrackedSectionRef.current = '';
       setIsAccessReady(false);
       return;
     }
@@ -352,23 +504,43 @@ export default function App() {
         setActiveProfile(forcedProfile);
         try { localStorage.setItem('vpa_active_profile', forcedProfile); } catch {}
         if (access?.role === 'admin') {
-          const usersList = await loadAllUsersAccess();
+          const [usersList, requestsList, usageRows] = await Promise.all([
+            loadAllUsersAccess(),
+            loadAllProfileUpgradeRequests(),
+            loadAllUserUsageStats(),
+          ]);
           if (cancelled) return;
           setAdminUsers(usersList);
-          setActiveSection('admin');
-          try { localStorage.setItem('vpa_active_section', 'admin'); } catch {}
+          setProfileRequests(requestsList);
+          setAdminUsageStats(usageRows);
+          setMyProfileRequest(null);
         } else {
           setAdminUsers([]);
-          setActiveSection(prev => (prev === 'admin' ? 'home' : prev));
+          setAdminUsageStats([]);
+          setProfileRequests([]);
+          const myRequest = await loadMyProfileUpgradeRequest(user.uid);
+          if (cancelled) return;
+          setMyProfileRequest(myRequest);
+          try {
+            await recordUserLoginUsage(user, access, {
+              section: 'home',
+              appVersion: APP_VERSION,
+              userAgent: navigator?.userAgent || '',
+            });
+          } catch {}
+          setActiveSection(prev => (ADMIN_SECTION_IDS.includes(prev) ? 'home' : prev));
           setActiveSubTabs(prev => {
-            if (!prev.admin) return prev;
+            const hasAdminSubtabs = Object.keys(prev).some(k => k.startsWith('admin'));
+            if (!hasAdminSubtabs) return prev;
             const next = { ...prev };
-            delete next.admin;
+            Object.keys(next).forEach((k) => {
+              if (k.startsWith('admin')) delete next[k];
+            });
             try { localStorage.setItem('vpa_active_subtabs', JSON.stringify(next)); } catch {}
             return next;
           });
           try {
-            if (localStorage.getItem('vpa_active_section') === 'admin') {
+            if (ADMIN_SECTION_IDS.includes(localStorage.getItem('vpa_active_section'))) {
               localStorage.setItem('vpa_active_section', 'home');
             }
           } catch {}
@@ -389,9 +561,29 @@ export default function App() {
 
   const refreshAdminUsers = useCallback(async () => {
     if (!isAdmin) return;
-    const usersList = await loadAllUsersAccess();
+    const [usersList, requestsList, usageRows] = await Promise.all([
+      loadAllUsersAccess(),
+      loadAllProfileUpgradeRequests(),
+      loadAllUserUsageStats(),
+    ]);
     setAdminUsers(usersList);
+    setProfileRequests(requestsList);
+    setAdminUsageStats(usageRows);
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!user?.uid || isAdmin) return;
+    if (!activeSection) return;
+    if (activeSection === lastTrackedSectionRef.current) return;
+    lastTrackedSectionRef.current = activeSection;
+    recordUserSectionUsage(user.uid, activeSection).catch(() => {});
+  }, [user, isAdmin, activeSection]);
+
+  const refreshMyProfileRequest = useCallback(async () => {
+    if (!user?.uid || isAdmin) return;
+    const latest = await loadMyProfileUpgradeRequest(user.uid);
+    setMyProfileRequest(latest);
+  }, [user, isAdmin]);
 
   const handleAdminProfileChange = useCallback(async (targetUser, profile) => {
     if (!targetUser?.uid) return;
@@ -429,6 +621,86 @@ export default function App() {
       setIsAdminSaving(false);
     }
   }, [refreshAdminUsers, user]);
+
+  const handleProfileRequestDecision = useCallback(async (requestItem, decision) => {
+    if (!requestItem?.uid || !canUseAdminUi) return;
+    setIsAdminSaving(true);
+    setErrorMsg('');
+    try {
+      await resolveProfileUpgradeRequest(requestItem.uid, decision, {
+        uid: user?.uid || '',
+        email: user?.email || '',
+      });
+      await refreshAdminUsers();
+      if (requestItem.uid === user?.uid && decision === 'approved') {
+        const nextProfile = requestItem.targetProfile || 'pro';
+        setUserAccess(prev => prev ? { ...prev, assignedProfile: nextProfile } : prev);
+        setActiveProfile(nextProfile);
+        try { localStorage.setItem('vpa_active_profile', nextProfile); } catch {}
+      }
+    } catch (err) {
+      setErrorMsg(`Errore gestione richiesta profilo: ${err.message}`);
+    } finally {
+      setIsAdminSaving(false);
+    }
+  }, [canUseAdminUi, refreshAdminUsers, user]);
+
+  const handleSubmitProfileRequest = useCallback(async () => {
+    if (!user || isAdmin) return;
+    const target = String(requestTargetProfile || '').toLowerCase();
+    if (!['pro', 'promax'].includes(target)) return;
+    if (PROFILE_ORDER[target] <= PROFILE_ORDER[assignedProfile]) {
+      setErrorMsg('Hai già un profilo uguale o superiore a quello richiesto.');
+      return;
+    }
+    setIsRequestSaving(true);
+    setErrorMsg('');
+    try {
+      await submitProfileUpgradeRequest({
+        uid: user.uid,
+        email: user.email || '',
+        displayName: user.displayName || '',
+        currentProfile: assignedProfile,
+        targetProfile: target,
+        message: requestMessage,
+      });
+      await refreshMyProfileRequest();
+      setLoadingMsg('Richiesta inviata all’amministratore.');
+    } catch (err) {
+      setErrorMsg(`Errore invio richiesta profilo: ${err.message}`);
+    } finally {
+      setIsRequestSaving(false);
+    }
+  }, [user, isAdmin, requestTargetProfile, assignedProfile, requestMessage, refreshMyProfileRequest]);
+
+  useEffect(() => {
+    if (!user?.uid || isAdmin) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const latest = await loadMyProfileUpgradeRequest(user.uid);
+        if (!cancelled) setMyProfileRequest(latest);
+      } catch {}
+    };
+    run();
+    const intervalId = setInterval(run, 20000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') run();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [user, isAdmin]);
+
+  const handleAdminViewModeChange = useCallback((mode) => {
+    if (!isAdmin) return;
+    const next = mode === 'user' ? 'user' : 'admin';
+    setAdminViewMode(next);
+    try { localStorage.setItem('vpa_admin_view_mode', next); } catch {}
+  }, [isAdmin]);
 
   useEffect(() => {
     const onDocClick = (event) => {
@@ -524,6 +796,10 @@ export default function App() {
   }, [isMobilePortrait]);
 
   const handleProfileChange = useCallback((profile) => {
+    if (!canUseAdminUi && PROFILE_ORDER[profile] > PROFILE_ORDER[assignedProfile]) {
+      setErrorMsg('Profilo non abilitato. Invia una richiesta all’amministratore.');
+      return;
+    }
     const prevSections = new Set(getVisibleSectionIdsByProfile(activeProfile));
     const nextSections = getVisibleSectionIdsByProfile(profile);
     const revealedSections = nextSections.filter(sectionId => !prevSections.has(sectionId));
@@ -557,7 +833,7 @@ export default function App() {
         }
       }
     }
-  }, [activeProfile, activeSection, activeSubTabs]);
+  }, [activeProfile, activeSection, activeSubTabs, canUseAdminUi, assignedProfile]);
 
   useEffect(() => {
     if (profileReveal.sections.length === 0 && profileReveal.tabs.length === 0) return;
@@ -662,10 +938,11 @@ export default function App() {
           }
         }
 
-        const [loadedMatches, calData, loadedNews] = await Promise.all([
+        const [loadedMatches, calData, loadedNews, loadedOffers] = await Promise.all([
           loadAllMatches(ownerUid),
           loadCalendar(ownerUid),
           loadTeamNews(ownerUid),
+          loadTeamOffers(ownerUid),
         ]);
 
         if (cancelled) return;
@@ -677,7 +954,8 @@ export default function App() {
           setCalendar(calData.calendar || []);
           setStandings(calData.standings || []);
         }
-        if (loadedNews) setTeamNews(loadedNews);
+        if (loadedNews)   setTeamNews(loadedNews);
+        if (loadedOffers) setTeamOffers(loadedOffers);
 
         if (loadedMatches.length === 0) {
           setActiveSection('sistema');
@@ -1012,10 +1290,10 @@ export default function App() {
     );
   }
 
-  const visibleSections = isAdmin
-    ? SECTIONS.filter(s => s.id === 'admin')
+  const visibleSections = canUseAdminUi
+    ? SECTIONS.filter(s => ADMIN_SECTION_IDS.includes(s.id))
     : SECTIONS.filter((s) => {
-      if (s.id === 'admin') return false;
+      if (ADMIN_SECTION_IDS.includes(s.id)) return false;
       return profileAllows(s.minProfile);
     });
   const curSubTabs = (SECTION_TABS[activeSection] || []).filter(t => profileAllows(t.minProfile));
@@ -1059,29 +1337,45 @@ export default function App() {
         {/* Centre: profile selector + status */}
         <div className="flex-1 flex items-center justify-center gap-2 px-2">
           {/* Profile pills */}
-          <div className="flex items-center gap-1 p-0.5 rounded-lg border border-white/10 bg-white/[0.03]">
-            {Object.entries(PROFILE_META).map(([key, meta]) => {
-              const active = activeProfile === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => handleProfileChange(key)}
-                  title={`Profilo ${meta.label}`}
-                  className="px-2 sm:px-3 py-1 rounded-md text-[10px] sm:text-xs font-semibold transition-all whitespace-nowrap"
-                  style={active
-                    ? { background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }
-                    : { color: '#6b7280' }
-                  }
-                >
-                  {meta.label}
-                </button>
-              );
-            })}
-          </div>
-          {isAdmin && (
-            <div className="px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-semibold border border-emerald-400/40 text-emerald-300 bg-emerald-500/10 whitespace-nowrap">
-              🛡 Admin attivo
+          {canUseAdminUi ? (
+            <div className="px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold border border-emerald-400/40 text-emerald-300 bg-emerald-500/10 whitespace-nowrap">
+              Admin
             </div>
+          ) : (
+            <div className="flex items-center gap-1 p-0.5 rounded-lg border border-white/10 bg-white/[0.03]">
+              {Object.entries(PROFILE_META).map(([key, meta]) => {
+                const active = activeProfile === key;
+                const locked = PROFILE_ORDER[key] > PROFILE_ORDER[assignedProfile];
+                return (
+                  <button
+                    key={key}
+                    onClick={() => handleProfileChange(key)}
+                    title={locked ? `Profilo ${meta.label} non abilitato` : `Profilo ${meta.label}`}
+                    disabled={locked}
+                    className="px-2 sm:px-3 py-1 rounded-md text-[10px] sm:text-xs font-semibold transition-all whitespace-nowrap"
+                    style={active
+                      ? { background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }
+                      : { color: locked ? '#4b5563' : '#6b7280' }
+                    }
+                  >
+                    {meta.label}{locked ? ' 🔒' : ''}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {isAdmin && (
+            <button
+              onClick={() => handleAdminViewModeChange(canUseAdminUi ? 'user' : 'admin')}
+              className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-semibold border whitespace-nowrap transition-colors ${
+                canUseAdminUi
+                  ? 'border-sky-400/40 text-sky-300 bg-sky-500/10 hover:bg-sky-500/20'
+                  : 'border-emerald-400/40 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
+              }`}
+              title={canUseAdminUi ? 'Passa a interfaccia user standard' : 'Passa a interfaccia admin'}
+            >
+              {canUseAdminUi ? 'User standard' : 'Passa ad admin'}
+            </button>
           )}
           {/* Status message (desktop) */}
           <div className="hidden lg:flex flex-1 justify-center">
@@ -1098,7 +1392,7 @@ export default function App() {
 
         {/* Right: data mode selector + user menu */}
         <div className="flex items-center gap-2">
-          {!isMatchesView && (
+          {!isMatchesView && !canUseAdminUi && (
             <DataModeSelector
               mode={dataMode}
               onChange={setDataMode}
@@ -1132,6 +1426,46 @@ export default function App() {
                 >
                   Condividi link su WhatsApp
                 </button>
+                {!isAdmin && (
+                  <div className="border-t border-white/5 px-3 py-2 space-y-2 bg-white/[0.02]">
+                    <p className="text-[11px] text-gray-300">Richiedi abilitazione profilo</p>
+                    {availableUpgradeTargets.length > 0 ? (
+                      <>
+                        <select
+                          value={requestTargetProfile}
+                          onChange={(e) => setRequestTargetProfile(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-md bg-slate-800 border border-white/10 text-xs text-gray-100"
+                        >
+                          {availableUpgradeTargets.map((profile) => (
+                            <option key={profile} value={profile}>
+                              {PROFILE_META[profile]?.label || profile}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          value={requestMessage}
+                          onChange={(e) => setRequestMessage(e.target.value)}
+                          placeholder="Messaggio per admin (opzionale)"
+                          className="w-full px-2.5 py-1.5 rounded-md bg-slate-800 border border-white/10 text-xs text-gray-100 placeholder:text-gray-500"
+                        />
+                        {myProfileRequest && (
+                          <p className="text-[10px] text-gray-400">
+                            Stato richiesta: {myProfileRequest.status === 'approved' ? 'approvata' : myProfileRequest.status === 'rejected' ? 'rifiutata' : 'in attesa'}
+                          </p>
+                        )}
+                        <button
+                          onClick={handleSubmitProfileRequest}
+                          disabled={isRequestSaving}
+                          className="w-full text-left px-2.5 py-1.5 rounded-md text-xs border border-amber-400/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-60"
+                        >
+                          {isRequestSaving ? 'Invio richiesta...' : 'Invia richiesta upgrade'}
+                        </button>
+                      </>
+                    ) : (
+                      <p className="text-[10px] text-gray-500">Profilo massimo già assegnato.</p>
+                    )}
+                  </div>
+                )}
                 <button
                   onClick={signOut}
                   className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/5 transition-colors border-t border-white/5"
@@ -1258,6 +1592,7 @@ export default function App() {
                 analytics={analytics}
                 matches={matches}
                 standings={standings}
+                calendar={calendar}
                 weights={weights}
                 dataMode={dataMode}
                 fncConfig={fncConfig}
@@ -1274,6 +1609,8 @@ export default function App() {
                 onNewsChange={handleNewsChange}
                 canEditNews={isAdmin || (!isSharedMode && user?.uid === dataOwnerUid)}
                 newsAuthorEmail={user?.email || ''}
+                teamOffers={teamOffers}
+                onOffersChange={handleOffersChange}
               />
             )}
 
@@ -1528,14 +1865,42 @@ export default function App() {
 
             {activeSection === 'sistema' && curSubTab === 'guida' && <GuidePage />}
 
-            {activeSection === 'admin' && isAdmin && (
+            {activeSection === 'admin_users' && canUseAdminUi && (
               <AdminUsersPanel
                 users={adminUsers}
+                requests={profileRequests}
+                usageStats={adminUsageStats}
                 currentUserEmail={user?.email || ''}
                 onRefresh={refreshAdminUsers}
                 onUpdateProfile={handleAdminProfileChange}
                 onUpdateRole={handleAdminRoleChange}
                 isSaving={isAdminSaving}
+              />
+            )}
+
+            {activeSection === 'admin_requests' && canUseAdminUi && (
+              <AdminRequestsPanel
+                requests={profileRequests}
+                onResolveRequest={handleProfileRequestDecision}
+                isSaving={isAdminSaving}
+              />
+            )}
+
+            {activeSection === 'admin_content' && canUseAdminUi && (
+              <AdminContentPanel
+                teamNews={teamNews}
+                onNewsChange={handleNewsChange}
+                newsAuthorEmail={user?.email || ''}
+                ownerTeamName={ownerTeamName}
+                teamOffers={teamOffers}
+                onOffersChange={handleOffersChange}
+              />
+            )}
+
+            {activeSection === 'admin_stats' && canUseAdminUi && (
+              <AdminUsageStatsPanel
+                users={adminUsers}
+                usageStats={adminUsageStats}
               />
             )}
 
