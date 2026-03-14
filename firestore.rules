@@ -21,11 +21,10 @@ service cloud.firestore {
     }
 
     function isAdminUser() {
-      let adminRef = /databases/$(database)/documents/volley_team_analysis_6_0_admins/$(requesterEmail());
+      let userRef = /databases/$(database)/documents/volley_team_analysis_6_0_users/$(request.auth.uid);
       return isSignedIn()
-        && request.auth.token.email != null
-        && exists(adminRef)
-        && (!('enabled' in get(adminRef).data) || get(adminRef).data.enabled == true);
+        && (isBootstrapAdminEmail()
+            || (exists(userRef) && get(userRef).data.role == 'admin'));
     }
 
     function isOwnUserDoc(uid) {
@@ -77,6 +76,12 @@ service cloud.firestore {
       allow create, update, delete: if isOwner(ownerUid) || isAllowedWriter(ownerUid);
     }
 
+    // Bacheca team news per dataset owner
+    match /volley_team_analysis_6_0_news/{ownerUid} {
+      allow read: if isOwner(ownerUid) || isAllowedReader(ownerUid);
+      allow create, update, delete: if isOwner(ownerUid) || isAllowedWriter(ownerUid);
+    }
+
     // Documento shared_access (configurazione condivisione dell'owner)
     // Usa resource.data direttamente per evitare get() ricorsivo sullo stesso doc
     match /volley_team_analysis_6_0_shared_access/{ownerUid} {
@@ -97,16 +102,6 @@ service cloud.firestore {
       allow update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
     }
 
-    match /volley_team_analysis_6_0_admins/{email} {
-      allow get: if isAdminUser() || (isSignedIn() && requesterEmail() == email);
-      allow list: if isAdminUser();
-      allow create: if isAdminUser()
-        || (isBootstrapAdminEmail()
-            && requesterEmail() == email
-            && request.resource.data.email == requesterEmail());
-      allow update, delete: if isAdminUser();
-    }
-
     match /volley_team_analysis_6_0_users/{uid} {
       allow get: if isOwnUserDoc(uid) || isAdminUser();
       allow list: if isAdminUser();
@@ -114,7 +109,7 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.email == requesterEmail()
         && request.resource.data.assignedProfile in ['base', 'pro', 'promax']
-        && request.resource.data.role == (isAdminUser() ? 'admin' : 'user');
+        && request.resource.data.role == (isBootstrapAdminEmail() ? 'admin' : 'user');
       allow update: if isAdminUser()
         || (isOwnUserDoc(uid)
             && request.resource.data.uid == resource.data.uid

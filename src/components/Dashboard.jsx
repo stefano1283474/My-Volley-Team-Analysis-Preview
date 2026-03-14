@@ -5,7 +5,7 @@
 //               classifica espandibile con Identifica/Salva team.
 // ============================================================================
 
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -16,6 +16,7 @@ import { applyFNCToEfficacy } from '../utils/analyticsEngine';
 import { usePin } from '../context/PinContext';
 import { useProfile } from '../context/ProfileContext';
 import DataModeSelector from './DataModeSelector';
+import NewsSection from './NewsSection';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -89,8 +90,18 @@ export default function Dashboard({
   ownerTeamName, onOwnerTeamChange,
   onOpenOpponentReport,
   dataMode = 'raw',
+  teamNews = [],
+  onNewsChange,
+  canEditNews = false,
+  newsAuthorEmail = '',
 }) {
   const hasData = !!analytics && matches.length > 0;
+
+  // Ref per lo scroll alla classifica dal prompt "no team"
+  const standingsRef = useRef(null);
+  const scrollToStandings = useCallback(() => {
+    standingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
 
   // Profile context — gates which metrics are visible
   const { canSeeMetric } = useProfile();
@@ -262,9 +273,19 @@ export default function Dashboard({
 
   if (!hasData) {
     return (
-      <div className="flex flex-col items-center justify-center h-96 text-gray-500 text-sm">
-        <div className="text-5xl mb-4">🏐</div>
-        <p>Carica partite e calendario nella sezione <strong>Dati</strong> per vedere la dashboard.</p>
+      <div className="space-y-6 max-w-6xl mx-auto">
+        <NewsSection
+          posts={teamNews}
+          onPostsChange={onNewsChange}
+          canEdit={canEditNews}
+          teamName={ownerTeamName || null}
+          authorEmail={newsAuthorEmail}
+          onScrollToStandings={scrollToStandings}
+        />
+        <div className="flex flex-col items-center justify-center h-72 text-gray-500 text-sm">
+          <div className="text-5xl mb-4">🏐</div>
+          <p>Carica partite e calendario nella sezione <strong>Dati</strong> per vedere la dashboard.</p>
+        </div>
       </div>
     );
   }
@@ -432,6 +453,16 @@ export default function Dashboard({
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
 
+      {/* ── Bacheca Squadra ───────────────────────────────────────────────── */}
+      <NewsSection
+        posts={teamNews}
+        onPostsChange={onNewsChange}
+        canEdit={canEditNews}
+        teamName={ownerTeamName || null}
+        authorEmail={newsAuthorEmail}
+        onScrollToStandings={scrollToStandings}
+      />
+
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -480,6 +511,7 @@ export default function Dashboard({
 
       {/* ── Standings Widget ─────────────────────────────────────────────── */}
       {standings && standings.length > 0 && (
+        <div ref={standingsRef}>
         <StandingsWidget
           standings={standings}
           ourTeamName={ourStanding?.name || ''}
@@ -487,6 +519,7 @@ export default function Dashboard({
           onOpenOpponentReport={onOpenOpponentReport}
           matchAnalytics={sortedMA}
         />
+        </div>
       )}
 
       {/* ── KPI Row ──────────────────────────────────────────────────────── */}

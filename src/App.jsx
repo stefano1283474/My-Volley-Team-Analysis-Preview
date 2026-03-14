@@ -33,6 +33,8 @@ import {
   loadAllUsersAccess,
   updateUserAssignedProfile,
   updateUserRole,
+  loadTeamNews,
+  saveTeamNews,
 } from './utils/firestoreService';
 import { useAuth } from './context/AuthContext';
 import { PinProvider } from './context/PinContext';
@@ -312,6 +314,24 @@ export default function App() {
     : '';
   const isAdmin = userAccess?.role === 'admin';
 
+  // ─── Team News (bacheca) ──────────────────────────────────────────────────
+  const [teamNews, setTeamNews] = useState([]);
+  const handleNewsChange = useCallback(async (newPosts) => {
+    const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
+    if (!ownerUid) return;
+    setTeamNews(newPosts);
+    try { await saveTeamNews(ownerUid, newPosts); } catch (err) {
+      console.error('[App] saveTeamNews:', err);
+    }
+  }, [isSharedMode, sharedAccess, user]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (activeSection === 'admin') return;
+    setActiveSection('admin');
+    try { localStorage.setItem('vpa_active_section', 'admin'); } catch {}
+  }, [isAdmin, activeSection]);
+
   useEffect(() => {
     if (!user) {
       setUserAccess(null);
@@ -335,6 +355,8 @@ export default function App() {
           const usersList = await loadAllUsersAccess();
           if (cancelled) return;
           setAdminUsers(usersList);
+          setActiveSection('admin');
+          try { localStorage.setItem('vpa_active_section', 'admin'); } catch {}
         } else {
           setAdminUsers([]);
           setActiveSection(prev => (prev === 'admin' ? 'home' : prev));
@@ -640,9 +662,10 @@ export default function App() {
           }
         }
 
-        const [loadedMatches, calData] = await Promise.all([
+        const [loadedMatches, calData, loadedNews] = await Promise.all([
           loadAllMatches(ownerUid),
           loadCalendar(ownerUid),
+          loadTeamNews(ownerUid),
         ]);
 
         if (cancelled) return;
@@ -654,6 +677,7 @@ export default function App() {
           setCalendar(calData.calendar || []);
           setStandings(calData.standings || []);
         }
+        if (loadedNews) setTeamNews(loadedNews);
 
         if (loadedMatches.length === 0) {
           setActiveSection('sistema');
@@ -988,10 +1012,12 @@ export default function App() {
     );
   }
 
-  const visibleSections = SECTIONS.filter((s) => {
-    if (s.id === 'admin') return isAdmin;
-    return profileAllows(s.minProfile);
-  });
+  const visibleSections = isAdmin
+    ? SECTIONS.filter(s => s.id === 'admin')
+    : SECTIONS.filter((s) => {
+      if (s.id === 'admin') return false;
+      return profileAllows(s.minProfile);
+    });
   const curSubTabs = (SECTION_TABS[activeSection] || []).filter(t => profileAllows(t.minProfile));
   const curSubTab  = activeSubTabs[activeSection] || curSubTabs[0]?.id || '';
   const isMatchesView = activeSection === 'analisi' && curSubTab === 'partite';
@@ -1244,6 +1270,10 @@ export default function App() {
                 ownerTeamName={ownerTeamName}
                 onOwnerTeamChange={handleOwnerTeamChange}
                 onOpenOpponentReport={handleOpenOpponentReportFromDashboard}
+                teamNews={teamNews}
+                onNewsChange={handleNewsChange}
+                canEditNews={isAdmin || (!isSharedMode && user?.uid === dataOwnerUid)}
+                newsAuthorEmail={user?.email || ''}
               />
             )}
 

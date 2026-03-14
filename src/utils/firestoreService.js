@@ -66,8 +66,25 @@ function userAccessDocRef(uid) {
 
 // ─── Utility: strip undefined fields (Firestore non li accetta) ──────────────
 
-function sanitize(obj) {
-  return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
+function sanitize(value) {
+  if (value === undefined) return null;
+  if (value === null) return null;
+  if (Array.isArray(value)) return value.map(item => sanitize(item));
+  if (value instanceof Date) return value;
+  if (typeof value !== 'object') return value;
+  if ((value.constructor?.name || '') !== 'Object') return value;
+
+  const out = {};
+  Object.entries(value).forEach(([k, v]) => {
+    out[k] = sanitize(v);
+  });
+  return out;
+}
+
+function timestampToMs(ts) {
+  const date = ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null);
+  if (!date || Number.isNaN(date.getTime())) return 0;
+  return date.getTime();
 }
 
 function normalizeEmail(email) {
@@ -534,10 +551,10 @@ export async function loadCurrentUserAccess(uid) {
 
 export async function loadAllUsersAccess() {
   const snap = await getDocs(usersAccessCol());
-  const users = [];
+  const usersByKey = new Map();
   snap.forEach((d) => {
     const data = d.data() || {};
-    users.push({
+    const user = {
       uid: d.id,
       email: normalizeEmail(data.email),
       displayName: data.displayName || '',
@@ -545,9 +562,24 @@ export async function loadAllUsersAccess() {
       role: normalizeUserRole(data.role),
       assignedProfile: normalizeAssignedProfile(data.assignedProfile),
       lastLoginAt: data.lastLoginAt || null,
-    });
+    };
+    const key = user.email || `uid:${user.uid}`;
+    const prev = usersByKey.get(key);
+    if (!prev) {
+      usersByKey.set(key, user);
+      return;
+    }
+    const prevTs = timestampToMs(prev.lastLoginAt);
+    const curTs = timestampToMs(user.lastLoginAt);
+    if (curTs > prevTs) {
+      usersByKey.set(key, user);
+      return;
+    }
+    if (curTs === prevTs && prev.role !== 'admin' && user.role === 'admin') {
+      usersByKey.set(key, user);
+    }
   });
-  return users.sort((a, b) => {
+  return Array.from(usersByKey.values()).sort((a, b) => {
     const byEmail = (a.email || '').localeCompare(b.email || '');
     if (byEmail !== 0) return byEmail;
     return (a.uid || '').localeCompare(b.uid || '');
@@ -562,6 +594,43 @@ export async function updateUserAssignedProfile(uid, assignedProfile) {
     updatedAt: serverTimestamp(),
   }), { merge: true });
 }
+
+// ─── Team News (Bacheca) ──────────────────────────────────────────────────────
+
+const NEWS_COLLECTION = 'volley_team_analysis_6_0_news';
+
+function newsDocRef(ownerUid) {
+  return doc(db, NEWS_COLLECTION, ownerUid);
+}
+
+/**
+ * Carica i post della bacheca per un dataset owner.
+ * Restituisce un array di post ordinati per eventDate / createdAt.
+ */
+export async function loadTeamNews(ownerUid) {
+  if (!ownerUid) return [];
+  try {
+    const snap = await getDoc(newsDocRef(ownerUid));
+    if (!snap.exists()) return [];
+    return snap.data()?.posts || [];
+  } catch (err) {
+    if (err?.code !== 'permission-denied') {
+      console.error('[News] loadTeamNews:', err);
+    }
+    return [];
+  }
+}
+
+/**
+ * Salva l'intero array di post della bacheca.
+ * Sovrascrive il documento con il nuovo array.
+ */
+export async function saveTeamNews(ownerUid, posts) {
+  if (!ownerUid) throw new Error('ownerUid mancante');
+  await setDoc(newsDocRef(ownerUid), sanitize({ posts, updatedAt: serverTimestamp() }));
+}
+
+// ─── User role management ─────────────────────────────────────────────────────
 
 /**
  * Aggiorna il ruolo di un utente in volley_team_analysis_6_0_users/{uid}.
