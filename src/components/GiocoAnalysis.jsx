@@ -766,7 +766,7 @@ function PerPartitaView({ transformData, scale }) {
         </div>
         <div className="mt-3 p-3 bg-white/3 rounded-lg text-[10px] text-gray-600 leading-relaxed">
           <span className="text-purple-400 font-semibold">Coeff. ±25%</span>: derivato da (D avv. effettiva − D avv. attesa per classifica) / range.
-          &nbsp;>1 = avversario ha difeso meglio del previsto → i tuoi attacchi valgono di più.
+          &nbsp;&gt;1 = avversario ha difeso meglio del previsto → i tuoi attacchi valgono di più.
           &nbsp;<span className="text-gray-400">D avv. eff.</span> = media D implicita dai tuoi A in quella partita.
           &nbsp;<span className="text-gray-400">D avv. att.</span> = D attesa da classifica/punti.
         </div>

@@ -10,18 +10,47 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == ownerUid;
     }
 
+    function isBootstrapAdminEmail() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() == 'peraimodel@gmail.com';
+    }
+
+    function requesterEmail() {
+      return request.auth.token.email != null ? request.auth.token.email.lower() : '';
+    }
+
+    function isAdminUser() {
+      let adminRef = /databases/$(database)/documents/volley_team_analysis_6_0_admins/$(requesterEmail());
+      return isSignedIn()
+        && request.auth.token.email != null
+        && exists(adminRef)
+        && (!('enabled' in get(adminRef).data) || get(adminRef).data.enabled == true);
+    }
+
+    function isOwnUserDoc(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
     function isShareEnabled(data) {
       return !('enabled' in data) || data.enabled == true;
     }
 
     function hasPublicAccess(data) {
-      return !('allowedEmails' in data) || data.allowedEmails.size() == 0;
+      return (('publicAccess' in data) && data.publicAccess == true)
+        || (!('publicAccess' in data) && (!('allowedEmails' in data) || data.allowedEmails.size() == 0));
     }
 
     function hasRestrictedAccess(data) {
       return ('allowedEmails' in data)
         && request.auth.token.email != null
         && request.auth.token.email.lower() in data.allowedEmails;
+    }
+
+    function hasWriterAccess(data) {
+      return ('writerEmails' in data)
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() in data.writerEmails;
     }
 
     function isAllowedReader(ownerUid) {
@@ -33,10 +62,19 @@ service cloud.firestore {
         && (hasPublicAccess(d) || hasRestrictedAccess(d));
     }
 
+    function isAllowedWriter(ownerUid) {
+      let sharedRef = /databases/$(database)/documents/volley_team_analysis_6_0_shared_access/$(ownerUid);
+      let d = get(sharedRef).data;
+      return isSignedIn()
+        && exists(sharedRef)
+        && isShareEnabled(d)
+        && hasWriterAccess(d);
+    }
+
     // Dataset matches e calendario
     match /volley_team_analysis_6_0/{ownerUid}/datasets/{docId} {
       allow read: if isOwner(ownerUid) || isAllowedReader(ownerUid);
-      allow create, update, delete: if isOwner(ownerUid);
+      allow create, update, delete: if isOwner(ownerUid) || isAllowedWriter(ownerUid);
     }
 
     // Documento shared_access (configurazione condivisione dell'owner)
@@ -57,6 +95,33 @@ service cloud.firestore {
             || isAllowedReader(resource.data.ownerUid));
       allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
       allow update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /volley_team_analysis_6_0_admins/{email} {
+      allow get: if isAdminUser() || (isSignedIn() && requesterEmail() == email);
+      allow list: if isAdminUser();
+      allow create: if isAdminUser()
+        || (isBootstrapAdminEmail()
+            && requesterEmail() == email
+            && request.resource.data.email == requesterEmail());
+      allow update, delete: if isAdminUser();
+    }
+
+    match /volley_team_analysis_6_0_users/{uid} {
+      allow get: if isOwnUserDoc(uid) || isAdminUser();
+      allow list: if isAdminUser();
+      allow create: if isOwnUserDoc(uid)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == requesterEmail()
+        && request.resource.data.assignedProfile in ['base', 'pro', 'promax']
+        && request.resource.data.role == (isAdminUser() ? 'admin' : 'user');
+      allow update: if isAdminUser()
+        || (isOwnUserDoc(uid)
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.email == resource.data.email
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.assignedProfile == resource.data.assignedProfile);
+      allow delete: if isAdminUser();
     }
   }
 }

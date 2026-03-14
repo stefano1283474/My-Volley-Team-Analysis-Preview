@@ -83,17 +83,8 @@ export default function ChartsExplorer({
   analytics, matches, standings, dashboardConfig, onConfigChange, onSelectPlayer, dataMode = 'raw',
 }) {
   const [activeCategory, setActiveCategory] = useState('all');
-
-  if (!analytics || matches.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-96 text-gray-500 text-sm">
-        <div className="text-5xl mb-4">📊</div>
-        <p>Carica le partite nella sezione <strong>Dati</strong> per esplorare i grafici.</p>
-      </div>
-    );
-  }
-
-  const { matchAnalytics, playerTrends } = analytics;
+  const matchAnalytics = analytics?.matchAnalytics || [];
+  const playerTrends = analytics?.playerTrends || null;
 
   const sortedMA = useMemo(() =>
     [...matchAnalytics].sort((a, b) =>
@@ -211,6 +202,15 @@ export default function ChartsExplorer({
   const visibleCharts = activeCategory === 'all'
     ? CHART_CATALOG
     : CHART_CATALOG.filter(c => c.category === activeCategory);
+
+  if (!analytics || matches.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 text-gray-500 text-sm">
+        <div className="text-5xl mb-4">📊</div>
+        <p>Carica le partite nella sezione <strong>Dati</strong> per esplorare i grafici.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">

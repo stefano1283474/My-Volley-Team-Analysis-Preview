@@ -11,6 +11,7 @@ import {
   ReferenceLine, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, Legend,
 } from 'recharts';
 import { COLORS } from '../utils/constants';
+import { useProfile } from '../context/ProfileContext';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -320,7 +321,8 @@ export default function SequenceAnalysis({
   );
 }
 
-export function ChainTrainingPlan({ analytics, matches, calendar = [], standings = [], ownerTeamName = '', allPlayers = [], onOpenOpponentComment }) {
+export function ChainTrainingPlan({ analytics, matches, calendar = [], standings = [], ownerTeamName = '', allPlayers = [], dataMode = 'raw', weights, onOpenOpponentComment }) {
+  const { profileAllows } = useProfile();
   const chainSuggestions = analytics?.chainSuggestions || [];
   const trainingSuggestions = analytics?.trainingSuggestions || [];
   const playerTrends = analytics?.playerTrends || {};
@@ -498,45 +500,64 @@ export function ChainTrainingPlan({ analytics, matches, calendar = [], standings
     return fs;
   }, [allSuggestions]);
 
+  // fundStats: medie giocatrici per fondamentale, aggregate su tutto il campionato.
+  // DIVERSO da TrainPage (teamHealthByFund) che misura il delta temporale di squadra.
+  // Qui: media assoluta stagionale per giocatrice → aggregata in percentuale.
   const fundStats = useMemo(() => {
     const funds = ['attack', 'serve', 'reception', 'defense', 'block'];
     const byFund = {};
+    // In 'both' mode: primary = rawAvg, secondary = weightedAvg; trendKey = rawTrend
+    const usePrimary   = dataMode === 'weighted' ? 'weightedAvg' : 'rawAvg';
+    const useSecondary = dataMode === 'weighted' ? 'rawAvg'      : 'weightedAvg';
+    const trendField   = dataMode === 'weighted' ? 'weightedTrend' : 'rawTrend';
     for (const fund of funds) {
       let playersWithData = 0;
-      let rawSum = 0;
-      let weightedSum = 0;
+      let primarySum = 0;
+      let secondarySum = 0;
       let declining = 0;
       let improving = 0;
       for (const p of Object.values(playerTrends || {})) {
         const t = p?.trends?.[fund];
         if (!t || (t.playedMatches || 0) < 1) continue;
         playersWithData += 1;
-        rawSum += Number(t.rawAvg || 0) * 100;
-        weightedSum += Number(t.weightedAvg || 0) * 100;
-        if (t.rawTrend === 'declining') declining += 1;
-        if (t.rawTrend === 'improving') improving += 1;
+        primarySum += Number(t[usePrimary] || 0) * 100;
+        secondarySum += Number(t[useSecondary] || 0) * 100;
+        const tk = t[trendField] || t.rawTrend;
+        if (tk === 'declining') declining += 1;
+        if (tk === 'improving') improving += 1;
       }
       byFund[fund] = {
         playersWithData,
-        rawAvgPct: playersWithData > 0 ? rawSum / playersWithData : 0,
-        weightedAvgPct: playersWithData > 0 ? weightedSum / playersWithData : 0,
-        decliningPct: playersWithData > 0 ? (declining / playersWithData) * 100 : 0,
-        improvingPct: playersWithData > 0 ? (improving / playersWithData) * 100 : 0,
+        rawAvgPct:      playersWithData > 0 ? primarySum   / playersWithData : 0,
+        weightedAvgPct: playersWithData > 0 ? secondarySum / playersWithData : 0,
+        decliningPct:   playersWithData > 0 ? (declining / playersWithData) * 100 : 0,
+        improvingPct:   playersWithData > 0 ? (improving / playersWithData) * 100 : 0,
       };
     }
     return byFund;
-  }, [playerTrends]);
+  }, [playerTrends, dataMode]);
 
   const selectedFundStats = fundStats[selectedFund] || {
     playersWithData: 0, rawAvgPct: 0, weightedAvgPct: 0, decliningPct: 0, improvingPct: 0,
   };
 
-  const selectedFundChartData = useMemo(() => ([
-    { label: 'Media grezza', value: selectedFundStats.rawAvgPct, color: '#38bdf8' },
-    { label: 'Media pesata', value: selectedFundStats.weightedAvgPct, color: '#f59e0b' },
-    { label: 'In calo', value: selectedFundStats.decliningPct, color: '#f87171' },
-    { label: 'In crescita', value: selectedFundStats.improvingPct, color: '#4ade80' },
-  ]), [selectedFundStats]);
+  const selectedFundChartData = useMemo(() => {
+    if (dataMode === 'both') {
+      // In 'both' mode: mostra entrambe le barre con etichette chiare
+      return [
+        { label: 'Media grezza',  value: selectedFundStats.rawAvgPct,      color: '#38bdf8' },
+        { label: 'Media pesata',  value: selectedFundStats.weightedAvgPct, color: '#f59e0b' },
+        { label: 'In calo',       value: selectedFundStats.decliningPct,   color: '#f87171' },
+        { label: 'In crescita',   value: selectedFundStats.improvingPct,   color: '#4ade80' },
+      ];
+    }
+    return [
+      { label: dataMode === 'weighted' ? 'Media pesata'  : 'Media grezza',  value: selectedFundStats.rawAvgPct,      color: dataMode === 'weighted' ? '#f59e0b' : '#38bdf8' },
+      { label: dataMode === 'weighted' ? 'Media grezza'  : 'Media pesata',  value: selectedFundStats.weightedAvgPct, color: dataMode === 'weighted' ? '#38bdf8' : '#f59e0b' },
+      { label: 'In calo',       value: selectedFundStats.decliningPct,   color: '#f87171' },
+      { label: 'In crescita',   value: selectedFundStats.improvingPct,   color: '#4ade80' },
+    ];
+  }, [selectedFundStats, dataMode]);
 
   // ─── Player cards ──
   const playerCards = useMemo(() => {
@@ -970,7 +991,15 @@ export function ChainTrainingPlan({ analytics, matches, calendar = [], standings
           <div className="grid grid-cols-1 lg:grid-cols-[1fr,320px] gap-4">
             {/* Fundamental health */}
             <div className="glass-card p-4 space-y-3">
-              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Stato Fondamentali</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Stato Fondamentali</div>
+                <span className="text-[9px] text-gray-500 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10" title="Media stagionale delle giocatrici — diverso dal trend squadra nella tab Settimana">
+                  👥 Media giocatrici ·{' '}
+                  {dataMode === 'weighted' ? 'Pesata' :
+                   dataMode === 'both'     ? 'Grezza + Pesata' :
+                                             'Grezza'} · stagione intera
+                </span>
+              </div>
               <div className="grid grid-cols-5 gap-2">
                 {Object.entries(fundStatus).map(([f, s]) => (
                   <button

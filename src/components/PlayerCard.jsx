@@ -4,8 +4,12 @@ import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend,
   BarChart, Bar } from 'recharts';
 import { COLORS } from '../utils/constants';
 import { applyFNCToEfficacy } from '../utils/analyticsEngine';
+import { useProfile } from '../context/ProfileContext';
 
 export default function PlayerCard({ analytics, allPlayers, matches, selectedPlayer, onSelectPlayer, fncConfig, baselines, dataMode = 'raw' }) {
+  const { canSeeMetric } = useProfile();
+  // showWeighted: visibile se profilo Pro+ E modo include pesato (weighted o both)
+  const showWeighted = canSeeMetric('mediaPond') && dataMode !== 'raw';
   const [selectedFund, setSelectedFund] = useState('attack');
 
   if (!analytics) {
@@ -193,15 +197,21 @@ export default function PlayerCard({ analytics, allPlayers, matches, selectedPla
                   <div className="flex-1">
                     <div className="flex items-center gap-2 text-xs">
                       <span className="text-sky-400 font-mono w-16">{(trend.rawAvg * 100).toFixed(1)}%</span>
-                      <span className="text-gray-600">→</span>
-                      <span className="text-amber-400 font-mono w-16">{(trend.weightedAvg * 100).toFixed(1)}%</span>
-                      <span className={`font-mono text-[10px] ${delta >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        ({delta >= 0 ? '+' : ''}{(delta * 100).toFixed(1)})
-                      </span>
+                      {showWeighted && (
+                        <>
+                          <span className="text-gray-600">→</span>
+                          <span className="text-amber-400 font-mono w-16">{(trend.weightedAvg * 100).toFixed(1)}%</span>
+                          <span className={`font-mono text-[10px] ${delta >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            ({delta >= 0 ? '+' : ''}{(delta * 100).toFixed(1)})
+                          </span>
+                        </>
+                      )}
                     </div>
                     <div className="h-1.5 bg-white/5 rounded-full mt-1 flex">
                       <div className="h-full rounded-full bg-sky-400/40" style={{ width: `${Math.max(2, Math.abs(trend.rawAvg) * 100)}%` }} />
-                      <div className="h-full rounded-full bg-amber-400/60 -ml-1" style={{ width: `${Math.max(2, Math.abs(trend.weightedAvg) * 100)}%` }} />
+                      {showWeighted && (
+                        <div className="h-full rounded-full bg-amber-400/60 -ml-1" style={{ width: `${Math.max(2, Math.abs(trend.weightedAvg) * 100)}%` }} />
+                      )}
                     </div>
                   </div>
                   <span className={`badge ${
@@ -266,17 +276,17 @@ export default function PlayerCard({ analytics, allPlayers, matches, selectedPla
                 <th className="text-left py-2 px-2">Avversario</th>
                 <th className="text-left py-2 px-2">Data</th>
                 <th className="text-center py-2 px-1">Peso</th>
-                <th className="text-center py-2 px-1" colSpan={2}>Attacco</th>
-                <th className="text-center py-2 px-1" colSpan={2}>Battuta</th>
-                <th className="text-center py-2 px-1" colSpan={2}>Ricezione</th>
-                <th className="text-center py-2 px-1" colSpan={2}>Difesa</th>
+                <th className="text-center py-2 px-1" colSpan={showWeighted ? 2 : 1}>Attacco</th>
+                <th className="text-center py-2 px-1" colSpan={showWeighted ? 2 : 1}>Battuta</th>
+                <th className="text-center py-2 px-1" colSpan={showWeighted ? 2 : 1}>Ricezione</th>
+                <th className="text-center py-2 px-1" colSpan={showWeighted ? 2 : 1}>Difesa</th>
               </tr>
               <tr className="text-[9px] text-gray-600 border-b border-white/[0.03]">
                 <th></th><th></th><th></th>
-                <th className="text-center text-sky-400/60">G</th><th className="text-center text-amber-400/60">R</th>
-                <th className="text-center text-sky-400/60">G</th><th className="text-center text-amber-400/60">R</th>
-                <th className="text-center text-sky-400/60">G</th><th className="text-center text-amber-400/60">R</th>
-                <th className="text-center text-sky-400/60">G</th><th className="text-center text-amber-400/60">R</th>
+                <th className="text-center text-sky-400/60">G</th>{showWeighted && <th className="text-center text-amber-400/60">R</th>}
+                <th className="text-center text-sky-400/60">G</th>{showWeighted && <th className="text-center text-amber-400/60">R</th>}
+                <th className="text-center text-sky-400/60">G</th>{showWeighted && <th className="text-center text-amber-400/60">R</th>}
+                <th className="text-center text-sky-400/60">G</th>{showWeighted && <th className="text-center text-amber-400/60">R</th>}
               </tr>
             </thead>
             <tbody>
@@ -286,13 +296,13 @@ export default function PlayerCard({ analytics, allPlayers, matches, selectedPla
                   <td className="py-1.5 px-2 text-gray-500">{m.date}</td>
                   <td className="text-center py-1.5 px-1 font-mono text-amber-400">{m.matchWeight.toFixed(2)}</td>
                   <td className="text-center py-1.5 px-1 font-mono text-sky-400">{(m.raw.attack?.efficacy * 100 || 0).toFixed(0)}</td>
-                  <td className="text-center py-1.5 px-1 font-mono text-amber-400">{(m.weighted.attack?.efficacy * 100 || 0).toFixed(0)}</td>
+                  {showWeighted && <td className="text-center py-1.5 px-1 font-mono text-amber-400">{(m.weighted.attack?.efficacy * 100 || 0).toFixed(0)}</td>}
                   <td className="text-center py-1.5 px-1 font-mono text-sky-400">{(m.raw.serve?.efficacy * 100 || 0).toFixed(0)}</td>
-                  <td className="text-center py-1.5 px-1 font-mono text-amber-400">{(m.weighted.serve?.efficacy * 100 || 0).toFixed(0)}</td>
+                  {showWeighted && <td className="text-center py-1.5 px-1 font-mono text-amber-400">{(m.weighted.serve?.efficacy * 100 || 0).toFixed(0)}</td>}
                   <td className="text-center py-1.5 px-1 font-mono text-sky-400">{(m.raw.reception?.efficacy * 100 || 0).toFixed(0)}</td>
-                  <td className="text-center py-1.5 px-1 font-mono text-amber-400">{(m.weighted.reception?.efficacy * 100 || 0).toFixed(0)}</td>
+                  {showWeighted && <td className="text-center py-1.5 px-1 font-mono text-amber-400">{(m.weighted.reception?.efficacy * 100 || 0).toFixed(0)}</td>}
                   <td className="text-center py-1.5 px-1 font-mono text-sky-400">{(m.raw.defense?.efficacy * 100 || 0).toFixed(0)}</td>
-                  <td className="text-center py-1.5 px-1 font-mono text-amber-400">{(m.weighted.defense?.efficacy * 100 || 0).toFixed(0)}</td>
+                  {showWeighted && <td className="text-center py-1.5 px-1 font-mono text-amber-400">{(m.weighted.defense?.efficacy * 100 || 0).toFixed(0)}</td>}
                 </tr>
               ))}
             </tbody>

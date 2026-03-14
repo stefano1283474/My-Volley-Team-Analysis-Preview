@@ -3,6 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Cell, Legend,
 } from 'recharts';
+import { useProfile } from '../context/ProfileContext';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -130,17 +131,26 @@ function axisLabel(a) {
   return a === 'criticita' ? 'Criticità' : a === 'crescita' ? 'Crescita' : a === 'gara' ? 'Gara' : 'Fisico';
 }
 
+function average(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function TrainPage({ 
-  analytics, 
-  matches, 
-  calendar = [], 
-  standings = [], 
-  ownerTeamName = '', 
-  allPlayers = [], 
-  onOpenOpponentComment 
+export default function TrainPage({
+  analytics,
+  matches,
+  calendar = [],
+  standings = [],
+  ownerTeamName = '',
+  allPlayers = [],
+  dataMode = 'raw',
+  weights,
+  onOpenOpponentComment
 }) {
+  const { profileAllows } = useProfile();
+  const canSeeDrills = profileAllows('promax');
   const chainSuggestions = analytics?.chainSuggestions || [];
   const trainingSuggestions = analytics?.trainingSuggestions || [];
   const playerTrends = analytics?.playerTrends || {};
@@ -178,6 +188,64 @@ export default function TrainPage({
     return merged;
   }, [chainSuggestions, trainingSuggestions]);
 
+  // teamHealthByFund: calcola il delta temporale dell'efficacia di SQUADRA
+  // (ultime 3 partite vs le precedenti). Fonte: riepilogo.team[fund].efficacy
+  // Nota: questa metrica è DIVERSA da ChainTrainingPlan che usa medie giocatrici.
+  const teamHealthByFund = useMemo(() => {
+    const funds = ['attack', 'serve', 'reception', 'defense', 'block'];
+    const sortedMatches = [...matchAnalytics].sort((a, b) => {
+      const da = a?.match?.metadata?.date || '';
+      const db = b?.match?.metadata?.date || '';
+      return da.localeCompare(db);
+    });
+
+    const computeHealth = (metricKey) => {
+      const result = {};
+      for (const fund of funds) {
+        const values = sortedMatches
+          .map(ma => Number(ma?.match?.riepilogo?.team?.[fund]?.[metricKey]))
+          .filter(Number.isFinite);
+
+        if (values.length < 2) {
+          result[fund] = { status: 'neutral', delta: 0 };
+          continue;
+        }
+
+        const recentWindow = Math.min(3, values.length - 1);
+        const recent = values.slice(-recentWindow);
+        const older = values.slice(0, values.length - recentWindow);
+        const recentAvg = average(recent);
+        const olderAvg = average(older);
+        const delta = olderAvg !== 0 ? (recentAvg - olderAvg) / Math.abs(olderAvg) : 0;
+
+        let status = 'neutral';
+        if (delta <= -0.12) status = 'critical';
+        else if (delta <= -0.04) status = 'warning';
+        else if (delta >= 0.04) status = 'good';
+
+        result[fund] = { status, delta };
+      }
+      return result;
+    };
+
+    // In 'both' mode, includi sia raw che weighted; altrimenti solo uno
+    if (dataMode === 'both') {
+      const raw = computeHealth('efficacy');
+      const wgt = computeHealth('efficiency');
+      const result = {};
+      for (const fund of funds) {
+        result[fund] = {
+          ...raw[fund],
+          statusW: wgt[fund]?.status || 'neutral',
+          deltaW:  wgt[fund]?.delta  || 0,
+        };
+      }
+      return result;
+    }
+
+    return computeHealth(dataMode === 'weighted' ? 'efficiency' : 'efficacy');
+  }, [matchAnalytics, dataMode]);
+
   const declines = allSuggestions.filter(s => s.priority >= 3);
   const strengths = allSuggestions.filter(s => s.priority === 1);
 
@@ -214,6 +282,8 @@ export default function TrainPage({
   const [selectedFund, setSelectedFund] = useState('attack');
   const [selectedPlayerNumber, setSelectedPlayerNumber] = useState('');
   const [selectedFocusAxis, setSelectedFocusAxis] = useState('all');
+  const [openInfoBySession, setOpenInfoBySession] = useState({});
+  const [openDataBySession, setOpenDataBySession] = useState({});
 
   const adjustPrio = useCallback((axis, raw) => {
     setPrio(prev => {
@@ -353,23 +423,100 @@ export default function TrainPage({
     return blocks;
   }, [declines]);
 
-  // ─── Planned sessions allocation ──
+  const axisSignals = useMemo(() => {
+    const bucket = { criticita: [], crescita: [], gara: [], fisico: [] };
+    for (const s of allSuggestions) {
+      const priority = Number(s?.priority || 0);
+      const chainType = String(s?.chainType || '');
+      const type = String(s?.type || '');
+      const msg = `${String(s?.message || '')} ${String(s?.action || '')}`.toLowerCase();
+
+      if (priority >= 3) bucket.criticita.push(s);
+      if (priority === 1) bucket.crescita.push(s);
+
+      if (s?.isChainSuggestion || ['rotation', 'r_to_a', 'serve_defense', 'transition_gap'].includes(chainType)) {
+        bucket.gara.push(s);
+      }
+      if (daysToMatch !== null && daysToMatch <= 4 && priority >= 3) {
+        bucket.gara.push(s);
+      }
+
+      if (type.includes('rally_length') || msg.includes('rally') || msg.includes('fisic') || msg.includes('fatica')) {
+        bucket.fisico.push(s);
+      }
+    }
+    return bucket;
+  }, [allSuggestions, daysToMatch]);
+
   const assignedSessions = useMemo(() => {
     const n = sessionSlots.length;
     if (n === 0 || focusBlocks.length === 0) return [];
-    const result = [];
-    for (let i = 0; i < n; i++) {
-      // Simple rotation for now, matched with priority weights in a more complex impl
-      result.push(focusBlocks[i % focusBlocks.length]);
+
+    const axes = ['criticita', 'crescita', 'gara', 'fisico'];
+    const byAxis = axes.reduce((acc, axis) => {
+      acc[axis] = focusBlocks.filter(b => b.axis === axis);
+      return acc;
+    }, {});
+
+    const baseCounts = {};
+    const fractions = {};
+    let assigned = 0;
+    for (const axis of axes) {
+      const exact = (Math.max(0, Number(prio?.[axis] || 0)) / 100) * n;
+      baseCounts[axis] = Math.floor(exact);
+      fractions[axis] = exact - baseCounts[axis];
+      assigned += baseCounts[axis];
     }
+
+    let remaining = n - assigned;
+    const fractionOrder = [...axes].sort((a, b) => fractions[b] - fractions[a]);
+    let fIdx = 0;
+    while (remaining > 0) {
+      const axis = fractionOrder[fIdx % fractionOrder.length];
+      baseCounts[axis] += 1;
+      remaining -= 1;
+      fIdx += 1;
+    }
+
+    if (Object.values(baseCounts).reduce((s, v) => s + v, 0) === 0) {
+      baseCounts.criticita = n;
+    }
+
+    const remainingByAxis = { ...baseCounts };
+    const axisOrder = [...axes].sort((a, b) => (prio?.[b] || 0) - (prio?.[a] || 0));
+    const axisSequence = [];
+    while (axisSequence.length < n) {
+      let pushed = false;
+      for (const axis of axisOrder) {
+        if ((remainingByAxis[axis] || 0) > 0) {
+          axisSequence.push(axis);
+          remainingByAxis[axis] -= 1;
+          pushed = true;
+        }
+      }
+      if (!pushed) break;
+    }
+
+    const cursorByAxis = { criticita: 0, crescita: 0, gara: 0, fisico: 0 };
+    const result = [];
+    for (const axis of axisSequence) {
+      const candidates = byAxis[axis]?.length ? byAxis[axis] : focusBlocks;
+      const cursor = cursorByAxis[axis] || 0;
+      result.push(candidates[cursor % candidates.length]);
+      cursorByAxis[axis] = cursor + 1;
+    }
+
+    while (result.length < n) {
+      result.push(focusBlocks[result.length % focusBlocks.length]);
+    }
+
     return result;
-  }, [sessionSlots, focusBlocks]);
+  }, [sessionSlots, focusBlocks, prio]);
 
   const planned = useMemo(() => sessionSlots.map((slot, idx) => {
     const custom = sessionCustomizations[slot.id];
     const baseBlock = assignedSessions[idx] || focusBlocks[0];
-    
-    // Override focus if customized
+
     const focus = custom?.focusTitle ? {
       title: custom.focusTitle,
       axis: custom.axis || baseBlock.axis,
@@ -377,6 +524,22 @@ export default function TrainPage({
       drills: custom.drills || baseBlock.drills,
       techArea: custom.techArea
     } : baseBlock;
+
+    const related = axisSignals[focus.axis] || [];
+    const criticalCount = related.filter(s => Number(s?.priority || 0) >= 4).length;
+    const avgPriority = related.length > 0 ? average(related.map(s => Number(s?.priority || 0))) : 0;
+    const evidence = related.slice(0, 3).map((s, i) => `P${Number(s?.priority || 0)} · ${s?.fundamental ? `${fundLabel[s.fundamental] || s.fundamental}: ` : ''}${s?.message || `Segnale ${i + 1}`}`);
+
+    let rationale = `Asse ${axisLabel(focus.axis).toLowerCase()} al ${Number(prio?.[focus.axis] || 0)}%: questa seduta è stata selezionata in modo proporzionale alle preferenze del Priority Mixer.`;
+    if (focus.axis === 'criticita') {
+      rationale = `Asse criticità al ${Number(prio?.criticita || 0)}%: la seduta copre i cali più urgenti emersi nelle ultime analisi.`;
+    } else if (focus.axis === 'crescita') {
+      rationale = `Asse crescita al ${Number(prio?.crescita || 0)}%: la seduta valorizza trend positivi da consolidare per mantenere continuità.`;
+    } else if (focus.axis === 'gara') {
+      rationale = `Asse gara al ${Number(prio?.gara || 0)}%: la seduta prepara pattern e rotazioni utili alla prossima partita.`;
+    } else if (focus.axis === 'fisico') {
+      rationale = `Asse fisico al ${Number(prio?.fisico || 0)}%: la seduta sostiene tenuta e qualità nei rally prolungati.`;
+    }
 
     const mins = Math.round(slot.duration * 60);
     const warmup = custom?.times?.warmup ?? Math.round(mins * 0.15);
@@ -390,9 +553,12 @@ export default function TrainPage({
       focus, 
       customized: !!custom,
       playerTags: custom?.playerTags || [],
-      structure: { warmup, tech, tact, game, cooldown, total: mins } 
+      structure: { warmup, tech, tact, game, cooldown, total: mins },
+      rationale,
+      evidence,
+      evidenceStats: { signals: related.length, criticalCount, avgPriority }
     };
-  }), [sessionSlots, assignedSessions, focusBlocks, sessionCustomizations]);
+  }), [sessionSlots, assignedSessions, focusBlocks, sessionCustomizations, axisSignals, prio]);
 
   // ─── Render Helpers ──
   const TABS = [
@@ -457,7 +623,7 @@ export default function TrainPage({
       <div className="flex gap-2 p-1 bg-white/[0.03] rounded-2xl border border-white/5 overflow-x-auto no-scrollbar">
         {TABS.map(t => (
           <button key={t.k} onClick={() => setTab(t.k)}
-            className={`flex-1 min-w-[120px] px-4 py-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 ${tab === t.k ? 'bg-white/10 text-white shadow-xl border border-white/10' : 'text-gray-500 hover:text-gray-300'}`}>
+            className={`flex-none sm:flex-1 min-w-[110px] sm:min-w-0 px-3 sm:px-4 py-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 ${tab === t.k ? 'bg-white/10 text-white shadow-xl border border-white/10' : 'text-gray-500 hover:text-gray-300'}`}>
             <span>{t.icon}</span>
             <span>{t.l}</span>
           </button>
@@ -472,15 +638,33 @@ export default function TrainPage({
             <div className="space-y-6">
               {/* Fundamental Status */}
               <div className="glass-card p-6 space-y-4">
-                <h3 className="text-sm font-black text-white uppercase tracking-tighter">Team Health State</h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-black text-white uppercase tracking-tighter">Team Health State</h3>
+                  <span className="text-[9px] text-gray-500 font-medium px-2 py-0.5 rounded-full bg-white/5 border border-white/10" title="Andamento recente squadra: ultime 3 partite vs precedenti">
+                    📊 Trend squadra ·{' '}
+                    {dataMode === 'weighted' ? 'Efficiency pesata' :
+                     dataMode === 'both'     ? 'Grezzo + Pesato' :
+                                               'Efficacia grezza'} · ultimi 3 match
+                  </span>
+                </div>
                 <div className="grid grid-cols-5 gap-3">
                   {Object.entries(fundLabel).map(([key, label]) => {
-                    const status = allSuggestions.some(s => s.fundamental === key && s.priority >= 4) ? 'critical' : 
-                                   allSuggestions.some(s => s.fundamental === key && s.priority === 3) ? 'warning' : 'good';
+                    const h = teamHealthByFund[key] || { status: 'neutral', delta: 0 };
                     return (
-                      <div key={key} className={`p-4 rounded-2xl border text-center ${statusCls(status)}`}>
-                        <div className="text-xl mb-1">{statusIco(status)}</div>
+                      <div key={key} className={`p-4 rounded-2xl border text-center ${statusCls(h.status)}`}>
+                        <div className="text-xl mb-1">{statusIco(h.status)}</div>
                         <div className="text-[9px] font-black uppercase">{label}</div>
+                        {h.delta !== 0 && (
+                          <div className={`text-[8px] mt-1 font-bold ${h.delta > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {h.delta > 0 ? '+' : ''}{(h.delta * 100).toFixed(0)}%
+                          </div>
+                        )}
+                        {/* Secondo indicatore: visibile solo in modalità 'both' */}
+                        {dataMode === 'both' && h.statusW && (
+                          <div className={`text-[8px] mt-0.5 font-bold text-amber-400/70`}>
+                            W:{h.deltaW > 0 ? '+' : ''}{(h.deltaW * 100).toFixed(0)}%
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -545,18 +729,18 @@ export default function TrainPage({
             <h3 className="text-sm font-black text-white uppercase tracking-tighter mb-6">Weekly Training Architect</h3>
             <div className="space-y-4">
               {scheduleRows.map(({ day, cfg }) => (
-                <div key={day.id} className={`grid grid-cols-1 md:grid-cols-[200px,1fr,150px,150px] gap-4 items-center p-4 rounded-2xl border transition-all ${cfg.enabled ? 'bg-white/[0.04] border-white/10' : 'bg-transparent border-white/5 opacity-50'}`}>
+                <div key={day.id} className={`grid grid-cols-1 lg:grid-cols-[180px,minmax(0,1fr),130px,130px] gap-3 lg:gap-4 items-center p-4 rounded-2xl border transition-all ${cfg.enabled ? 'bg-white/[0.04] border-white/10' : 'bg-transparent border-white/5 opacity-50'}`}>
                   <div className="flex items-center gap-3">
                     <input type="checkbox" checked={!!cfg.enabled} onChange={e => updateDay(day.id, { enabled: e.target.checked })} className="w-5 h-5 rounded accent-sky-500" />
                     <span className="text-sm font-black text-white uppercase">{day.label}</span>
                   </div>
-                  <div className="h-2 bg-white/5 rounded-full overflow-hidden flex-1">
+                  <div className="h-2 bg-white/5 rounded-full overflow-hidden flex-1 min-w-0">
                     {cfg.enabled && <div className="h-full bg-sky-500/40" style={{ width: `${(cfg.duration * cfg.sessions / 9) * 100}%` }} />}
                   </div>
-                  <select value={cfg.duration} disabled={!cfg.enabled} onChange={e => updateDay(day.id, { duration: Number(e.target.value) })} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white">
+                  <select value={cfg.duration} disabled={!cfg.enabled} onChange={e => updateDay(day.id, { duration: Number(e.target.value) })} className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white min-w-0">
                     {DURATION_OPTIONS.map(v => <option key={v} value={v}>{v} Ore</option>)}
                   </select>
-                  <select value={cfg.sessions} disabled={!cfg.enabled} onChange={e => updateDay(day.id, { sessions: Number(e.target.value) })} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white">
+                  <select value={cfg.sessions} disabled={!cfg.enabled} onChange={e => updateDay(day.id, { sessions: Number(e.target.value) })} className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white min-w-0">
                     {SESSIONS_OPTIONS.map(v => <option key={v} value={v}>{v} Sedute</option>)}
                   </select>
                 </div>
@@ -626,7 +810,7 @@ export default function TrainPage({
             )}
 
             {planned.length > 0 ? planned.map((row, idx) => (
-              <div key={idx} 
+              <div key={row.id} 
                 onClick={() => setEditingSessionId(row.id)}
                 className={`glass-card overflow-hidden transition-all cursor-pointer hover:border-sky-500/30 group ${row.customized ? 'ring-1 ring-amber-500/30' : ''}`}
               >
@@ -644,13 +828,59 @@ export default function TrainPage({
                       <div className="text-xl font-black text-white uppercase mt-1 group-hover:text-sky-400 transition-colors">{row.focus.title}</div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenInfoBySession(prev => ({ ...prev, [row.id]: !prev[row.id] }));
+                      }}
+                      className={`w-8 h-8 rounded-lg border text-xs font-black transition-all ${openInfoBySession[row.id] ? 'border-sky-400/60 bg-sky-500/15 text-sky-300' : 'border-white/10 bg-white/[0.03] text-gray-300 hover:border-white/20'}`}
+                      title="Spiegazione proposta"
+                    >
+                      (i)
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenDataBySession(prev => ({ ...prev, [row.id]: !prev[row.id] }));
+                      }}
+                      className={`w-8 h-8 rounded-lg border text-xs font-black transition-all ${openDataBySession[row.id] ? 'border-amber-400/60 bg-amber-500/15 text-amber-300' : 'border-white/10 bg-white/[0.03] text-gray-300 hover:border-white/20'}`}
+                      title="Dati a supporto"
+                    >
+                      📊
+                    </button>
                     <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase ${axisCls(row.focus.axis)}`}>{axisLabel(row.focus.axis)}</span>
                     <span className="text-[10px] text-gray-500 font-black">{row.duration} ORE</span>
                     <div className="text-sky-400 opacity-0 group-hover:opacity-100 transition-opacity">✎</div>
                   </div>
                 </div>
-                {/* Session Dashboard Layout */}
+                {(openInfoBySession[row.id] || openDataBySession[row.id]) && (
+                  <div className="px-6 py-4 grid grid-cols-1 lg:grid-cols-2 gap-4 border-b border-white/5 bg-white/[0.01]" onClick={(e) => e.stopPropagation()}>
+                    {openInfoBySession[row.id] && (
+                      <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+                        <div className="text-[10px] font-black uppercase text-sky-300 mb-2">(i) Perché questa proposta</div>
+                        <div className="text-xs text-gray-200 leading-relaxed">{row.rationale}</div>
+                      </div>
+                    )}
+                    {openDataBySession[row.id] && (
+                      <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
+                        <div className="text-[10px] font-black uppercase text-amber-300">📊 Dati che giustificano la seduta</div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2 py-1 rounded-lg bg-white/[0.04] border border-white/10 text-[10px] text-gray-200">Segnali: {row.evidenceStats.signals}</span>
+                          <span className="px-2 py-1 rounded-lg bg-white/[0.04] border border-white/10 text-[10px] text-gray-200">Critici: {row.evidenceStats.criticalCount}</span>
+                          <span className="px-2 py-1 rounded-lg bg-white/[0.04] border border-white/10 text-[10px] text-gray-200">Priorità media: {row.evidenceStats.avgPriority.toFixed(1)}</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {row.evidence.length > 0 ? row.evidence.map((line, lineIdx) => (
+                            <div key={lineIdx} className="text-[10px] text-gray-300 leading-relaxed bg-white/[0.03] rounded-lg border border-white/5 px-2.5 py-2">{line}</div>
+                          )) : (
+                            <div className="text-[10px] text-gray-400">Nessun segnale specifico disponibile per questo asse con i dati correnti.</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="p-6 grid grid-cols-1 lg:grid-cols-[1.5fr,1fr] gap-8">
                   <div className="space-y-6">
                     <div className="space-y-4">
@@ -749,6 +979,206 @@ export default function TrainPage({
         )}
 
       </div>
+    </div>
+  );
+}
+
+// ─── Interactive Editor Components ───────────────────────────────────────────
+
+function SessionEditor({ session, allPlayers, onClose, onUpdate, onReset }) {
+  const [drillSearch, setDrillSearch] = useState('');
+  const [techFilter, setTechFilter] = useState('all');
+
+  // Guard to prevent crash if session is not found
+  if (!session) return null;
+
+  const filteredDrills = DRILL_LIBRARY.filter(d => {
+    const matchesSearch = d.title.toLowerCase().includes(drillSearch.toLowerCase());
+    const matchesTech = techFilter === 'all' || d.techArea === techFilter;
+    return matchesSearch && matchesTech;
+  });
+
+  const updateTiming = (key, val) => {
+    const nextTimes = { ...(session.structure || {}), [key]: Number(val) };
+    const total = Object.entries(nextTimes).reduce((acc, [k, v]) => k !== 'total' ? acc + v : acc, 0);
+    onUpdate({ times: { ...nextTimes, total } });
+  };
+
+  const toggleDrill = (drill) => {
+    const current = session.focus.drills || [];
+    const exists = current.find(d => d.id === drill.id);
+    if (exists) {
+      onUpdate({ drills: current.filter(d => d.id !== drill.id) });
+    } else {
+      onUpdate({ drills: [...current, drill], focusTitle: session.focus.title || 'Manuale' });
+    }
+  };
+
+  const togglePlayer = (pNum) => {
+    const current = session.playerTags || [];
+    if (current.includes(pNum)) {
+      onUpdate({ playerTags: current.filter(n => n !== pNum) });
+    } else {
+      onUpdate({ playerTags: [...current, pNum] });
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-10">
+      <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={onClose} />
+      
+      <div className="relative w-full max-w-5xl h-full bg-slate-900 border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
+        
+        {/* Header */}
+        <div className="p-6 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+          <div>
+            <div className="text-[10px] text-gray-500 font-black uppercase tracking-widest">{session.dayLabel} · Sessione {session.sessionIdx}</div>
+            <h2 className="text-xl font-black text-white uppercase mt-1">Personalizza Seduta</h2>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={onReset} className="px-4 py-2 rounded-xl bg-red-500/10 text-red-400 text-[10px] font-black border border-red-500/20 hover:bg-red-500/20 transition-all">RESET AUTOMATICO</button>
+            <button onClick={onClose} className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-white hover:bg-white/10 transition-all text-xl">✕</button>
+          </div>
+        </div>
+
+        {/* Content Grid */}
+        <div className="flex-1 overflow-y-auto p-6 md:p-8 grid grid-cols-1 lg:grid-cols-[1fr,350px] gap-8">
+          
+          <div className="space-y-8">
+            {/* Phase Timing Sliders */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-black text-white uppercase tracking-tighter">Roadmap Temporale (Minuti)</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 p-6 bg-white/[0.02] rounded-3xl border border-white/5">
+                {[
+                  { k: 'warmup', l: 'Warmup', c: 'text-sky-400' },
+                  { k: 'tech', l: 'Tecnica', c: 'text-amber-400' },
+                  { k: 'tact', l: 'Tattica', c: 'text-purple-400' },
+                  { k: 'game', l: 'Gioco (6vs6)', c: 'text-green-400' },
+                ].map(p => (
+                  <div key={p.k} className="space-y-2">
+                    <div className="flex justify-between items-center text-[10px] font-black uppercase">
+                      <span className="text-gray-400">{p.l}</span>
+                      <span className={p.c}>{session.structure[p.k]}'</span>
+                    </div>
+                    <input type="range" min={0} max={60} step={5} value={session.structure[p.k]} onChange={e => updateTiming(p.k, e.target.value)} className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-white/5" />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Drill Browser — Pro Max only */}
+            {canSeeDrills ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black text-white uppercase tracking-tighter">Esercizi &amp; Drills</h3>
+                  <div className="flex gap-2">
+                    <select value={techFilter} onChange={e => setTechFilter(e.target.value)} className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-[10px] text-gray-400 focus:outline-none">
+                      <option value="all">Tutti i fondamentali</option>
+                      <option value="attacco">Attacco</option>
+                      <option value="reception">Ricezione</option>
+                      <option value="defense">Difesa</option>
+                      <option value="block">Muro</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2 no-scrollbar">
+                  {filteredDrills.map(d => {
+                    const isSelected = (session.focus.drills || []).some(sd => sd.id === d.id);
+                    return (
+                      <div key={d.id}
+                        onClick={() => toggleDrill(d)}
+                        className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col gap-2 ${isSelected ? 'bg-sky-500/10 border-sky-500/30' : 'bg-white/[0.02] border-white/5 hover:border-white/10'}`}
+                      >
+                        <div className="flex justify-between items-start">
+                          <span className="text-[9px] font-black uppercase text-sky-500">{d.techArea}</span>
+                          {isSelected && <span className="text-sky-400">✓</span>}
+                        </div>
+                        <div className="text-xs font-bold text-white leading-tight">{d.title}</div>
+                        <div className="text-[9px] text-gray-500 italic">{d.desc}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="p-6 rounded-2xl border border-purple-500/20 bg-purple-500/5 text-center space-y-2">
+                <div className="text-2xl">🚀</div>
+                <div className="text-sm font-black text-purple-300 uppercase tracking-tighter">Esercizi &amp; Drills</div>
+                <div className="text-xs text-gray-500">Disponibile con profilo <span className="text-purple-400 font-bold">Pro Max</span></div>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-8">
+            {/* Player Assignment */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-black text-white uppercase tracking-tighter">Focus Atlete</h3>
+              <p className="text-[9px] text-gray-500 uppercase">Seleziona le atlete su cui concentrare il monitoraggio tecnico</p>
+              <div className="grid grid-cols-3 gap-2">
+                {allPlayers.map(p => {
+                  const isSelected = (session.playerTags || []).includes(p.number);
+                  return (
+                    <button key={p.number} 
+                      onClick={() => togglePlayer(p.number)}
+                      className={`p-2 rounded-xl border text-center transition-all ${isSelected ? 'bg-amber-500/20 border-amber-500/30 text-amber-500' : 'bg-white/[0.02] border-white/5 text-gray-500 hover:border-white/20'}`}
+                    >
+                      <div className="text-[10px] font-black">#{p.number}</div>
+                      <div className="text-[8px] truncate font-bold uppercase">{p.name.split(' ')[0]}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Custom Notes */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-black text-white uppercase tracking-tighter">Obiettivi Specifici</h3>
+              <textarea 
+                value={session.desc || ''}
+                onChange={e => onUpdate({ desc: e.target.value, focusTitle: session.focus.title })}
+                placeholder="Es: Lavorare sulla rincorsa larga della #4..."
+                className="w-full h-32 bg-white/[0.03] border border-white/10 rounded-2xl p-4 text-xs text-gray-300 resize-none focus:outline-none focus:border-sky-500/30"
+              />
+            </div>
+          </div>
+
+        </div>
+
+        {/* Footer */}
+        <div className="p-6 border-t border-white/5 bg-white/[0.02] flex justify-end">
+           <button onClick={onClose} className="px-8 py-3 rounded-2xl bg-sky-500 text-white text-xs font-black shadow-lg hover:shadow-sky-500/20 transition-all uppercase tracking-widest">Salva Seduta</button>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ─── Small Reusable Components ────────────────────────────────────────────────
+
+function StatTile({ label, value, color, sub }) {
+  return (
+    <div className="glass-card p-3">
+      <p className="text-[10px] text-gray-500 mb-0.5">{label}</p>
+      <p className={`text-2xl font-bold ${color}`}>{value}</p>
+      {sub && <p className="text-[10px] text-gray-600 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+function InfoBox({ text }) {
+  return (
+    <div className="glass-card p-3 border-l-2 border-sky-500/30">
+      <p className="text-[11px] text-gray-500">{text}</p>
+    </div>
+  );
+}
+
+function EmptyState({ msg }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-40 text-gray-500 text-sm">
+      <div className="text-3xl mb-2">⛓</div>
+      <p>{msg}</p>
     </div>
   );
 }

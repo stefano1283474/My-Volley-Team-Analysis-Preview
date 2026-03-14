@@ -10,21 +10,26 @@ export default function DatasetManager({
   ownerTeamName = '',
   readOnly = false,
   isSharedMode = false,
+  canManageShare = false,
   shareInfo = null,
   shareUrl = '',
   onCreateShareLink,
-  onUpdateShareReaders,
+  onUpdateShareMembers,
   onUpload, onDelete,
   onClearArchive,
   isLoading,
   uploadProgress = [],
 }) {
-  const [dragOver, setDragOver] = useState(false);
-  const [readerEmail, setReaderEmail] = useState('');
-  const [allowedReaders, setAllowedReaders] = useState([]);
+  // Separate upload zones: scout (xlsm/xlsx) and calendar (csv)
+  const [dragOverScout, setDragOverScout] = useState(false);
+  const [dragOverCal, setDragOverCal] = useState(false);
+  const fileRefScout = useRef(null);
+  const fileRefCal = useRef(null);
+
+  const [memberEmail, setMemberEmail] = useState('');
+  const [shareMembers, setShareMembers] = useState([]);
   const [shareBusy, setShareBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
-  const fileRef = useRef(null);
   const completedUploads = uploadProgress.filter(item => item.status === 'done').length;
   const failedUploads = uploadProgress.filter(item => item.status === 'error').length;
   const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
@@ -35,40 +40,83 @@ export default function DatasetManager({
     return teamUpper === ownerTeamUpper || teamUpper.includes(ownerTeamUpper) || ownerTeamUpper.includes(teamUpper);
   };
 
+  const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+
   useEffect(() => {
-    setAllowedReaders(shareInfo?.allowedEmails || []);
+    const fromShareInfo = Array.isArray(shareInfo?.shareMembers) && shareInfo.shareMembers.length > 0
+      ? shareInfo.shareMembers
+      : (shareInfo?.allowedEmails || []).map(email => ({
+        email,
+        role: 'observer',
+        permission: 'read',
+        status: 'active',
+      }));
+    setShareMembers(fromShareInfo);
   }, [shareInfo]);
 
-  const addReader = async () => {
-    if (!onUpdateShareReaders || !readerEmail.trim()) return;
-    const normalized = readerEmail.trim().toLowerCase();
-    if (allowedReaders.includes(normalized)) {
-      setReaderEmail('');
-      return;
+  const ownerMember = useMemo(() => (
+    shareMembers.find(member => member.role === 'owner') || {
+      email: normalizeEmail(shareInfo?.ownerEmail || ''),
+      role: 'owner',
+      permission: 'write',
+      status: 'active',
     }
-    const next = [...allowedReaders, normalized];
-    setAllowedReaders(next);
-    setReaderEmail('');
+  ), [shareMembers, shareInfo?.ownerEmail]);
+
+  const observerMembers = useMemo(() => (
+    shareMembers
+      .filter(member => member.role !== 'owner')
+      .sort((a, b) => String(a.email || '').localeCompare(String(b.email || '')))
+  ), [shareMembers]);
+
+  const persistMembers = async (nextMembers) => {
+    if (!onUpdateShareMembers) return;
     setShareBusy(true);
     try {
-      const updated = await onUpdateShareReaders(next);
-      setAllowedReaders(updated?.allowedEmails || next);
+      const updated = await onUpdateShareMembers(nextMembers);
+      setShareMembers(updated?.shareMembers || nextMembers);
     } finally {
       setShareBusy(false);
     }
   };
 
-  const removeReader = async (email) => {
-    if (!onUpdateShareReaders) return;
-    const next = allowedReaders.filter(e => e !== email);
-    setAllowedReaders(next);
-    setShareBusy(true);
-    try {
-      const updated = await onUpdateShareReaders(next);
-      setAllowedReaders(updated?.allowedEmails || next);
-    } finally {
-      setShareBusy(false);
+  const addMember = async () => {
+    if (!onUpdateShareMembers || !memberEmail.trim()) return;
+    const normalized = normalizeEmail(memberEmail);
+    if (!normalized) return;
+    if (normalized === normalizeEmail(ownerMember?.email)) {
+      setMemberEmail('');
+      return;
     }
+    if (observerMembers.some(member => normalizeEmail(member.email) === normalized)) {
+      setMemberEmail('');
+      return;
+    }
+    const next = [
+      ...shareMembers.filter(member => member.role === 'owner'),
+      ...observerMembers,
+      { email: normalized, role: 'observer', permission: 'read', status: 'active' },
+    ];
+    setShareMembers(next);
+    setMemberEmail('');
+    await persistMembers(next);
+  };
+
+  const updateMember = async (email, updater) => {
+    const next = shareMembers.map(member => (
+      normalizeEmail(member.email) === normalizeEmail(email) && member.role !== 'owner'
+        ? { ...member, ...updater }
+        : member
+    ));
+    setShareMembers(next);
+    await persistMembers(next);
+  };
+
+  const removeMember = async (email) => {
+    if (!onUpdateShareMembers) return;
+    const next = shareMembers.filter(member => normalizeEmail(member.email) !== normalizeEmail(email));
+    setShareMembers(next);
+    await persistMembers(next);
   };
 
   const handleCreateShare = async () => {
@@ -86,14 +134,27 @@ export default function DatasetManager({
     try { await navigator.clipboard.writeText(shareUrl); } catch {}
   };
 
-  const handleDrop = (e) => {
+  // Scout upload handlers (xlsm/xlsx only)
+  const handleDropScout = (e) => {
     e.preventDefault();
-    setDragOver(false);
-    const files = Array.from(e.dataTransfer.files);
+    setDragOverScout(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => /\.(xlsm|xlsx)$/i.test(f.name));
     if (files.length) onUpload(files);
   };
+  const handleChangeScout = (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length) onUpload(files);
+    e.target.value = '';
+  };
 
-  const handleChange = (e) => {
+  // Calendar upload handlers (csv only)
+  const handleDropCal = (e) => {
+    e.preventDefault();
+    setDragOverCal(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => /\.csv$/i.test(f.name));
+    if (files.length) onUpload(files);
+  };
+  const handleChangeCal = (e) => {
     const files = Array.from(e.target.files);
     if (files.length) onUpload(files);
     e.target.value = '';
@@ -133,14 +194,14 @@ export default function DatasetManager({
       <div className="glass-card p-4 space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <p className="text-sm text-gray-200 font-medium">Condivisione dataset (sola lettura)</p>
+            <p className="text-sm text-gray-200 font-medium">Condivisione dataset e ruoli utenti</p>
             <p className="text-[11px] text-gray-500">
               {isSharedMode
-                ? 'Stai visualizzando un dataset condiviso in sola lettura.'
-                : 'Genera un link e autorizza account Google specifici alla sola lettura.'}
+                ? 'Dataset condiviso: il proprietario gestisce accessi, stato e permessi.'
+                : 'Genera un link e gestisci utenti con ruoli Proprietario/Osservatore.'}
             </p>
           </div>
-          {!readOnly && (
+          {canManageShare && (
             <button
               onClick={handleCreateShare}
               disabled={shareBusy}
@@ -168,40 +229,79 @@ export default function DatasetManager({
               </button>
             </div>
 
-            {!readOnly && (
+            <div className="rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden">
+              <div className="px-3 py-2 border-b border-white/10 text-[11px] text-gray-500">
+                Proprietario
+              </div>
+              <div className="px-3 py-2 flex items-center gap-2 text-xs">
+                <span className="text-gray-200 flex-1 truncate">{ownerMember.email || 'Account proprietario'}</span>
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">Proprietario</span>
+                <span className="px-2 py-0.5 rounded-full bg-green-500/15 text-green-300 border border-green-500/30">Lettura e scrittura</span>
+                <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/30">Attivo</span>
+              </div>
+            </div>
+
+            {canManageShare && (
               <>
                 <div className="flex items-center gap-2">
                   <input
                     type="email"
-                    value={readerEmail}
-                    onChange={(e) => setReaderEmail(e.target.value)}
+                    value={memberEmail}
+                    onChange={(e) => setMemberEmail(e.target.value)}
                     placeholder="email Google autorizzata"
                     className="flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs text-gray-300"
                   />
                   <button
-                    onClick={addReader}
-                    disabled={shareBusy || !readerEmail.trim()}
+                    onClick={addMember}
+                    disabled={shareBusy || !memberEmail.trim()}
                     className="px-3 py-2 rounded-lg text-xs bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 disabled:opacity-60"
                   >
                     Aggiungi
                   </button>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {allowedReaders.length === 0 && (
-                    <span className="text-[11px] text-gray-500">Nessun lettore autorizzato.</span>
+                <div className="space-y-2">
+                  {observerMembers.length === 0 && (
+                    <span className="text-[11px] text-gray-500">Nessun osservatore registrato.</span>
                   )}
-                  {allowedReaders.map(email => (
-                    <span key={email} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] bg-white/[0.04] text-gray-300 border border-white/10">
-                      {email}
-                      <button
-                        onClick={() => removeReader(email)}
-                        className="text-gray-500 hover:text-red-400"
-                        title="Rimuovi"
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  ))}
+                  {observerMembers.map(member => {
+                    const active = member.status !== 'suspended';
+                    const canWrite = member.permission === 'write';
+                    return (
+                      <div key={member.email} className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 flex items-center gap-2">
+                        <span className="text-xs text-gray-200 flex-1 truncate">{member.email}</span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] bg-white/[0.04] text-gray-300 border border-white/10">Osservatore</span>
+                        <button
+                          onClick={() => updateMember(member.email, { permission: canWrite ? 'read' : 'write' })}
+                          disabled={shareBusy || !active}
+                          className={`px-2 py-1 rounded-md text-[10px] border transition-colors ${
+                            canWrite
+                              ? 'bg-green-500/15 text-green-300 border-green-500/30 hover:bg-green-500/25'
+                              : 'bg-slate-500/15 text-slate-300 border-slate-500/30 hover:bg-slate-500/25'
+                          } disabled:opacity-50`}
+                        >
+                          {canWrite ? 'Lettura e scrittura' : 'Sola lettura'}
+                        </button>
+                        <button
+                          onClick={() => updateMember(member.email, { status: active ? 'suspended' : 'active' })}
+                          disabled={shareBusy}
+                          className={`px-2 py-1 rounded-md text-[10px] border transition-colors ${
+                            active
+                              ? 'bg-sky-500/15 text-sky-300 border-sky-500/30 hover:bg-sky-500/25'
+                              : 'bg-orange-500/15 text-orange-300 border-orange-500/30 hover:bg-orange-500/25'
+                          } disabled:opacity-50`}
+                        >
+                          {active ? 'Sospendi' : 'Riprendi'}
+                        </button>
+                        <button
+                          onClick={() => removeMember(member.email)}
+                          disabled={shareBusy}
+                          className="px-2 py-1 rounded-md text-[10px] border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+                        >
+                          Rimuovi
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -209,37 +309,72 @@ export default function DatasetManager({
         )}
       </div>
 
+      {/* ── Due sezioni di upload separate ─────────────────────────────── */}
       {!readOnly ? (
-        <div
-          className={`drop-zone p-8 flex flex-col items-center gap-3 cursor-pointer transition-all ${
-            dragOver ? 'drag-over' : ''
-          } ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}
-          onClick={() => fileRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-        >
-          <div className="text-4xl">{isLoading ? '⏳' : '📂'}</div>
-          <p className="text-sm text-gray-300 text-center">
-            {isLoading ? (
-              <span className="text-amber-400 font-medium">
-                Elaborazione file in corso… ({completedUploads}/{uploadProgress.length || 0})
-              </span>
-            ) : (
-              <span className="text-amber-400 font-medium">Clicca o trascina</span>
-            )} i file qui
-          </p>
-          <p className="text-xs text-gray-500">
-            Formati supportati: .xlsm, .xlsx (scout gara), .csv (calendario)
-          </p>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            accept=".xlsm,.xlsx,.csv"
-            className="hidden"
-            onChange={handleChange}
-          />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+          {/* Carica Scout Partite */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-amber-400">⚡</span>
+              <p className="text-sm font-semibold text-gray-200">Scout Partite</p>
+            </div>
+            <p className="text-[11px] text-gray-500 mb-2">File di analisi partita esportati da DataVolley. Formati accettati: <span className="text-amber-300 font-mono">.xlsm</span> / <span className="text-amber-300 font-mono">.xlsx</span></p>
+            <div
+              className={`drop-zone p-6 flex flex-col items-center gap-2 cursor-pointer transition-all ${
+                dragOverScout ? 'drag-over' : ''
+              } ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}
+              onClick={() => fileRefScout.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragOverScout(true); }}
+              onDragLeave={() => setDragOverScout(false)}
+              onDrop={handleDropScout}
+            >
+              <div className="text-3xl">{isLoading ? '⏳' : '📊'}</div>
+              <p className="text-sm text-gray-300 text-center">
+                <span className="text-amber-400 font-medium">Clicca o trascina</span> lo scout
+              </p>
+              <p className="text-[11px] text-gray-500">.xlsm / .xlsx</p>
+              <input
+                ref={fileRefScout}
+                type="file"
+                multiple
+                accept=".xlsm,.xlsx"
+                className="hidden"
+                onChange={handleChangeScout}
+              />
+            </div>
+          </div>
+
+          {/* Carica Calendario */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-sky-400">📅</span>
+              <p className="text-sm font-semibold text-gray-200">Calendario Campionato</p>
+            </div>
+            <p className="text-[11px] text-gray-500 mb-2">Calendario esportato dalla federazione o preparato manualmente. Formato accettato: <span className="text-sky-300 font-mono">.csv</span></p>
+            <div
+              className={`drop-zone p-6 flex flex-col items-center gap-2 cursor-pointer transition-all ${
+                dragOverCal ? 'drag-over' : ''
+              } ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}
+              onClick={() => fileRefCal.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragOverCal(true); }}
+              onDragLeave={() => setDragOverCal(false)}
+              onDrop={handleDropCal}
+            >
+              <div className="text-3xl">📋</div>
+              <p className="text-sm text-gray-300 text-center">
+                <span className="text-sky-300 font-medium">Clicca o trascina</span> il calendario
+              </p>
+              <p className="text-[11px] text-gray-500">.csv</p>
+              <input
+                ref={fileRefCal}
+                type="file"
+                accept=".csv"
+                className="hidden"
+                onChange={handleChangeCal}
+              />
+            </div>
+          </div>
         </div>
       ) : (
         <div className="glass-card p-4 text-xs text-sky-300 border border-sky-500/20">

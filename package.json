@@ -1,6 +1,6 @@
 {
   "name": "my-volley-team-analysis",
-  "version": "2.7.3",
+  "version": "2.7.4",
   "description": "My Volley Team Analysis — Analytics & Coaching Tool",
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "firebase": "^10.14.1",
+    "firebase": "^12.10.0",
     "lodash": "^4.17.21",
     "lucide-react": "^0.383.0",
     "papaparse": "^5.4.1",

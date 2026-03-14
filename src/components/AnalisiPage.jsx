@@ -3,6 +3,8 @@
 // ============================================================================
 import { useState } from 'react';
 import GiocoAnalysis from './GiocoAnalysis';
+import PlayerAnalysis from './PlayerAnalysis';
+import TeamAnalysis from './TeamAnalysis';
 
 // ─── Sub-tab definitions ─────────────────────────────────────────────────────
 const ANALISI_TABS = [
@@ -51,8 +53,18 @@ export default function AnalisiPage({
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         {activeTab === 'partite'   && <EmptyTab label="Partite" />}
         {activeTab === 'avversari' && <EmptyTab label="Avversari" />}
-        {activeTab === 'mio_team'  && <EmptyTab label="Mio Team" />}
-        {activeTab === 'player'    && <EmptyTab label="Player" />}
+        {activeTab === 'mio_team'  && (
+          <TeamAnalysis
+            matches={matches}
+          />
+        )}
+        {activeTab === 'player'    && (
+          <PlayerAnalysis
+            analytics={analytics}
+            matches={matches}
+            roster={roster}
+          />
+        )}
         {activeTab === 'gioco'     && (
           <GiocoAnalysis
             matches={matches}

@@ -26,16 +26,23 @@ import {
   loadCalendar,
   getOrCreateShareLink,
   loadShareLinkForOwner,
-  updateShareAllowedEmails,
+  updateShareMembers,
   resolveSharedAccess,
+  ensureUserAccessRecord,
+  loadCurrentUserAccess,
+  loadAllUsersAccess,
+  updateUserAssignedProfile,
+  updateUserRole,
 } from './utils/firestoreService';
 import { useAuth } from './context/AuthContext';
+import { PinProvider } from './context/PinContext';
+import { ProfileProvider } from './context/ProfileContext';
+import DataModeSelector from './components/DataModeSelector';
 
 import Dashboard from './components/Dashboard';
 import ChartsExplorer, { DEFAULT_DASHBOARD_CONFIG } from './components/ChartsExplorer';
 import MatchReport from './components/MatchReport';
 import PlayerCard from './components/PlayerCard';
-import WeightAdjuster from './components/WeightAdjuster';
 import ConfigPanel from './components/ConfigPanel';
 import DatasetManager, { CalendarSection } from './components/DatasetManager';
 import TrainingSuggestions from './components/TrainingSuggestions';
@@ -45,30 +52,68 @@ import RotationAnalysis from './components/RotationAnalysis';
 import AttackAnalysis from './components/AttackAnalysis';
 import LoginPage from './components/LoginPage';
 import Glossary from './components/Glossary';
-import AnalisiPage from './components/AnalisiPage';
-import EvidencePage from './components/EvidencePage';
 import TrainPage from './components/TrainPage';
+import TeamAnalysis from './components/TeamAnalysis';
+import GiocoAnalysis from './components/GiocoAnalysis';
+import GuidePage from './components/GuidePage';
+import AdminUsersPanel from './components/AdminUsersPanel';
 
-// ─── Navigation tabs ─────────────────────────────────────────────────────────
-const NAV_ITEMS = [
-  { id: 'analisi',   label: 'Analisi',         icon: '🔬' },
-  { id: 'evidence',  label: 'Evidence',        icon: '🔍' },
-  { id: 'train',     label: 'Train',           icon: '🏋️' },
-  { id: 'dashboard', label: 'Dashboard',       icon: '◉' },
-  { id: 'grafici',   label: 'Grafici',         icon: '📊' },
-  { id: 'matches',   label: 'Partite',         icon: '⚡' },
-  { id: 'players',   label: 'Giocatrici',      icon: '★' },
-  { id: 'trends',    label: 'Trend',           icon: '↗' },
-  { id: 'rotations', label: 'Rotazioni',       icon: '⟳' },
-  { id: 'attack',    label: 'Analisi attacco', icon: '⚔' },
-  { id: 'training',  label: 'Allenamento',     icon: '⚙' },
-  { id: 'sequences', label: 'Coach Brain',      icon: '🧠' },
-  { id: 'training_plan', label: 'Training Plan', icon: '📅' },
-  { id: 'data',      label: 'Gestione Archivio', icon: '☰' },
-  { id: 'calendiario', label: 'Calendiario',   icon: '🗓' },
-  { id: 'config',    label: 'Config',          icon: '🔧' },
-  { id: 'glossary',  label: 'Glossario',       icon: '📖' },
+// ─── Profile system ───────────────────────────────────────────────────────────
+const PROFILE_ORDER = { base: 0, pro: 1, promax: 2 };
+const PROFILE_META = {
+  base:   { label: 'Base',    color: '#2563EB', bg: 'rgba(37,99,235,0.15)',  border: 'rgba(37,99,235,0.4)'  },
+  pro:    { label: 'Pro',     color: '#7C3AED', bg: 'rgba(124,58,237,0.15)', border: 'rgba(124,58,237,0.4)' },
+  promax: { label: 'Pro Max', color: '#DC2626', bg: 'rgba(220,38,38,0.15)',  border: 'rgba(220,38,38,0.4)'  },
+};
+
+// ─── Navigation structure ─────────────────────────────────────────────────────
+const SECTIONS = [
+  { id: 'home',     label: 'Home',     icon: '🏠', minProfile: 'base' },
+  { id: 'analisi',  label: 'Analisi',  icon: '🔬', minProfile: 'base' },
+  { id: 'evidenze', label: 'Evidenze', icon: '📈', minProfile: 'pro'  },
+  { id: 'training', label: 'Training', icon: '🏋️', minProfile: 'base' },
+  { id: 'sistema',  label: 'Sistema',  icon: '⚙️', minProfile: 'base' },
+  { id: 'admin',    label: 'Utenti Admin', icon: '🛡️', minProfile: 'base' },
 ];
+
+const SECTION_TABS = {
+  analisi: [
+    { id: 'partite',    label: 'Partite',    icon: '⚡', minProfile: 'base'   },
+    { id: 'giocatrici', label: 'Giocatrici', icon: '★',  minProfile: 'base'   },
+    { id: 'squadra',    label: 'Squadra',    icon: '🛡', minProfile: 'pro'    },
+    { id: 'avversari',  label: 'Avversari',  icon: '🎯', minProfile: 'pro'    },
+    { id: 'gioco',      label: 'Gioco',      icon: '🏐', minProfile: 'promax' },
+  ],
+  evidenze: [
+    { id: 'suggerimenti', label: 'Suggerimenti', icon: '💡', minProfile: 'pro'    },
+    { id: 'trend',        label: 'Trend',        icon: '↗',  minProfile: 'pro'    },
+    { id: 'rotazioni',    label: 'Rotazioni',    icon: '⟳',  minProfile: 'pro'    },
+    { id: 'attacco',      label: 'Attacco',      icon: '⚔', minProfile: 'pro'    },
+    { id: 'catene',       label: 'Catene',       icon: '🧠', minProfile: 'promax' },
+  ],
+  training: [
+    { id: 'suggerimenti', label: 'Suggerimenti', icon: '💡', minProfile: 'base'   },
+    { id: 'settimana',    label: 'Settimana',    icon: '📅', minProfile: 'pro'    },
+    { id: 'piano',        label: 'Piano',        icon: '🔗', minProfile: 'promax' },
+  ],
+  sistema: [
+    { id: 'dati',      label: 'Dati',      icon: '☰',  minProfile: 'base'   },
+    { id: 'guida',     label: 'Guida',     icon: '❓', minProfile: 'base'   },
+    { id: 'glossario', label: 'Glossario', icon: '📖', minProfile: 'base'   },
+    { id: 'config',    label: 'Config',    icon: '🔧', minProfile: 'pro'    },
+    { id: 'grafici',   label: 'Grafici',   icon: '📊', minProfile: 'promax' },
+  ],
+};
+
+const getVisibleSectionIdsByProfile = (profile) =>
+  SECTIONS
+    .filter(section => PROFILE_ORDER[profile] >= PROFILE_ORDER[section.minProfile])
+    .map(section => section.id);
+
+const getVisibleTabIdsByProfile = (sectionId, profile) =>
+  (SECTION_TABS[sectionId] || [])
+    .filter(tab => PROFILE_ORDER[profile] >= PROFILE_ORDER[tab.minProfile])
+    .map(tab => tab.id);
 
 const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
 
@@ -94,7 +139,18 @@ export default function App() {
   });
 
   // ─── State ────────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab]         = useState('dashboard');
+  const [activeSection, setActiveSection] = useState(() => {
+    try { return localStorage.getItem('vpa_active_section') || 'home'; } catch { return 'home'; }
+  });
+  const [activeSubTabs, setActiveSubTabs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vpa_active_subtabs');
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+  const [activeProfile, setActiveProfile] = useState(() => {
+    try { return localStorage.getItem('vpa_active_profile') || 'pro'; } catch { return 'pro'; }
+  });
   const [matches, setMatches]             = useState([]);
   const [calendar, setCalendar]           = useState([]);
   const [standings, setStandings]         = useState([]);
@@ -213,6 +269,10 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState([]);
   const [shareInfo, setShareInfo] = useState(null);
   const [sharedAccess, setSharedAccess] = useState(null);
+  const [userAccess, setUserAccess] = useState(null);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [isAdminSaving, setIsAdminSaving] = useState(false);
+  const [isAccessReady, setIsAccessReady] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
   const [isMobilePortrait, setIsMobilePortrait] = useState(() => {
@@ -224,6 +284,7 @@ export default function App() {
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const swipeStartRef = useRef(null);
+  const [profileReveal, setProfileReveal] = useState({ sections: [], tabs: [] });
   const [ownerTeamName, setOwnerTeamName] = useState(() => {
     try { return localStorage.getItem('vpa_owner_team') || ''; } catch { return ''; }
   });
@@ -243,11 +304,109 @@ export default function App() {
   };
 
   const isSharedMode = !!shareToken;
-  const canEditDataset = !!user && (!isSharedMode || !!sharedAccess?.isOwner);
+  const canEditDataset = !!user && (!isSharedMode || !!sharedAccess?.canWrite || !!sharedAccess?.isOwner);
+  const canManageShare = !!user && (!isSharedMode || !!sharedAccess?.isOwner);
   const dataOwnerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
   const shareUrl = shareInfo?.token
     ? `${window.location.origin}${window.location.pathname}?share=${shareInfo.token}`
     : '';
+  const isAdmin = userAccess?.role === 'admin';
+
+  useEffect(() => {
+    if (!user) {
+      setUserAccess(null);
+      setAdminUsers([]);
+      setIsAccessReady(false);
+      return;
+    }
+    let cancelled = false;
+    const syncAccess = async () => {
+      try {
+        setIsAccessReady(false);
+        const ensuredAccess = await ensureUserAccessRecord(user);
+        const loadedAccess = await loadCurrentUserAccess(user.uid);
+        const access = loadedAccess || ensuredAccess;
+        if (cancelled) return;
+        setUserAccess(access);
+        const forcedProfile = access?.assignedProfile || 'pro';
+        setActiveProfile(forcedProfile);
+        try { localStorage.setItem('vpa_active_profile', forcedProfile); } catch {}
+        if (access?.role === 'admin') {
+          const usersList = await loadAllUsersAccess();
+          if (cancelled) return;
+          setAdminUsers(usersList);
+        } else {
+          setAdminUsers([]);
+          setActiveSection(prev => (prev === 'admin' ? 'home' : prev));
+          setActiveSubTabs(prev => {
+            if (!prev.admin) return prev;
+            const next = { ...prev };
+            delete next.admin;
+            try { localStorage.setItem('vpa_active_subtabs', JSON.stringify(next)); } catch {}
+            return next;
+          });
+          try {
+            if (localStorage.getItem('vpa_active_section') === 'admin') {
+              localStorage.setItem('vpa_active_section', 'home');
+            }
+          } catch {}
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMsg(`Errore profilo utente: ${err.message}`);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsAccessReady(true);
+        }
+      }
+    };
+    syncAccess();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const refreshAdminUsers = useCallback(async () => {
+    if (!isAdmin) return;
+    const usersList = await loadAllUsersAccess();
+    setAdminUsers(usersList);
+  }, [isAdmin]);
+
+  const handleAdminProfileChange = useCallback(async (targetUser, profile) => {
+    if (!targetUser?.uid) return;
+    setIsAdminSaving(true);
+    setErrorMsg('');
+    try {
+      await updateUserAssignedProfile(targetUser.uid, profile);
+      await refreshAdminUsers();
+      if (targetUser.uid === user?.uid) {
+        setUserAccess(prev => prev ? { ...prev, assignedProfile: profile } : prev);
+        setActiveProfile(profile);
+        try { localStorage.setItem('vpa_active_profile', profile); } catch {}
+      }
+    } catch (err) {
+      setErrorMsg(`Errore aggiornamento profilo utente: ${err.message}`);
+    } finally {
+      setIsAdminSaving(false);
+    }
+  }, [refreshAdminUsers, user]);
+
+  const handleAdminRoleChange = useCallback(async (targetUser, role) => {
+    if (!targetUser?.uid) return;
+    setIsAdminSaving(true);
+    setErrorMsg('');
+    try {
+      const normalizedRole = role;
+      await updateUserRole(targetUser.uid, normalizedRole);
+      await refreshAdminUsers();
+      if (targetUser.uid === user?.uid) {
+        setUserAccess(prev => prev ? { ...prev, role: normalizedRole } : prev);
+      }
+    } catch (err) {
+      setErrorMsg(`Errore aggiornamento ruolo utente: ${err.message}`);
+    } finally {
+      setIsAdminSaving(false);
+    }
+  }, [refreshAdminUsers, user]);
 
   useEffect(() => {
     const onDocClick = (event) => {
@@ -324,6 +483,68 @@ export default function App() {
     }
   }, [isMobilePortrait, isSidebarOpen]);
 
+  // ─── Profile & navigation helpers ────────────────────────────────────────
+  const profileAllows = useCallback((minProfile) => {
+    return PROFILE_ORDER[activeProfile] >= PROFILE_ORDER[minProfile];
+  }, [activeProfile]);
+
+  const navigateTo = useCallback((section, subTab) => {
+    setActiveSection(section);
+    try { localStorage.setItem('vpa_active_section', section); } catch {}
+    if (subTab) {
+      setActiveSubTabs(prev => {
+        const next = { ...prev, [section]: subTab };
+        try { localStorage.setItem('vpa_active_subtabs', JSON.stringify(next)); } catch {}
+        return next;
+      });
+    }
+    if (isMobilePortrait) setIsSidebarOpen(false);
+  }, [isMobilePortrait]);
+
+  const handleProfileChange = useCallback((profile) => {
+    const prevSections = new Set(getVisibleSectionIdsByProfile(activeProfile));
+    const nextSections = getVisibleSectionIdsByProfile(profile);
+    const revealedSections = nextSections.filter(sectionId => !prevSections.has(sectionId));
+
+    const prevTabs = new Set(getVisibleTabIdsByProfile(activeSection, activeProfile));
+    const nextTabs = getVisibleTabIdsByProfile(activeSection, profile);
+    const revealedTabs = nextTabs.filter(tabId => !prevTabs.has(tabId));
+
+    setProfileReveal({ sections: revealedSections, tabs: revealedTabs });
+    setActiveProfile(profile);
+    try { localStorage.setItem('vpa_active_profile', profile); } catch {}
+    // If current section is not visible in new profile, redirect to home
+    const sectionMeta = SECTIONS.find(s => s.id === activeSection);
+    if (sectionMeta && PROFILE_ORDER[profile] < PROFILE_ORDER[sectionMeta.minProfile]) {
+      setActiveSection('home');
+      try { localStorage.setItem('vpa_active_section', 'home'); } catch {}
+    }
+    // If current sub-tab is not visible in new profile, reset it
+    const tabs = SECTION_TABS[activeSection] || [];
+    const curSub = activeSubTabs[activeSection];
+    if (curSub) {
+      const tabMeta = tabs.find(t => t.id === curSub);
+      if (tabMeta && PROFILE_ORDER[profile] < PROFILE_ORDER[tabMeta.minProfile]) {
+        const firstAllowed = tabs.find(t => PROFILE_ORDER[profile] >= PROFILE_ORDER[t.minProfile]);
+        if (firstAllowed) {
+          setActiveSubTabs(prev => {
+            const next = { ...prev, [activeSection]: firstAllowed.id };
+            try { localStorage.setItem('vpa_active_subtabs', JSON.stringify(next)); } catch {}
+            return next;
+          });
+        }
+      }
+    }
+  }, [activeProfile, activeSection, activeSubTabs]);
+
+  useEffect(() => {
+    if (profileReveal.sections.length === 0 && profileReveal.tabs.length === 0) return;
+    const timeoutId = setTimeout(() => {
+      setProfileReveal({ sections: [], tabs: [] });
+    }, 2000);
+    return () => clearTimeout(timeoutId);
+  }, [profileReveal]);
+
   const handleOwnerTeamChange = useCallback((teamName) => {
     const resolved = findStandingTeamName(standings, teamName) || teamName || '';
     setOwnerTeamName(resolved);
@@ -334,8 +555,8 @@ export default function App() {
     if (!opponentName) return;
     setSelectedMatch(null);
     setMatchReportIntent({ opponent: opponentName, openCommentTick: Date.now() });
-    setActiveTab('matches');
-  }, []);
+    navigateTo('analisi', 'partite');
+  }, [navigateTo]);
 
   const handleOpenOpponentReportFromDashboard = useCallback((opponentName) => {
     if (!opponentName) return;
@@ -351,8 +572,8 @@ export default function App() {
       }) || opponentName;
     setSelectedMatch(null);
     setMatchReportIntent({ opponent: matchOpponentName, openCommentTick: 0 });
-    setActiveTab('matches');
-  }, [matches]);
+    navigateTo('analisi', 'partite');
+  }, [matches, navigateTo]);
 
   useEffect(() => {
     if (!standings.length) return;
@@ -399,10 +620,13 @@ export default function App() {
             token: access.token,
             ownerUid: access.ownerUid,
             ownerEmail: access.ownerEmail,
+            shareMembers: access.shareMembers || [],
             allowedEmails: access.allowedEmails || [],
+            writerEmails: access.writerEmails || [],
+            publicAccess: access.publicAccess === true,
           });
         } else {
-          setSharedAccess({ isOwner: true, ownerUid: user.uid, token: '' });
+          setSharedAccess({ isOwner: true, ownerUid: user.uid, token: '', canWrite: true, role: 'owner', permission: 'write' });
           try {
             const existingShare = await loadShareLinkForOwner(user.uid);
             if (existingShare) {
@@ -432,7 +656,8 @@ export default function App() {
         }
 
         if (loadedMatches.length === 0) {
-          setActiveTab('data'); // nessun dato → apri sezione Dati
+          setActiveSection('sistema');
+          setActiveSubTabs(prev => ({ ...prev, sistema: 'dati' }));
         }
         setLoadingMsg(
           loadedMatches.length > 0
@@ -464,12 +689,12 @@ export default function App() {
     return created;
   }, [user]);
 
-  const handleUpdateShareReaders = useCallback(async (emails) => {
-    if (!user || !shareInfo?.token) return null;
-    const updated = await updateShareAllowedEmails(shareInfo.token, user.uid, emails);
+  const handleUpdateShareMembers = useCallback(async (members) => {
+    if (!user || !shareInfo?.token || !canManageShare) return null;
+    const updated = await updateShareMembers(shareInfo.token, user.uid, members);
     setShareInfo(updated);
     return updated;
-  }, [user, shareInfo]);
+  }, [user, shareInfo, canManageShare]);
 
   const handleShareOnWhatsApp = useCallback(async () => {
     let url = shareUrl;
@@ -641,7 +866,8 @@ export default function App() {
       setStandings([]);
       setSelectedMatch(null);
       setLoadingMsg('Archivio ripulito: partite e calendario eliminati');
-      setActiveTab('data');
+      setActiveSection('sistema');
+      setActiveSubTabs(prev => ({ ...prev, sistema: 'dati' }));
       setTimeout(() => setLoadingMsg(''), 3500);
     } catch (err) {
       console.error('[App] clearArchive error:', err);
@@ -746,14 +972,46 @@ export default function App() {
     return <LoginPage />;
   }
 
+  if (!isAccessReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center"
+        style={{ background: '#0a0e1a' }}>
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl"
+            style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
+            🏐
+          </div>
+          <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs text-gray-500">Verifica accesso utente…</p>
+        </div>
+      </div>
+    );
+  }
+
+  const visibleSections = SECTIONS.filter((s) => {
+    if (s.id === 'admin') return isAdmin;
+    return profileAllows(s.minProfile);
+  });
+  const curSubTabs = (SECTION_TABS[activeSection] || []).filter(t => profileAllows(t.minProfile));
+  const curSubTab  = activeSubTabs[activeSection] || curSubTabs[0]?.id || '';
+  const isMatchesView = activeSection === 'analisi' && curSubTab === 'partite';
+
   // ─── Main App ─────────────────────────────────────────────────────────────
   return (
+    <ProfileProvider
+      activeProfile={activeProfile}
+      onProfileChange={handleProfileChange}
+      savedProfiles={savedProfiles}
+      activeWeightProfileId={activeProfileId}
+      onWeightProfileChange={handleProfileLoad}
+    >
     <div className="h-screen flex flex-col overflow-hidden relative" onTouchStart={handleAppTouchStart} onTouchEnd={handleAppTouchEnd}>
-      {/* Header — sticky TopAppBar */}
+      {/* ── Header ── */}
       <header
-        className="sticky top-0 z-50 flex-shrink-0 border-b border-white/5 px-2.5 sm:px-6 py-3 flex items-center justify-between gap-2"
+        className="sticky top-0 z-50 flex-shrink-0 border-b border-white/5 px-2.5 sm:px-4 py-2.5 flex items-center justify-between gap-2"
         style={{ background: 'linear-gradient(180deg, rgba(17,24,39,0.97), rgba(10,14,26,0.99))', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       >
+        {/* Left: hamburger + title */}
         <div className="flex items-center gap-2 min-w-0">
           {isMobilePortrait && (
             <button
@@ -765,56 +1023,60 @@ export default function App() {
             </button>
           )}
           <div className="min-w-0">
-            <h1 className="text-[14px] sm:text-base font-bold tracking-tight whitespace-nowrap truncate leading-none max-w-[185px] sm:max-w-none" style={{ color: '#f59e0b' }}>{APP_NAME}</h1>
-            <p className="text-[10px] text-gray-500 tracking-widest uppercase whitespace-nowrap truncate max-w-[185px] sm:max-w-none">
+            <h1 className="text-[13px] sm:text-sm font-bold tracking-tight whitespace-nowrap truncate leading-none max-w-[140px] sm:max-w-none" style={{ color: '#f59e0b' }}>{APP_NAME}</h1>
+            <p className="text-[9px] text-gray-500 tracking-widest uppercase whitespace-nowrap truncate max-w-[140px] sm:max-w-none">
               v{APP_VERSION} · {matches.length} partite · {allPlayers.length} atlete
             </p>
           </div>
         </div>
 
-        {/* Centro: status messaggio */}
-        <div className="hidden sm:flex flex-1 justify-center px-4">
-          {isLoading && (
-            <div className="flex items-center gap-2 text-xs text-amber-400">
-              <div className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-              {loadingMsg}
+        {/* Centre: profile selector + status */}
+        <div className="flex-1 flex items-center justify-center gap-2 px-2">
+          {/* Profile pills */}
+          <div className="flex items-center gap-1 p-0.5 rounded-lg border border-white/10 bg-white/[0.03]">
+            {Object.entries(PROFILE_META).map(([key, meta]) => {
+              const active = activeProfile === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => handleProfileChange(key)}
+                  title={`Profilo ${meta.label}`}
+                  className="px-2 sm:px-3 py-1 rounded-md text-[10px] sm:text-xs font-semibold transition-all whitespace-nowrap"
+                  style={active
+                    ? { background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }
+                    : { color: '#6b7280' }
+                  }
+                >
+                  {meta.label}
+                </button>
+              );
+            })}
+          </div>
+          {isAdmin && (
+            <div className="px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-semibold border border-emerald-400/40 text-emerald-300 bg-emerald-500/10 whitespace-nowrap">
+              🛡 Admin attivo
             </div>
           )}
-          {loadingMsg && !isLoading && (
-            <div className="text-xs text-green-400">{loadingMsg}</div>
-          )}
-          {errorMsg && (
-            <div className="text-xs text-red-400">{errorMsg}</div>
-          )}
+          {/* Status message (desktop) */}
+          <div className="hidden lg:flex flex-1 justify-center">
+            {isLoading && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-400">
+                <div className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                {loadingMsg}
+              </div>
+            )}
+            {loadingMsg && !isLoading && <div className="text-xs text-green-400">{loadingMsg}</div>}
+            {errorMsg && <div className="text-xs text-red-400">{errorMsg}</div>}
+          </div>
         </div>
 
-        {/* Utente loggato */}
+        {/* Right: data mode selector + user menu */}
         <div className="flex items-center gap-2">
-          {activeTab !== 'matches' && (
-            <div className="flex items-center gap-1 p-0.5 rounded-lg border border-white/10 bg-white/[0.03]">
-              <button
-                onClick={() => setDataMode('raw')}
-                className={`text-[10px] px-2 py-1 rounded-md transition-all ${
-                  dataMode === 'raw'
-                    ? 'bg-sky-500/20 text-sky-300'
-                    : 'text-gray-400 hover:text-gray-200'
-                }`}
-                title="Usa dati grezzi"
-              >
-                Grezzi
-              </button>
-              <button
-                onClick={() => setDataMode('weighted')}
-                className={`text-[10px] px-2 py-1 rounded-md transition-all ${
-                  dataMode === 'weighted'
-                    ? 'bg-amber-500/20 text-amber-300'
-                    : 'text-gray-400 hover:text-gray-200'
-                }`}
-                title="Usa dati pesati"
-              >
-                Pesati
-              </button>
-            </div>
+          {!isMatchesView && (
+            <DataModeSelector
+              mode={dataMode}
+              onChange={setDataMode}
+            />
           )}
           <div className="relative" ref={userMenuRef}>
             <button
@@ -864,266 +1126,394 @@ export default function App() {
             aria-label="Chiudi menu laterale"
           />
         )}
-        {/* Sidebar Navigation */}
-        <nav className={`${isMobilePortrait
-          ? `absolute left-0 top-0 h-full w-64 z-30 transform transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
-          : 'w-48 flex-shrink-0'} border-r border-white/5 p-3 flex flex-col gap-1`}
-          style={{ background: isMobilePortrait ? 'rgba(2,6,23,0.96)' : 'rgba(17,24,39,0.5)' }}>
-          {NAV_ITEMS.map(item => (
-            <button
-              key={item.id}
-              onClick={() => {
-                setActiveTab(item.id);
-                if (isMobilePortrait) {
-                  setIsSidebarOpen(false);
-                }
-              }}
-              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all text-left
-                ${activeTab === item.id
-                  ? 'bg-amber-500/10 text-amber-400 font-medium'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}
-            >
-              <span className="text-base w-5 text-center">{item.icon}</span>
-              {item.label}
-            </button>
-          ))}
 
-          {/* Cloud database badge in sidebar */}
-          <div className="mt-auto pt-4 px-2">
-            <div className="flex items-center gap-1.5 text-[10px] text-gray-600">
+        {/* ── Sidebar — 5 sezioni macro ── */}
+        <nav
+          className={`${isMobilePortrait
+            ? `absolute left-0 top-0 h-full w-52 z-30 transform transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
+            : 'w-44 flex-shrink-0'} border-r border-white/5 py-3 px-2 flex flex-col gap-0.5`}
+          style={{ background: isMobilePortrait ? 'rgba(2,6,23,0.97)' : 'rgba(17,24,39,0.5)' }}
+        >
+          {/* Profile badge in sidebar (mobile only) */}
+          {isMobilePortrait && (
+            <div className="mb-3 px-1">
+              <div
+                className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-center"
+                style={{
+                  background: PROFILE_META[activeProfile].bg,
+                  color: PROFILE_META[activeProfile].color,
+                  border: `1px solid ${PROFILE_META[activeProfile].border}`,
+                }}
+              >
+                Profilo {PROFILE_META[activeProfile].label}
+              </div>
+            </div>
+          )}
+
+          {visibleSections.map(section => {
+            const active = activeSection === section.id;
+            const reveal = profileReveal.sections.includes(section.id);
+            return (
+              <button
+                key={section.id}
+                onClick={() => navigateTo(section.id)}
+                className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm transition-all text-left w-full
+                  ${reveal ? 'profile-reveal-animate' : ''}
+                  ${active
+                    ? 'bg-amber-500/10 text-amber-400 font-semibold'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}
+                style={reveal ? {
+                  '--profile-reveal-color': PROFILE_META[activeProfile].color,
+                  '--profile-reveal-bg': PROFILE_META[activeProfile].bg,
+                  '--profile-reveal-border': PROFILE_META[activeProfile].border,
+                } : undefined}
+              >
+                <span className="text-base w-5 text-center leading-none">{section.icon}</span>
+                <span className="truncate">{section.label}</span>
+                {active && curSubTabs.length > 0 && (
+                  <span className="ml-auto text-[9px] font-normal text-gray-600">
+                    {curSubTabs.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+
+          {/* Cloud badge */}
+          <div className="mt-auto pt-3 px-2">
+            <div className="flex items-center gap-1.5 text-[9px] text-gray-600">
               <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-              Database in Cloud attivo
+              Database in Cloud
             </div>
           </div>
         </nav>
 
-        {/* Main Content */}
-        <main className={`flex-1 ${['analisi', 'evidence'].includes(activeTab) ? 'overflow-hidden' : 'overflow-y-auto p-4 sm:p-6'}`}>
-          {activeTab === 'analisi' && (
-            <AnalisiPage
-              analytics={analytics}
-              matches={matches}
-              standings={standings}
-              dataMode={dataMode}
-              allPlayers={allPlayers}
-            />
+        {/* ── Main Content ── */}
+        <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          {/* ── Sub-tab bar (visibile per tutte le sezioni tranne home) ── */}
+          {activeSection !== 'home' && curSubTabs.length > 0 && (
+            <div
+              className="flex-shrink-0 flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-white/5 overflow-x-auto"
+              style={{ background: 'rgba(10,14,26,0.6)' }}
+            >
+              {curSubTabs.map(tab => {
+                const active = curSubTab === tab.id;
+                const reveal = profileReveal.tabs.includes(tab.id);
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => navigateTo(activeSection, tab.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all flex-shrink-0
+                      ${reveal ? 'profile-reveal-animate' : ''}
+                      ${active
+                        ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                        : 'text-gray-500 hover:text-gray-300 hover:bg-white/5 border border-transparent'}`}
+                    style={reveal ? {
+                      '--profile-reveal-color': PROFILE_META[activeProfile].color,
+                      '--profile-reveal-bg': PROFILE_META[activeProfile].bg,
+                      '--profile-reveal-border': PROFILE_META[activeProfile].border,
+                    } : undefined}
+                  >
+                    <span>{tab.icon}</span>
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
           )}
 
-          {activeTab === 'evidence' && (
-            <EvidencePage
-              analytics={analytics}
-              matches={matches}
-              standings={standings}
-              dataMode={dataMode}
-              allPlayers={allPlayers}
-            />
-          )}
+          {/* ── Content area ── */}
+          <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+          <PinProvider dashboardConfig={dashboardConfig} onConfigChange={handleDashboardConfigChange}>
 
-          {activeTab === 'data' && (
-            <DatasetManager
-              matches={matches}
-              calendar={calendar}
-              standings={standings}
-              ownerTeamName={ownerTeamName}
-              readOnly={!canEditDataset}
-              isSharedMode={isSharedMode}
-              shareInfo={shareInfo}
-              shareUrl={shareUrl}
-              onCreateShareLink={handleCreateShareLink}
-              onUpdateShareReaders={handleUpdateShareReaders}
-              onUpload={handleFileUpload}
-              onDelete={handleDeleteMatch}
-              onClearArchive={handleClearArchive}
-              isLoading={isLoading}
-              uploadProgress={uploadProgress}
-            />
-          )}
+            {/* HOME */}
+            {activeSection === 'home' && (
+              <Dashboard
+                analytics={analytics}
+                matches={matches}
+                standings={standings}
+                weights={weights}
+                dataMode={dataMode}
+                fncConfig={fncConfig}
+                baselines={baselines}
+                onSelectMatch={(m) => { setSelectedMatch(m); navigateTo('analisi', 'partite'); }}
+                onSelectPlayer={(p) => { setSelectedPlayer(p); navigateTo('analisi', 'giocatrici'); }}
+                dashboardConfig={dashboardConfig}
+                onConfigChange={handleDashboardConfigChange}
+                onOpenGrafici={() => navigateTo('sistema', 'grafici')}
+                ownerTeamName={ownerTeamName}
+                onOwnerTeamChange={handleOwnerTeamChange}
+                onOpenOpponentReport={handleOpenOpponentReportFromDashboard}
+              />
+            )}
 
-          {activeTab === 'calendiario' && (
-            <CalendarSection
-              calendar={calendar}
-              standings={standings}
-              ownerTeamName={ownerTeamName}
-            />
-          )}
+            {/* ANALISI */}
+            {activeSection === 'analisi' && curSubTab === 'partite' && (
+              <MatchReport
+                analytics={analytics}
+                matches={matches}
+                standings={standings}
+                dataMode={dataMode}
+                selectedMatch={selectedMatch}
+                onSelectMatch={setSelectedMatch}
+                weights={weights}
+                externalScoutOpponent={matchReportIntent.opponent}
+                externalOpenCommentTick={matchReportIntent.openCommentTick}
+              />
+            )}
 
-          {activeTab === 'dashboard' && (
-            <Dashboard
-              analytics={analytics}
-              matches={matches}
-              standings={standings}
-              weights={weights}
-              dataMode={dataMode}
-              fncConfig={fncConfig}
-              baselines={baselines}
-              onSelectMatch={(m) => { setSelectedMatch(m); setActiveTab('matches'); }}
-              onSelectPlayer={(p) => { setSelectedPlayer(p); setActiveTab('players'); }}
-              dashboardConfig={dashboardConfig}
-              onOpenGrafici={() => setActiveTab('grafici')}
-              ownerTeamName={ownerTeamName}
-              onOwnerTeamChange={handleOwnerTeamChange}
-              onOpenOpponentReport={handleOpenOpponentReportFromDashboard}
-            />
-          )}
+            {activeSection === 'analisi' && curSubTab === 'giocatrici' && (
+              <PlayerCard
+                analytics={analytics}
+                allPlayers={allPlayers}
+                matches={matches}
+                dataMode={dataMode}
+                selectedPlayer={selectedPlayer}
+                onSelectPlayer={setSelectedPlayer}
+                fncConfig={fncConfig}
+                baselines={baselines}
+              />
+            )}
 
-          {activeTab === 'grafici' && (
-            <ChartsExplorer
-              analytics={analytics}
-              matches={matches}
-              standings={standings}
-              dataMode={dataMode}
-              dashboardConfig={dashboardConfig}
-              onConfigChange={handleDashboardConfigChange}
-              onSelectPlayer={(p) => { setSelectedPlayer(p); setActiveTab('players'); }}
-            />
-          )}
+            {activeSection === 'analisi' && curSubTab === 'squadra' && (
+              <TeamAnalysis matches={matches} />
+            )}
 
-          {activeTab === 'matches' && (
-            <MatchReport
-              analytics={analytics}
-              matches={matches}
-              standings={standings}
-              dataMode={dataMode}
-              selectedMatch={selectedMatch}
-              onSelectMatch={setSelectedMatch}
-              weights={weights}
-              externalScoutOpponent={matchReportIntent.opponent}
-              externalOpenCommentTick={matchReportIntent.openCommentTick}
-            />
-          )}
+            {activeSection === 'analisi' && curSubTab === 'avversari' && (
+              <div className="flex flex-col items-center justify-center h-64 gap-3 text-center select-none">
+                <p className="text-4xl opacity-20">🎯</p>
+                <p className="text-sm font-medium text-gray-400">Analisi Avversari</p>
+                <p className="text-xs text-gray-600 max-w-xs">
+                  Scout dedotto per ogni avversario, benchmark campionato e analisi storica.
+                  In arrivo nella prossima release.
+                </p>
+              </div>
+            )}
 
-          {activeTab === 'players' && (
-            <PlayerCard
-              analytics={analytics}
-              allPlayers={allPlayers}
-              matches={matches}
-              dataMode={dataMode}
-              selectedPlayer={selectedPlayer}
-              onSelectPlayer={setSelectedPlayer}
-              fncConfig={fncConfig}
-              baselines={baselines}
-            />
-          )}
+            {activeSection === 'analisi' && curSubTab === 'gioco' && (() => {
+              const roster = (() => {
+                const seen = {};
+                for (const m of matches) {
+                  for (const p of m.roster || []) {
+                    if (p.number && !seen[p.number]) seen[p.number] = p;
+                  }
+                }
+                return Object.values(seen);
+              })();
+              return (
+                <GiocoAnalysis matches={matches} standings={standings} roster={roster} />
+              );
+            })()}
 
-          {activeTab === 'trends' && (
-            <TeamTrends
-              analytics={analytics}
-              matches={matches}
-              standings={standings}
-              dataMode={dataMode}
-            />
-          )}
+            {/* EVIDENZE */}
+            {activeSection === 'evidenze' && curSubTab === 'suggerimenti' && (
+              <TrainingSuggestions
+                analytics={analytics}
+                matches={matches}
+                dataMode={dataMode}
+                readOnly={!canEditDataset}
+                datasetOwnerUid={dataOwnerUid}
+                capFilterEnabled={capFilterEnabled}
+                onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
+                capMinPriority={capMinPriority}
+                capMaxPriority={capMaxPriority}
+                onCapMinChange={(v) => {
+                  const next = Math.min(5, Math.max(1, Math.round(Number(v) || 1)));
+                  setCapMinPriority(next);
+                  if (next > capMaxPriority) setCapMaxPriority(next);
+                }}
+                onCapMaxChange={(v) => {
+                  const next = Math.min(5, Math.max(1, Math.round(Number(v) || 5)));
+                  setCapMaxPriority(next);
+                  if (next < capMinPriority) setCapMinPriority(next);
+                }}
+              />
+            )}
 
-          {activeTab === 'rotations' && (
-            <RotationAnalysis
-              analytics={analytics}
-              matches={matches}
-              allPlayers={allPlayers}
-              dataMode={dataMode}
-            />
-          )}
+            {activeSection === 'evidenze' && curSubTab === 'trend' && (
+              <TeamTrends
+                analytics={analytics}
+                matches={matches}
+                standings={standings}
+                dataMode={dataMode}
+              />
+            )}
 
-          {activeTab === 'attack' && (
-            <AttackAnalysis
-              analytics={analytics}
-              matches={matches}
-              allPlayers={allPlayers}
-              dataMode={dataMode}
-            />
-          )}
+            {activeSection === 'evidenze' && curSubTab === 'rotazioni' && (
+              <RotationAnalysis
+                analytics={analytics}
+                matches={matches}
+                allPlayers={allPlayers}
+                dataMode={dataMode}
+              />
+            )}
 
-          {activeTab === 'training' && (
-            <TrainingSuggestions
-              analytics={analytics}
-              matches={matches}
-              dataMode={dataMode}
-              readOnly={!canEditDataset}
-              datasetOwnerUid={dataOwnerUid}
-              capFilterEnabled={capFilterEnabled}
-              onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
-              capMinPriority={capMinPriority}
-              capMaxPriority={capMaxPriority}
-              onCapMinChange={(v) => {
-                const next = Math.min(5, Math.max(1, Math.round(Number(v) || 1)));
-                setCapMinPriority(next);
-                if (next > capMaxPriority) setCapMaxPriority(next);
-              }}
-              onCapMaxChange={(v) => {
-                const next = Math.min(5, Math.max(1, Math.round(Number(v) || 5)));
-                setCapMaxPriority(next);
-                if (next < capMinPriority) setCapMinPriority(next);
-              }}
-            />
-          )}
+            {activeSection === 'evidenze' && curSubTab === 'attacco' && (
+              <AttackAnalysis
+                analytics={analytics}
+                matches={matches}
+                allPlayers={allPlayers}
+                dataMode={dataMode}
+              />
+            )}
 
-          {activeTab === 'config' && (
-            <ConfigPanel
-              weights={weights}
-              onWeightsChange={setWeights}
-              fncConfig={fncConfig}
-              onFncConfigChange={handleFncConfigChange}
-              analytics={analytics}
-              baselines={baselines}
-              savedProfiles={savedProfiles}
-              activeProfileId={activeProfileId}
-              onProfileLoad={handleProfileLoad}
-              onProfileSave={handleProfileSave}
-              onProfileDelete={handleProfileDelete}
-              onProfileReset={handleProfileReset}
-              hasUnsavedChanges={hasUnsavedChanges}
-            />
-          )}
+            {activeSection === 'evidenze' && curSubTab === 'catene' && (
+              <SequenceAnalysis
+                chainData={analytics?.chainData}
+                chainSuggestions={analytics?.chainSuggestions}
+                matches={matches}
+                dataMode={dataMode}
+                capFilterEnabled={capFilterEnabled}
+                onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
+                capMinPriority={capMinPriority}
+                capMaxPriority={capMaxPriority}
+                onCapMinChange={(v) => {
+                  const next = Math.min(5, Math.max(1, Math.round(Number(v) || 1)));
+                  setCapMinPriority(next);
+                  if (next > capMaxPriority) setCapMaxPriority(next);
+                }}
+                onCapMaxChange={(v) => {
+                  const next = Math.min(5, Math.max(1, Math.round(Number(v) || 5)));
+                  setCapMaxPriority(next);
+                  if (next < capMinPriority) setCapMinPriority(next);
+                }}
+              />
+            )}
 
-          {activeTab === 'sequences' && (
-            <SequenceAnalysis
-              chainData={analytics?.chainData}
-              chainSuggestions={analytics?.chainSuggestions}
-              matches={matches}
-              dataMode={dataMode}
-              capFilterEnabled={capFilterEnabled}
-              onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
-              capMinPriority={capMinPriority}
-              capMaxPriority={capMaxPriority}
-              onCapMinChange={(v) => {
-                const next = Math.min(5, Math.max(1, Math.round(Number(v) || 1)));
-                setCapMinPriority(next);
-                if (next > capMaxPriority) setCapMaxPriority(next);
-              }}
-              onCapMaxChange={(v) => {
-                const next = Math.min(5, Math.max(1, Math.round(Number(v) || 5)));
-                setCapMaxPriority(next);
-                if (next < capMinPriority) setCapMinPriority(next);
-              }}
-            />
-          )}
+            {/* TRAINING */}
+            {activeSection === 'training' && curSubTab === 'suggerimenti' && (
+              <TrainingSuggestions
+                analytics={analytics}
+                matches={matches}
+                dataMode={dataMode}
+                readOnly={!canEditDataset}
+                datasetOwnerUid={dataOwnerUid}
+                capFilterEnabled={capFilterEnabled}
+                onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
+                capMinPriority={capMinPriority}
+                capMaxPriority={capMaxPriority}
+                onCapMinChange={(v) => {
+                  const next = Math.min(5, Math.max(1, Math.round(Number(v) || 1)));
+                  setCapMinPriority(next);
+                  if (next > capMaxPriority) setCapMaxPriority(next);
+                }}
+                onCapMaxChange={(v) => {
+                  const next = Math.min(5, Math.max(1, Math.round(Number(v) || 5)));
+                  setCapMaxPriority(next);
+                  if (next < capMinPriority) setCapMinPriority(next);
+                }}
+              />
+            )}
 
-          {activeTab === 'train' && (
-            <TrainPage 
-              analytics={analytics}
-              matches={matches}
-              calendar={calendar}
-              standings={standings}
-              ownerTeamName={ownerTeamName}
-              allPlayers={allPlayers}
-              onOpenOpponentComment={handleOpenOpponentCommentFromTrainingPlan}
-            />
-          )}
+            {activeSection === 'training' && curSubTab === 'settimana' && (
+              <TrainPage
+                analytics={analytics}
+                matches={matches}
+                calendar={calendar}
+                standings={standings}
+                ownerTeamName={ownerTeamName}
+                allPlayers={allPlayers}
+                dataMode={dataMode}
+                weights={weights}
+                onOpenOpponentComment={handleOpenOpponentCommentFromTrainingPlan}
+              />
+            )}
 
-          {activeTab === 'training_plan' && (
-            <ChainTrainingPlan
-              analytics={analytics}
-              matches={matches}
-              calendar={calendar}
-              standings={standings}
-              ownerTeamName={ownerTeamName}
-              allPlayers={allPlayers}
-              onOpenOpponentComment={handleOpenOpponentCommentFromTrainingPlan}
-            />
-          )}
+            {activeSection === 'training' && curSubTab === 'piano' && (
+              <ChainTrainingPlan
+                analytics={analytics}
+                matches={matches}
+                calendar={calendar}
+                standings={standings}
+                ownerTeamName={ownerTeamName}
+                allPlayers={allPlayers}
+                dataMode={dataMode}
+                weights={weights}
+                onOpenOpponentComment={handleOpenOpponentCommentFromTrainingPlan}
+              />
+            )}
 
-          {activeTab === 'glossary' && <Glossary />}
+            {/* SISTEMA */}
+            {activeSection === 'sistema' && curSubTab === 'dati' && (
+              <div className="space-y-8">
+                <DatasetManager
+                  matches={matches}
+                  calendar={calendar}
+                  standings={standings}
+                  ownerTeamName={ownerTeamName}
+                  readOnly={!canEditDataset}
+                  isSharedMode={isSharedMode}
+                  canManageShare={canManageShare}
+                  shareInfo={shareInfo}
+                  shareUrl={shareUrl}
+                  onCreateShareLink={handleCreateShareLink}
+                  onUpdateShareMembers={handleUpdateShareMembers}
+                  onUpload={handleFileUpload}
+                  onDelete={handleDeleteMatch}
+                  onClearArchive={handleClearArchive}
+                  isLoading={isLoading}
+                  uploadProgress={uploadProgress}
+                />
+                {calendar.length > 0 && (
+                  <CalendarSection
+                    calendar={calendar}
+                    standings={standings}
+                    ownerTeamName={ownerTeamName}
+                  />
+                )}
+              </div>
+            )}
+
+            {activeSection === 'sistema' && curSubTab === 'config' && (
+              <ConfigPanel
+                weights={weights}
+                onWeightsChange={setWeights}
+                fncConfig={fncConfig}
+                onFncConfigChange={handleFncConfigChange}
+                analytics={analytics}
+                baselines={baselines}
+                savedProfiles={savedProfiles}
+                activeProfileId={activeProfileId}
+                onProfileLoad={handleProfileLoad}
+                onProfileSave={handleProfileSave}
+                onProfileDelete={handleProfileDelete}
+                onProfileReset={handleProfileReset}
+                hasUnsavedChanges={hasUnsavedChanges}
+              />
+            )}
+
+            {activeSection === 'sistema' && curSubTab === 'grafici' && (
+              <ChartsExplorer
+                analytics={analytics}
+                matches={matches}
+                standings={standings}
+                dataMode={dataMode}
+                dashboardConfig={dashboardConfig}
+                onConfigChange={handleDashboardConfigChange}
+                onSelectPlayer={(p) => { setSelectedPlayer(p); navigateTo('analisi', 'giocatrici'); }}
+              />
+            )}
+
+            {activeSection === 'sistema' && curSubTab === 'glossario' && <Glossary />}
+
+            {activeSection === 'sistema' && curSubTab === 'guida' && <GuidePage />}
+
+            {activeSection === 'admin' && isAdmin && (
+              <AdminUsersPanel
+                users={adminUsers}
+                currentUserEmail={user?.email || ''}
+                onRefresh={refreshAdminUsers}
+                onUpdateProfile={handleAdminProfileChange}
+                onUpdateRole={handleAdminRoleChange}
+                isSaving={isAdminSaving}
+              />
+            )}
+
+          </PinProvider>
+          </div>{/* end content area */}
         </main>
       </div>
     </div>
+    </ProfileProvider>
   );
 }

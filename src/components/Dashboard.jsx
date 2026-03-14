@@ -1,9 +1,11 @@
 // ============================================================================
 // VOLLEY PERFORMANCE ANALYZER — Dashboard
 // Panoramica con grafici di trend: squadra / fondamentale / giocatrice
+// Funzionalità: pin grafici, edit mode con riordino, dataMode per-grafico,
+//               classifica espandibile con Identifica/Salva team.
 // ============================================================================
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -11,6 +13,9 @@ import {
 } from 'recharts';
 import { COLORS } from '../utils/constants';
 import { applyFNCToEfficacy } from '../utils/analyticsEngine';
+import { usePin } from '../context/PinContext';
+import { useProfile } from '../context/ProfileContext';
+import DataModeSelector from './DataModeSelector';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -50,6 +55,18 @@ const CHART_TOOLTIP_STYLE = {
   fontSize: 11,
 };
 
+// Grafici supportati e metadati
+const VALID_CHART_IDS = [
+  'trend_section', 'radar_team', 'bar_match_weight', 'bar_sideout_bp', 'top_performers',
+];
+const CHART_META = {
+  trend_section:    { label: 'Andamento Stagionale',   icon: '📈', supportsDataMode: true  },
+  radar_team:       { label: 'Profilo Squadra Radar',  icon: '🕸', supportsDataMode: true  },
+  bar_match_weight: { label: 'Peso Partite',           icon: '⚖', supportsDataMode: false },
+  bar_sideout_bp:   { label: 'Side-Out / Break-Point', icon: '📊', supportsDataMode: false },
+  top_performers:   { label: 'Top Performer',          icon: '★',  supportsDataMode: true  },
+};
+
 const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
 
 function findStandingTeamByName(standings, teamName) {
@@ -64,11 +81,48 @@ function findStandingTeamByName(standings, teamName) {
 
 // ─── Main Dashboard component ─────────────────────────────────────────────────
 
-export default function Dashboard({ analytics, matches, standings, weights, fncConfig, baselines, onSelectMatch, onSelectPlayer, dashboardConfig, onOpenGrafici, ownerTeamName, onOwnerTeamChange, onOpenOpponentReport, dataMode = 'raw' }) {
+export default function Dashboard({
+  analytics, matches, standings, weights, fncConfig, baselines,
+  onSelectMatch, onSelectPlayer,
+  dashboardConfig, onConfigChange,
+  onOpenGrafici,
+  ownerTeamName, onOwnerTeamChange,
+  onOpenOpponentReport,
+  dataMode = 'raw',
+}) {
   const hasData = !!analytics && matches.length > 0;
+
+  // Profile context — gates which metrics are visible
+  const { canSeeMetric } = useProfile();
+  // showWeighted: il dato pesato è visibile se il profilo lo consente (Pro+)
+  // La visibilità dipende anche dal dataMode del singolo grafico (gestita inline)
+  const profileAllowsWeighted = canSeeMetric('mediaPond'); // Pro+
+
+  // Pin context
+  const pinCtx = usePin();
+
+  // Edit mode (riordino dashboard)
+  const [editMode, setEditMode] = useState(false);
+
+  // Per-chart local dataMode override
+  const [chartDataModes, setChartDataModes] = useState({});
+  const getChartMode = useCallback(
+    (id) => (chartDataModes[id] !== undefined ? chartDataModes[id] : dataMode),
+    [chartDataModes, dataMode]
+  );
+  const setChartMode = useCallback(
+    (id, mode) => setChartDataModes((prev) => ({ ...prev, [id]: mode })),
+    []
+  );
 
   // showChart: se dashboardConfig è definito, mostra solo i grafici selezionati
   const showChart = (id) => !dashboardConfig || dashboardConfig.includes(id);
+
+  // Ordered list of visible charts (per dashboardConfig order)
+  const orderedCharts = useMemo(() => {
+    if (!dashboardConfig) return VALID_CHART_IDS.filter(() => true);
+    return dashboardConfig.filter((id) => VALID_CHART_IDS.includes(id));
+  }, [dashboardConfig]);
 
   const matchAnalytics = analytics?.matchAnalytics || [];
   const playerTrends = analytics?.playerTrends || {};
@@ -97,8 +151,7 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
     return avg;
   }, [sortedMA]);
 
-  // FNC-adjusted radar data: when FNC is enabled and baselines are available,
-  // normalize the raw/weighted values so all fundamentals are on the same scale.
+  // FNC-adjusted radar data
   const radarData = FUNDS.map(f => {
     const rawVal = teamAvg[f].raw;
     const weiVal = teamAvg[f].weighted;
@@ -108,7 +161,7 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
       fund: FUND_LABELS[f],
       raw: Math.max(0, rawFnc * 100),
       weighted: Math.max(0, weiFnc * 100),
-      rawOrig: Math.max(0, rawVal * 100),    // keep originals for tooltip
+      rawOrig: Math.max(0, rawVal * 100),
       weiOrig: Math.max(0, weiVal * 100),
     };
   });
@@ -127,8 +180,6 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
   });
 
   // ─── Trend chart data ─────────────────────────────────────────────────────
-
-  // Team overall trend: average of all fundamentals per match
   const teamTrendData = useMemo(() => sortedMA.map(ma => {
     const vals = FUNDS.map(f => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
     const raw = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length * 100 : 0;
@@ -140,7 +191,6 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
     };
   }), [sortedMA]);
 
-  // Per-fundamental trend: one value per fund per match + overall average
   const fundTrendData = useMemo(() => sortedMA.map(ma => {
     const row = { label: (ma.match.metadata.opponent || 'N/D').substring(0, 10) };
     const vals = [];
@@ -173,7 +223,8 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [playerTrends, rosterRoleMap]);
 
-  // Top performers
+  // Top performers — sort key usa la modalità specifica del grafico top_performers
+  const topPerformerSortMode = chartDataModes['top_performers'] ?? dataMode;
   const topPerformers = useMemo(() => {
     if (!playerTrends) return [];
     return Object.values(playerTrends)
@@ -183,11 +234,12 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
         overallWeighted: Object.values(p.trends).reduce((s, t) => s + t.weightedAvg, 0) / 5,
         overallRaw:      Object.values(p.trends).reduce((s, t) => s + t.rawAvg, 0) / 5,
       }))
-      .sort((a, b) => dataMode === 'raw'
-        ? b.overallRaw - a.overallRaw
-        : b.overallWeighted - a.overallWeighted)
+      // 'both' ordina per grezzo; 'weighted' per pesato
+      .sort((a, b) => topPerformerSortMode === 'weighted'
+        ? b.overallWeighted - a.overallWeighted
+        : b.overallRaw - a.overallRaw)
       .slice(0, 6);
-  }, [playerTrends, dataMode]);
+  }, [playerTrends, topPerformerSortMode]);
 
   const inferredOwnerTeam = useMemo(() => {
     const selected = findStandingTeamByName(standings, ownerTeamName);
@@ -208,9 +260,6 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
 
   const ourStanding = inferredOwnerTeam;
 
-  // Grafici visibili in base alla config
-  const anyChartVisible = !dashboardConfig || dashboardConfig.length > 0;
-
   if (!hasData) {
     return (
       <div className="flex flex-col items-center justify-center h-96 text-gray-500 text-sm">
@@ -220,30 +269,214 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
     );
   }
 
+  // ─── Render helpers per ogni sezione grafico ──────────────────────────────
+
+  const renderChartSection = (id, idx) => {
+    const meta = CHART_META[id];
+    const chartMode = getChartMode(id);
+    const total = orderedCharts.length;
+    const isPinned = pinCtx?.isPinned(id) ?? dashboardConfig?.includes(id) ?? true;
+
+    return (
+      <ChartWrapper
+        key={id}
+        id={id}
+        label={meta.label}
+        icon={meta.icon}
+        editMode={editMode}
+        isPinned={isPinned}
+        onTogglePin={() => pinCtx?.togglePin(id)}
+        onMoveUp={idx > 0 ? () => pinCtx?.moveChart(id, -1) : null}
+        onMoveDown={idx < total - 1 ? () => pinCtx?.moveChart(id, 1) : null}
+        supportsDataMode={meta.supportsDataMode}
+        chartMode={chartMode}
+        onSetChartMode={(mode) => setChartMode(id, mode)}
+      >
+        {id === 'trend_section' && (
+          <TrendSection
+            sortedMA={sortedMA}
+            teamTrendData={teamTrendData}
+            fundTrendData={fundTrendData}
+            playerList={playerList}
+            playerTrends={playerTrends}
+            dataMode={chartMode}
+          />
+        )}
+        {id === 'radar_team' && (
+          <div className="pt-2">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <h3 className="text-sm font-semibold text-gray-300">
+                Profilo Squadra: <span className="text-sky-400">Grezzo</span> vs <span className="text-amber-400">Rielaborato</span>
+              </h3>
+              {fncConfig?.enabled && (
+                <span className="text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                  📐 FNC {fncConfig.mode === 'zscore' ? 'Z-Score' : 'Relativo'} {(fncConfig.weight * 100).toFixed(0)}%
+                </span>
+              )}
+            </div>
+            <ResponsiveContainer width="100%" height={280}>
+              <RadarChart data={radarData} outerRadius="72%">
+                <PolarGrid stroke="rgba(255,255,255,0.08)" />
+                <PolarAngleAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 11 }} />
+                <PolarRadiusAxis
+                  tick={{ fill: '#6b7280', fontSize: 9 }}
+                  domain={[
+                    Math.max(0, Math.floor(Math.min(...radarData.flatMap(d => [d.raw, d.weighted])) / 5) * 5 - 5),
+                    Math.ceil(Math.max(...radarData.flatMap(d => [d.raw, d.weighted])) / 5) * 5 + 5,
+                  ]}
+                  tickCount={5}
+                  tickFormatter={v => `${v}%`}
+                />
+                {(chartMode === 'raw' || chartMode === 'both') && (
+                  <Radar name="Grezzo" dataKey="raw" stroke={COLORS.raw} fill={COLORS.raw} fillOpacity={0.15} strokeWidth={2} />
+                )}
+                {(chartMode === 'weighted' || chartMode === 'both') && (
+                  <Radar name="Rielaborato" dataKey="weighted" stroke={COLORS.weighted} fill={COLORS.weighted} fillOpacity={0.15} strokeWidth={2} />
+                )}
+                {chartMode === undefined || (chartMode !== 'raw' && chartMode !== 'weighted') ? (
+                  <>
+                    <Radar name="Grezzo" dataKey="raw" stroke={COLORS.raw} fill={COLORS.raw} fillOpacity={0.15} strokeWidth={2} />
+                    <Radar name="Rielaborato" dataKey="weighted" stroke={COLORS.weighted} fill={COLORS.weighted} fillOpacity={0.15} strokeWidth={2} />
+                  </>
+                ) : null}
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        {id === 'bar_match_weight' && (
+          <div className="pt-2">
+            <h3 className="text-sm font-semibold text-gray-300 mb-4">Peso Contesto per Partita</h3>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={matchBarData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="opponent" tick={{ fill: '#9ca3af', fontSize: 9 }} angle={-30} textAnchor="end" height={50} />
+                <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0.5, 1.5]} />
+                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(val, name) => [val.toFixed(3), name]} />
+                <Bar dataKey="weight" name="Peso" fill={COLORS.weighted} radius={[4, 4, 0, 0]}
+                  label={{ fill: '#9ca3af', fontSize: 9, position: 'top', formatter: v => v.toFixed(2) }} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        {id === 'bar_sideout_bp' && (
+          <div className="pt-2">
+            <h3 className="text-sm font-semibold text-gray-300 mb-4">Side-Out vs Break-Point % per Partita</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={matchBarData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="opponent" tick={{ fill: '#9ca3af', fontSize: 9 }} />
+                <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0, 100]} />
+                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+                <Bar dataKey="sideOut"    name="Side-Out %"    fill={COLORS.raw}      radius={[4, 4, 0, 0]} />
+                <Bar dataKey="breakPoint" name="Break-Point %" fill={COLORS.positive} radius={[4, 4, 0, 0]} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        {id === 'top_performers' && (() => {
+          // Visibility flags for this specific chart's mode
+          const showRaw = chartMode !== 'weighted';   // raw + both
+          const showWgt = profileAllowsWeighted && chartMode !== 'raw'; // weighted + both
+          return (
+            <div className="pt-2">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4">
+                <span className="text-amber-400">★</span> Top Performer
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {topPerformers.map(p => (
+                  <button
+                    key={p.number}
+                    onClick={() => onSelectPlayer(p.number)}
+                    className="p-3 rounded-lg bg-white/[0.03] hover:bg-white/[0.06] transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-xs font-mono text-amber-400">#{p.number}</span>
+                      <span className="text-sm font-medium text-white">{p.name}</span>
+                    </div>
+                    <div className="flex gap-3 text-[10px]">
+                      {showRaw && (
+                        <div>
+                          <span className="text-gray-500">Efficacia</span>
+                          <span className="ml-1 text-sky-400">{(p.overallRaw * 100).toFixed(1)}%</span>
+                        </div>
+                      )}
+                      {showWgt && (
+                        <div>
+                          <span className="text-gray-500">Media Pond.</span>
+                          <span className="ml-1 text-amber-400">{(p.overallWeighted * 100).toFixed(1)}%</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-1 mt-1.5">
+                      {Object.entries(p.trends).map(([fund, trend]) => (
+                        <span key={fund} className={`badge ${
+                          trend.weightedTrend === 'improving' ? 'badge-up' :
+                          trend.weightedTrend === 'declining' ? 'badge-down' : 'badge-neutral'
+                        }`}>
+                          {fund.charAt(0).toUpperCase()}
+                        </span>
+                      ))}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+      </ChartWrapper>
+    );
+  };
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
 
-      {/* Header */}
+      {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-xl font-bold text-white mb-1">Dashboard Squadra</h2>
           <p className="text-sm text-gray-400">Panoramica basata su {matches.length} partite analizzate.</p>
         </div>
-        {onOpenGrafici && (
-          <button
-            onClick={onOpenGrafici}
-            className="flex items-center gap-2 text-xs text-amber-400 hover:text-amber-300 transition-colors px-3 py-2 rounded-lg hover:bg-amber-500/10 border border-amber-500/20"
-          >
-            <span>📊</span>
-            <span>Personalizza Dashboard</span>
-            {dashboardConfig && (
-              <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/15">
-                {dashboardConfig.length} grafici
-              </span>
-            )}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Edit mode toggle */}
+          {orderedCharts.length > 1 && (
+            <button
+              onClick={() => setEditMode(e => !e)}
+              className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg transition-colors border ${
+                editMode
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                  : 'text-gray-400 border-white/10 hover:text-gray-200 hover:border-white/20'
+              }`}
+            >
+              {editMode ? '✓ Fine' : '✏️ Modifica'}
+            </button>
+          )}
+          {onOpenGrafici && (
+            <button
+              onClick={onOpenGrafici}
+              className="flex items-center gap-2 text-xs text-amber-400 hover:text-amber-300 transition-colors px-3 py-2 rounded-lg hover:bg-amber-500/10 border border-amber-500/20"
+            >
+              <span>📊</span>
+              <span>Personalizza</span>
+              {dashboardConfig && (
+                <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/15">
+                  {dashboardConfig.length}
+                </span>
+              )}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* ── Edit mode hint ───────────────────────────────────────────────── */}
+      {editMode && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] border"
+          style={{ background: 'rgba(245,158,11,0.07)', borderColor: 'rgba(245,158,11,0.2)' }}>
+          <span>✏️</span>
+          <span className="text-amber-300/80">Modalità modifica: usa i tasti ▲ ▼ per riordinare i grafici, poi clicca <strong>Fine</strong>.</span>
+        </div>
+      )}
 
       {/* ── Standings Widget ─────────────────────────────────────────────── */}
       {standings && standings.length > 0 && (
@@ -256,7 +489,7 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
         />
       )}
 
-      {/* KPI Row */}
+      {/* ── KPI Row ──────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KPICard
           label="Posizione"
@@ -290,7 +523,7 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
         />
       </div>
 
-      {/* ── Avviso dashboard vuota ────────────────────────────────────────── */}
+      {/* ── Dashboard vuota ─────────────────────────────────────────────── */}
       {dashboardConfig && dashboardConfig.length === 0 && (
         <div className="glass-card p-8 flex flex-col items-center gap-4 text-center">
           <div className="text-4xl">📊</div>
@@ -311,140 +544,10 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
         </div>
       )}
 
-      {/* ── TREND CHARTS ─────────────────────────────────────────────────── */}
-      {showChart('trend_section') && (
-        <TrendSection
-          sortedMA={sortedMA}
-          teamTrendData={teamTrendData}
-          fundTrendData={fundTrendData}
-          playerList={playerList}
-          playerTrends={playerTrends}
-          dataMode={dataMode}
-        />
-      )}
+      {/* ── Grafici ordinati da dashboardConfig ─────────────────────────── */}
+      {orderedCharts.map((id, idx) => renderChartSection(id, idx))}
 
-      {/* ── RADAR + PESO ─────────────────────────────────────────────────── */}
-      {(showChart('radar_team') || showChart('bar_match_weight')) && (
-        <div className={`grid gap-4 ${
-          showChart('radar_team') && showChart('bar_match_weight')
-            ? 'grid-cols-1 lg:grid-cols-2'
-            : 'grid-cols-1 lg:grid-cols-1 max-w-2xl'
-        }`}>
-          {/* Team Radar */}
-          {showChart('radar_team') && (
-            <div className="glass-card p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-gray-300">
-                  Profilo Squadra: <span className="text-sky-400">Grezzo</span> vs <span className="text-amber-400">Rielaborato</span>
-                </h3>
-                {fncConfig?.enabled && (
-                  <span className="text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
-                    📐 FNC {fncConfig.mode === 'zscore' ? 'Z-Score' : 'Relativo'} {(fncConfig.weight * 100).toFixed(0)}%
-                  </span>
-                )}
-              </div>
-              <ResponsiveContainer width="100%" height={280}>
-                <RadarChart data={radarData} outerRadius="72%">
-                  <PolarGrid stroke="rgba(255,255,255,0.08)" />
-                  <PolarAngleAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                  <PolarRadiusAxis
-                    tick={{ fill: '#6b7280', fontSize: 9 }}
-                    domain={[
-                      Math.max(0, Math.floor(Math.min(...radarData.flatMap(d => [d.raw, d.weighted])) / 5) * 5 - 5),
-                      Math.ceil(Math.max(...radarData.flatMap(d => [d.raw, d.weighted])) / 5) * 5 + 5,
-                    ]}
-                    tickCount={5}
-                    tickFormatter={v => `${v}%`}
-                  />
-                  <Radar name="Grezzo" dataKey="raw" stroke={COLORS.raw} fill={COLORS.raw} fillOpacity={0.15} strokeWidth={2} />
-                  <Radar name="Rielaborato" dataKey="weighted" stroke={COLORS.weighted} fill={COLORS.weighted} fillOpacity={0.15} strokeWidth={2} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                </RadarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Match Weights Bar */}
-          {showChart('bar_match_weight') && (
-            <div className="glass-card p-5">
-              <h3 className="text-sm font-semibold text-gray-300 mb-4">Peso Contesto per Partita</h3>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={matchBarData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="opponent" tick={{ fill: '#9ca3af', fontSize: 9 }} angle={-30} textAnchor="end" height={50} />
-                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0.5, 1.5]} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(val, name) => [val.toFixed(3), name]} />
-                  <Bar dataKey="weight" name="Peso" fill={COLORS.weighted} radius={[4, 4, 0, 0]}
-                    label={{ fill: '#9ca3af', fontSize: 9, position: 'top', formatter: v => v.toFixed(2) }} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Side-Out vs Break-Point */}
-      {showChart('bar_sideout_bp') && (
-        <div className="glass-card p-5">
-          <h3 className="text-sm font-semibold text-gray-300 mb-4">Side-Out vs Break-Point % per Partita</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={matchBarData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="opponent" tick={{ fill: '#9ca3af', fontSize: 9 }} />
-              <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0, 100]} />
-              <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
-              <Bar dataKey="sideOut"    name="Side-Out %"    fill={COLORS.raw}      radius={[4, 4, 0, 0]} />
-              <Bar dataKey="breakPoint" name="Break-Point %" fill={COLORS.positive} radius={[4, 4, 0, 0]} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Top Performers */}
-      {showChart('top_performers') && (
-        <div className="glass-card p-5">
-          <h3 className="text-sm font-semibold text-gray-300 mb-4">
-            <span className="text-amber-400">★</span> Top Performer
-          </h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {topPerformers.map(p => (
-              <button
-                key={p.number}
-                onClick={() => onSelectPlayer(p.number)}
-                className="p-3 rounded-lg bg-white/[0.03] hover:bg-white/[0.06] transition-colors text-left"
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs font-mono text-amber-400">#{p.number}</span>
-                  <span className="text-sm font-medium text-white">{p.name}</span>
-                </div>
-                <div className="flex gap-3 text-[10px]">
-                  <div>
-                    <span className="text-gray-500">Grezzo</span>
-                    <span className="ml-1 text-sky-400">{(p.overallRaw * 100).toFixed(1)}%</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Rielab.</span>
-                    <span className="ml-1 text-amber-400">{(p.overallWeighted * 100).toFixed(1)}%</span>
-                  </div>
-                </div>
-                <div className="flex gap-1 mt-1.5">
-                  {Object.entries(p.trends).map(([fund, trend]) => (
-                    <span key={fund} className={`badge ${
-                      trend.weightedTrend === 'improving' ? 'badge-up' :
-                      trend.weightedTrend === 'declining' ? 'badge-down' : 'badge-neutral'
-                    }`}>
-                      {fund.charAt(0).toUpperCase()}
-                    </span>
-                  ))}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Match list */}
+      {/* ── Match list ───────────────────────────────────────────────────── */}
       <div className="glass-card p-5">
         <h3 className="text-sm font-semibold text-gray-300 mb-3">Partite Analizzate</h3>
         <div className="space-y-2">
@@ -494,10 +597,104 @@ export default function Dashboard({ analytics, matches, standings, weights, fncC
   );
 }
 
+// ─── ChartWrapper ─────────────────────────────────────────────────────────────
+// Wrapper con controlli: pin button, dataMode toggle, edit mode (▲▼)
+
+function ChartWrapper({
+  id, label, icon, editMode, isPinned,
+  onTogglePin, onMoveUp, onMoveDown,
+  supportsDataMode, chartMode, onSetChartMode,
+  children,
+}) {
+  return (
+    <div className="glass-card p-5 relative group">
+      {/* Barra controlli: visibile solo in hover (normale) o sempre (edit mode) */}
+      <div className={`absolute top-3 right-3 flex items-center gap-1.5 z-10 transition-opacity ${
+        editMode ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+      }`}>
+        {/* DataMode selector per i grafici che lo supportano */}
+        {supportsDataMode && !editMode && (
+          <DataModeSelector
+            mode={chartMode}
+            onChange={onSetChartMode}
+            compact={true}
+          />
+        )}
+        {/* Edit mode: reorder arrows */}
+        {editMode && (
+          <>
+            <button
+              onClick={onMoveUp}
+              disabled={!onMoveUp}
+              title="Sposta su"
+              className="w-6 h-6 rounded flex items-center justify-center text-xs transition-colors disabled:opacity-20 disabled:cursor-not-allowed text-gray-400 hover:text-white hover:bg-white/10"
+            >
+              ▲
+            </button>
+            <button
+              onClick={onMoveDown}
+              disabled={!onMoveDown}
+              title="Sposta giù"
+              className="w-6 h-6 rounded flex items-center justify-center text-xs transition-colors disabled:opacity-20 disabled:cursor-not-allowed text-gray-400 hover:text-white hover:bg-white/10"
+            >
+              ▼
+            </button>
+          </>
+        )}
+        {/* Pin button (solo fuori edit mode) */}
+        {!editMode && (
+          <button
+            onClick={onTogglePin}
+            title={isPinned ? 'Rimuovi dalla dashboard' : 'Aggiungi alla dashboard'}
+            className={`w-7 h-7 rounded flex items-center justify-center text-sm transition-all ${
+              isPinned
+                ? 'text-amber-400 bg-amber-500/15 border border-amber-500/30'
+                : 'text-gray-500 hover:text-amber-300 hover:bg-amber-500/10 border border-transparent'
+            }`}
+          >
+            📌
+          </button>
+        )}
+      </div>
+
+      {/* In edit mode, mostra label + icona riordino */}
+      {editMode && (
+        <div className="flex items-center gap-2 mb-3 pb-3 border-b border-white/[0.06]">
+          <span className="text-base">{icon}</span>
+          <span className="text-xs font-medium text-gray-300">{label}</span>
+          <span className="ml-auto text-[10px] text-gray-600 select-none">≡ trascina o usa ▲▼</span>
+        </div>
+      )}
+
+      {children}
+    </div>
+  );
+}
+
+// ─── PinButton standalone (usabile fuori dalla dashboard) ─────────────────────
+export function PinButton({ chartId, className = '' }) {
+  const pinCtx = usePin();
+  if (!pinCtx) return null;
+  const pinned = pinCtx.isPinned(chartId);
+  return (
+    <button
+      onClick={() => pinCtx.togglePin(chartId)}
+      title={pinned ? 'Rimuovi dalla dashboard' : 'Aggiungi alla dashboard'}
+      className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border transition-all ${
+        pinned
+          ? 'text-amber-400 bg-amber-500/15 border-amber-500/30'
+          : 'text-gray-500 border-white/10 hover:text-amber-300 hover:border-amber-500/20'
+      } ${className}`}
+    >
+      📌 {pinned ? 'Pinnati' : 'Pinna'}
+    </button>
+  );
+}
+
 // ─── Trend Section ────────────────────────────────────────────────────────────
 
 function TrendSection({ sortedMA, teamTrendData, fundTrendData, playerList, playerTrends, dataMode = 'raw' }) {
-  const [activeTab, setActiveTab] = useState('team'); // 'team' | 'fundamental' | 'player'
+  const [activeTab, setActiveTab] = useState('team');
 
   const tabs = [
     { id: 'team',        label: 'Squadra',          icon: '⬡' },
@@ -506,7 +703,7 @@ function TrendSection({ sortedMA, teamTrendData, fundTrendData, playerList, play
   ];
 
   return (
-    <div className="glass-card p-5 space-y-4">
+    <div className="space-y-4">
       {/* Header + tab switcher */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -554,17 +751,25 @@ function TeamTrendChart({ data, dataMode = 'raw' }) {
   if (!data || data.length < 2) {
     return <EmptyChart label="Servono almeno 2 partite per il grafico di andamento." />;
   }
-  const activeKey = dataMode === 'weighted' ? 'weighted' : 'raw';
-  const activeColor = dataMode === 'weighted' ? COLORS.weighted : COLORS.raw;
-  const activeLabel = dataMode === 'weighted' ? 'Rielaborato (×peso partita)' : 'Grezzo';
-  const avg = data.reduce((s, d) => s + (d[activeKey] || 0), 0) / data.length;
+  const showRaw = dataMode !== 'weighted';
+  const showWgt = dataMode !== 'raw';
+  const rawAvg = data.reduce((s, d) => s + (d.raw || 0), 0) / data.length;
+  const wgtAvg = data.reduce((s, d) => s + (d.weighted || 0), 0) / data.length;
   return (
     <div>
       <div className="flex flex-wrap items-center gap-4 mb-3 text-[11px] text-gray-400">
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block w-4 h-0.5 rounded" style={{ background: activeColor }} />
-          {activeLabel}
-        </span>
+        {showRaw && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-4 h-0.5 rounded" style={{ background: COLORS.raw }} />
+            Grezzo
+          </span>
+        )}
+        {showWgt && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-4 h-0.5 rounded" style={{ background: COLORS.weighted }} />
+            Rielaborato
+          </span>
+        )}
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-4 border-t border-dashed border-gray-500" />
           Media stagionale
@@ -577,11 +782,24 @@ function TeamTrendChart({ data, dataMode = 'raw' }) {
           <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={['auto', 'auto']}
             tickFormatter={v => `${v.toFixed(0)}%`} />
           <Tooltip contentStyle={CHART_TOOLTIP_STYLE}
-            formatter={(val, name) => [`${val.toFixed(1)}%`, name]} />
-          <ReferenceLine y={avg} stroke="rgba(148,163,184,0.3)" strokeDasharray="4 4"
-            label={{ value: `media ${avg.toFixed(1)}%`, fill: '#6b7280', fontSize: 9, position: 'insideTopRight' }} />
-          <Line type="monotone" dataKey={activeKey} name={activeLabel} stroke={activeColor}
-            strokeWidth={2.5} dot={{ r: 4, fill: activeColor }} activeDot={{ r: 6 }} />
+            formatter={(val, name) => [`${val?.toFixed(1)}%`, name]} />
+          {showRaw && (
+            <ReferenceLine y={rawAvg} stroke={COLORS.raw + '55'} strokeDasharray="4 4"
+              label={{ value: `${rawAvg.toFixed(1)}%`, fill: '#6b7280', fontSize: 9, position: 'insideTopRight' }} />
+          )}
+          {showWgt && (
+            <ReferenceLine y={wgtAvg} stroke={COLORS.weighted + '55'} strokeDasharray="4 4"
+              label={{ value: `${wgtAvg.toFixed(1)}%`, fill: '#f59e0b', fontSize: 9, position: 'insideTopLeft' }} />
+          )}
+          {showRaw && (
+            <Line type="monotone" dataKey="raw" name="Grezzo" stroke={COLORS.raw}
+              strokeWidth={2.5} dot={{ r: 4, fill: COLORS.raw }} activeDot={{ r: 6 }} />
+          )}
+          {showWgt && (
+            <Line type="monotone" dataKey="weighted" name="Rielaborato" stroke={COLORS.weighted}
+              strokeWidth={2.5} dot={{ r: 4, fill: COLORS.weighted }} activeDot={{ r: 6 }} />
+          )}
+          {dataMode === 'both' && <Legend wrapperStyle={{ fontSize: 11 }} />}
         </LineChart>
       </ResponsiveContainer>
     </div>
@@ -607,7 +825,6 @@ function FundTrendChart({ data, dataMode = 'raw' }) {
 
   return (
     <div>
-      {/* Fund toggles */}
       <div className="flex flex-wrap gap-1.5 mb-3">
         {FUNDS.map(f => {
           const active = visibleFunds.has(f);
@@ -648,10 +865,8 @@ function FundTrendChart({ data, dataMode = 'raw' }) {
             tickFormatter={v => `${v.toFixed(0)}%`} />
           <Tooltip contentStyle={CHART_TOOLTIP_STYLE}
             formatter={(val, name) => [`${val?.toFixed(1) ?? '—'}%`, name]} />
-          {/* Average reference line */}
           <Line type="monotone" dataKey="avg" name="Media" stroke="rgba(148,163,184,0.4)"
             strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
-          {/* One line per fundamental */}
           {FUNDS.filter(f => visibleFunds.has(f)).map(f => (
             <Line key={f} type="monotone" dataKey={f} name={FUND_LABELS[f]}
               stroke={FUND_COLORS[f]} strokeWidth={2}
@@ -670,18 +885,15 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
   const [selectedFund,  setSelectedFund]  = useState('attack');
   const [roleFilter,    setRoleFilter]    = useState('all');
 
-  // Filter player list by role
   const filteredPlayers = useMemo(() =>
     playerList.filter(p => roleFilter === 'all' || p.roleCode.startsWith(roleFilter)),
     [playerList, roleFilter]
   );
 
-  // Auto-correct selectedNum if it's been filtered out
   const effectiveNum = filteredPlayers.find(p => p.number === selectedNum)
     ? selectedNum
     : filteredPlayers[0]?.number || null;
 
-  // Build chart data
   const chartData = useMemo(() => {
     if (!effectiveNum || !playerTrends?.[effectiveNum]) return [];
     const pData    = playerTrends[effectiveNum];
@@ -693,30 +905,29 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
       const teamEff     = (ma?.match.riepilogo?.team?.[selectedFund]?.efficacy || 0) * 100;
       const rawEff      = (fundData.raw[i] || 0) * 100;
       const matchWeight = ma?.matchWeight?.final || 1;
-      const playerEff   = dataMode === 'weighted'
-        ? rawEff * matchWeight
-        : rawEff;
       return {
-        label:  (ml.opponent || '').substring(0, 10),
-        player: +playerEff.toFixed(1),
-        team:   +teamEff.toFixed(1),
+        label:   (ml.opponent || '').substring(0, 10),
+        player:  +rawEff.toFixed(1),
+        playerW: +(rawEff * matchWeight).toFixed(1),
+        team:    +teamEff.toFixed(1),
       };
     });
   }, [effectiveNum, selectedFund, playerTrends, sortedMA]);
 
   const selectedPlayerData = effectiveNum ? playerTrends[effectiveNum] : null;
+  // Usato per l'indicatore trend nel header
   const playerAvg  = dataMode === 'weighted'
     ? (selectedPlayerData?.trends[selectedFund]?.weightedAvg  ?? 0)
     : (selectedPlayerData?.trends[selectedFund]?.rawAvg       ?? 0);
   const playerTrnd = dataMode === 'weighted'
     ? (selectedPlayerData?.trends[selectedFund]?.weightedTrend ?? 'stable')
     : (selectedPlayerData?.trends[selectedFund]?.rawTrend      ?? 'stable');
+  const showRaw = dataMode !== 'weighted';
+  const showWgt = dataMode !== 'raw';
 
   return (
     <div className="space-y-3">
-      {/* Controls row */}
       <div className="flex flex-wrap gap-3 items-start">
-
         {/* Role filter */}
         <div>
           <p className="text-[10px] text-gray-500 mb-1.5 uppercase tracking-wide">Ruolo</p>
@@ -812,7 +1023,6 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
         } />
       ) : (
         <div>
-          {/* Player summary */}
           <div className="flex items-center gap-4 mb-3 text-[11px]">
             <span className="text-white font-semibold">
               #{effectiveNum} {selectedPlayerData?.name}
@@ -831,10 +1041,18 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
           </div>
 
           <div className="flex items-center gap-4 mb-2 text-[10px] text-gray-400">
-            <span className="flex items-center gap-1.5">
-              <span className="w-4 h-0.5 rounded inline-block" style={{ background: FUND_COLORS[selectedFund] }} />
-              {selectedPlayerData?.name}
-            </span>
+            {showRaw && (
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-0.5 rounded inline-block" style={{ background: FUND_COLORS[selectedFund] }} />
+                {selectedPlayerData?.name} (grezzo)
+              </span>
+            )}
+            {showWgt && (
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-0.5 rounded inline-block" style={{ background: COLORS.weighted }} />
+                {dataMode === 'both' ? `${selectedPlayerData?.name} (pesato)` : selectedPlayerData?.name}
+              </span>
+            )}
             <span className="flex items-center gap-1.5">
               <span className="w-4 h-0.5 rounded inline-block" style={{ background: 'rgba(148,163,184,0.5)' }} />
               Media squadra
@@ -849,15 +1067,29 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
                 tickFormatter={v => `${v.toFixed(0)}%`} />
               <Tooltip contentStyle={CHART_TOOLTIP_STYLE}
                 formatter={(val, name) => [`${val?.toFixed(1) ?? '—'}%`, name]} />
-              <Line
-                type="monotone" dataKey="player"
-                name={selectedPlayerData?.name || 'Giocatrice'}
-                stroke={FUND_COLORS[selectedFund]}
-                strokeWidth={2.5}
-                dot={{ r: 4, fill: FUND_COLORS[selectedFund] }}
-                activeDot={{ r: 6 }}
-                connectNulls
-              />
+              {showRaw && (
+                <Line
+                  type="monotone" dataKey="player"
+                  name={`${selectedPlayerData?.name || 'Giocatrice'} (grezzo)`}
+                  stroke={FUND_COLORS[selectedFund]}
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: FUND_COLORS[selectedFund] }}
+                  activeDot={{ r: 6 }}
+                  connectNulls
+                />
+              )}
+              {showWgt && (
+                <Line
+                  type="monotone" dataKey="playerW"
+                  name={`${selectedPlayerData?.name || 'Giocatrice'} (pesato)`}
+                  stroke={COLORS.weighted}
+                  strokeWidth={dataMode === 'both' ? 2 : 2.5}
+                  strokeDasharray={dataMode === 'both' ? '6 2' : undefined}
+                  dot={{ r: 3, fill: COLORS.weighted }}
+                  activeDot={{ r: 5 }}
+                  connectNulls
+                />
+              )}
               <Line
                 type="monotone" dataKey="team"
                 name="Media squadra"
@@ -877,38 +1109,108 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
 // ─── Standings Widget ─────────────────────────────────────────────────────────
 
 function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, onOpenOpponentReport, matchAnalytics }) {
+  // Collassa a 8 righe di default
   const [expanded, setExpanded] = useState(false);
+  // Modalità identifica team
+  const [isEditing, setIsEditing] = useState(false);
+  const [tempTeamName, setTempTeamName] = useState('');
 
-  const visibleTeams = expanded ? standings : standings.slice(0, 12);
+  // Sync tempTeamName con ourTeamName quando non siamo in edit
+  useEffect(() => {
+    if (!isEditing) setTempTeamName(ourTeamName || '');
+  }, [ourTeamName, isEditing]);
 
-  // Which teams were we opponents of (to show match results)
+  const COLLAPSED_ROWS = 8;
+  const visibleTeams = expanded ? standings : standings.slice(0, COLLAPSED_ROWS);
+
+  // Squadre già affrontate
   const opponentNames = new Set(
     (matchAnalytics || []).map(ma => ma.match.metadata?.opponent?.trim().toUpperCase())
   );
+
+  const handleRowClick = (teamName) => {
+    if (isEditing) {
+      // In edit mode, click = seleziona come team
+      setTempTeamName(prev => prev === teamName ? '' : teamName);
+      return;
+    }
+    // Fuori edit mode, click = apri report avversario
+    onOpenOpponentReport?.(teamName);
+  };
+
+  const handleSave = () => {
+    onOwnerTeamChange?.(tempTeamName);
+    setIsEditing(false);
+  };
+
+  const handleCancel = () => {
+    setTempTeamName(ourTeamName || '');
+    setIsEditing(false);
+  };
 
   return (
     <div className="glass-card p-4">
       {/* Header */}
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <div className="flex items-center gap-3">
-          <h3 className="text-sm font-semibold text-gray-300">🏆 Classifica</h3>
-          {ourTeamName && (
-            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25 text-[10px]">
+        <div className="flex items-center gap-3 min-w-0">
+          <h3 className="text-sm font-semibold text-gray-300 shrink-0">🏆 Classifica</h3>
+          {/* Team badge / edit mode indicator */}
+          {isEditing ? (
+            <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/25 text-[10px] animate-pulse">
+              ✏️ Clicca una riga per selezionare la tua squadra
+            </span>
+          ) : ourTeamName ? (
+            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25 text-[10px] truncate max-w-[200px]">
               ★ {ourTeamName.substring(0, 24)}
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-full bg-white/5 text-gray-500 border border-white/10 text-[10px]">
+              — Squadra non identificata
             </span>
           )}
         </div>
-        <p className="text-[10px] text-gray-500">
-          Checkbox = squadra owner · click squadra = report partite contro quella squadra
-        </p>
+
+        {/* Buttons */}
+        <div className="flex items-center gap-2">
+          {isEditing ? (
+            <>
+              <button
+                onClick={handleSave}
+                disabled={!tempTeamName}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-green-500/15 text-green-300 hover:bg-green-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors border border-green-500/25"
+              >
+                💾 Salva
+              </button>
+              <button
+                onClick={handleCancel}
+                className="px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 transition-colors border border-white/10"
+              >
+                ✕ Annulla
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => { setTempTeamName(ourTeamName || ''); setIsEditing(true); }}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-sky-300 hover:bg-sky-500/10 transition-colors border border-sky-500/20"
+            >
+              ✏️ {ourTeamName ? 'Modifica' : 'Identifica Team'}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Temp selection hint */}
+      {isEditing && tempTeamName && (
+        <div className="mb-2 px-3 py-1.5 rounded-lg text-[11px] bg-sky-500/10 border border-sky-500/20 text-sky-300">
+          Selezionata: <strong>{tempTeamName}</strong> — clicca Salva per confermare
+        </div>
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="text-gray-600 border-b border-white/[0.04] text-[10px]">
-              <th className="text-center py-1.5 px-1 w-7">✓</th>
               <th className="text-left py-1.5 px-2 w-6">#</th>
               <th className="text-left py-1.5 px-2">Squadra</th>
               <th className="text-center py-1.5 px-2">Pt</th>
@@ -921,28 +1223,24 @@ function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, onOpenOppo
           </thead>
           <tbody>
             {visibleTeams.map(t => {
-              const isOurs = !!ourTeamName && t.name === ourTeamName;
+              const isOurs  = !!ourTeamName && t.name === ourTeamName;
+              const isTemp  = isEditing && t.name === tempTeamName;
               const isOpponent = opponentNames.has(t.name.toUpperCase());
 
               return (
                 <tr
                   key={t.name}
-                  onClick={() => onOpenOpponentReport?.(t.name)}
-                  className={`border-b border-white/[0.02] cursor-pointer transition-colors ${
-                    isOurs
-                      ? 'bg-amber-500/[0.08] hover:bg-amber-500/[0.12]'
-                      : 'hover:bg-white/[0.03]'
+                  onClick={() => handleRowClick(t.name)}
+                  className={`border-b border-white/[0.02] transition-colors ${
+                    isEditing ? 'cursor-pointer' : 'cursor-pointer'
+                  } ${
+                    isTemp
+                      ? 'bg-sky-500/[0.10] hover:bg-sky-500/[0.15]'
+                      : isOurs
+                        ? 'bg-amber-500/[0.08] hover:bg-amber-500/[0.12]'
+                        : 'hover:bg-white/[0.03]'
                   }`}
                 >
-                  <td className="py-1.5 px-1 text-center">
-                    <input
-                      type="checkbox"
-                      checked={isOurs}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={() => onOwnerTeamChange?.(t.name)}
-                      className="accent-amber-500 w-3.5 h-3.5"
-                    />
-                  </td>
                   <td className={`py-1.5 px-2 font-mono font-bold text-center ${
                     t.rank <= 3 ? 'text-amber-400' : 'text-gray-500'
                   }`}>
@@ -950,13 +1248,16 @@ function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, onOpenOppo
                   </td>
                   <td className="py-1.5 px-2">
                     <div className="flex items-center gap-1.5">
-                      {isOurs && <span className="text-amber-400 text-[9px]">★</span>}
+                      {isTemp && <span className="text-sky-400 text-[9px]">●</span>}
+                      {isOurs && !isTemp && <span className="text-amber-400 text-[9px]">★</span>}
                       <span className={`font-medium ${
-                        isOurs ? 'text-amber-400' : isOpponent ? 'text-gray-200' : 'text-gray-400'
+                        isTemp ? 'text-sky-300' :
+                        isOurs ? 'text-amber-400' :
+                        isOpponent ? 'text-gray-200' : 'text-gray-400'
                       }`}>
                         {t.name.length > 22 ? t.name.substring(0, 22) + '…' : t.name}
                       </span>
-                      {isOpponent && !isOurs && (
+                      {isOpponent && !isOurs && !isTemp && (
                         <span className="text-[8px] text-gray-600 ml-0.5">già affrontata</span>
                       )}
                     </div>
@@ -976,19 +1277,24 @@ function StandingsWidget({ standings, ourTeamName, onOwnerTeamChange, onOpenOppo
         </table>
       </div>
 
-      {standings.length > 12 && (
+      {/* Expand/collapse — sempre visibile se ci sono più di COLLAPSED_ROWS squadre */}
+      {standings.length > COLLAPSED_ROWS && (
         <button
           onClick={() => setExpanded(e => !e)}
-          className="mt-2 text-[10px] text-gray-500 hover:text-gray-300 transition-colors w-full text-center"
+          className="mt-2 text-[10px] text-gray-500 hover:text-gray-300 transition-colors w-full text-center py-1"
         >
-          {expanded ? '▲ Mostra meno' : `▼ Mostra tutte (${standings.length} squadre)`}
+          {expanded
+            ? '▲ Mostra meno'
+            : `▼ Mostra tutte (${standings.length} squadre, ${standings.length - COLLAPSED_ROWS} nascoste)`}
         </button>
       )}
 
       <div className="mt-3 pt-3 border-t border-white/[0.04] flex items-center gap-3 text-[10px] text-gray-500">
         <span className="text-purple-400">ℹ</span>
         <span>
-          La checkbox identifica la squadra proprietaria dei dati scout. I pesi delle partite riflettono la forza relativa dell'avversario in classifica.
+          {isEditing
+            ? 'Clicca su una riga per selezionarla come squadra scout, poi premi Salva.'
+            : 'Clicca su una squadra per aprire il report delle partite contro di essa. Usa ✏️ per identificare la tua squadra.'}
         </span>
       </div>
     </div>
