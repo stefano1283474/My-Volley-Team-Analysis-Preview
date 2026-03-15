@@ -4,7 +4,7 @@
 //   Campionato · Squadra · Player · Sistema · Offerte
 // ============================================================================
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 
 // ─── Costanti ─────────────────────────────────────────────────────────────────
 
@@ -975,6 +975,8 @@ export default function NewsBacheca({
   authorEmail = '',
   offers = [],
   onOffersChange,
+  unreadByTab = {},
+  onTabViewed,
   onScrollToStandings,
   onOpenDataImport,
   onSelectMatch,
@@ -1021,6 +1023,13 @@ export default function NewsBacheca({
 
   const sistemaBadge = posts.length;
   const offerteBadge = offers.filter(o => { const t = new Date().toISOString().slice(0, 10); return !o.validUntil || o.validUntil >= t; }).length;
+  const activeUnread = Number(unreadByTab?.[activeTab] || 0);
+
+  useEffect(() => {
+    if (activeUnread <= 0) return;
+    if (typeof onTabViewed !== 'function') return;
+    onTabViewed(activeTab);
+  }, [activeTab, activeUnread, onTabViewed]);
 
   return (
     <div className="glass-card p-5 space-y-4">
@@ -1035,7 +1044,18 @@ export default function NewsBacheca({
             </span>
           )}
         </div>
-        {/* Create/delete avviene da AdminContentPanel — nessun pulsante qui */}
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof onTabViewed === 'function') onTabViewed(activeTab);
+          }}
+          disabled={activeUnread <= 0}
+          title={activeUnread > 0 ? 'Segna lette le notifiche del tab corrente' : 'Nessuna notifica non letta nel tab corrente'}
+          className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-white/12 text-[13px] text-gray-300 hover:text-white hover:bg-white/8 disabled:opacity-40 disabled:cursor-not-allowed"
+          aria-label="Segna lette notifiche tab"
+        >
+          ✓
+        </button>
       </div>
 
       {/* Tab bar */}
@@ -1043,10 +1063,14 @@ export default function NewsBacheca({
         {TABS.map(tab => {
           const active = activeTab === tab.id;
           const badge  = tab.id === 'sistema' ? sistemaBadge : tab.id === 'offerte' ? offerteBadge : 0;
+          const unread = Number(unreadByTab?.[tab.id] || 0);
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                setActiveTab(tab.id);
+                if (typeof onTabViewed === 'function') onTabViewed(tab.id);
+              }}
               className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                 active
                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
@@ -1055,7 +1079,11 @@ export default function NewsBacheca({
             >
               <span>{tab.icon}</span>
               <span className="hidden sm:inline">{tab.label}</span>
-              {badge > 0 && (
+              {unread > 0 ? (
+                <span className="text-[9px] min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white font-bold inline-flex items-center justify-center">
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              ) : badge > 0 && (
                 <span className="text-[8px] px-1 py-0.5 rounded-full bg-white/10 text-gray-400 font-normal">
                   {badge}
                 </span>

@@ -141,6 +141,92 @@ const getVisibleTabIdsByProfile = (sectionId, profile) =>
     .map(tab => tab.id);
 
 const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
+const NEWS_SEEN_STORAGE_PREFIX = 'vpa_news_seen_v1_';
+const NEWS_SEEN_MAX_KEYS = 1200;
+const SIDEBAR_WIDTH_STORAGE_KEY = 'vpa_sidebar_width';
+const SIDEBAR_WIDTH_MIN = 176;
+const SIDEBAR_WIDTH_MAX = 420;
+const SIDEBAR_WIDTH_DEFAULT = 176;
+
+function getNewsSeenStorageKey(uid) {
+  return `${NEWS_SEEN_STORAGE_PREFIX}${String(uid || '').trim()}`;
+}
+
+function normalizeSeenCategoryMap(value) {
+  if (!value || typeof value !== 'object') return {};
+  const out = {};
+  Object.entries(value).forEach(([k, v]) => {
+    if (!v || typeof v !== 'object') return;
+    out[String(k)] = !!v;
+  });
+  return out;
+}
+
+function normalizeNewsSeenState(value) {
+  const src = (value && typeof value === 'object') ? value : {};
+  return {
+    sistema: normalizeSeenCategoryMap(src.sistema),
+    offerte: normalizeSeenCategoryMap(src.offerte),
+  };
+}
+
+function readNewsSeenState(uid) {
+  if (!uid) return normalizeNewsSeenState({});
+  try {
+    const raw = localStorage.getItem(getNewsSeenStorageKey(uid));
+    return normalizeNewsSeenState(raw ? JSON.parse(raw) : {});
+  } catch {
+    return normalizeNewsSeenState({});
+  }
+}
+
+function writeNewsSeenState(uid, state) {
+  if (!uid) return;
+  try {
+    localStorage.setItem(getNewsSeenStorageKey(uid), JSON.stringify(normalizeNewsSeenState(state)));
+  } catch {}
+}
+
+function toMillis(value) {
+  if (!value) return 0;
+  if (typeof value?.toDate === 'function') {
+    const d = value.toDate();
+    return Number.isFinite(d?.getTime?.()) ? d.getTime() : 0;
+  }
+  const d = value instanceof Date ? value : new Date(value);
+  const ms = d.getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function buildPostNotificationId(post) {
+  const baseId = String(post?.id || post?.metaKey || '').trim();
+  if (baseId) return `post:${baseId}`;
+  const title = String(post?.title || post?.text || post?.summary || '').trim();
+  const stamp = toMillis(post?.createdAt) || toMillis(post?.eventDate) || 0;
+  return `post:${title}:${stamp}`;
+}
+
+function buildOfferNotificationId(offer) {
+  const baseId = String(offer?.id || '').trim();
+  if (baseId) return `offer:${baseId}`;
+  const title = String(offer?.title || offer?.name || offer?.description || '').trim();
+  const stamp = toMillis(offer?.createdAt) || toMillis(offer?.updatedAt) || toMillis(offer?.validUntil) || 0;
+  return `offer:${title}:${stamp}`;
+}
+
+function applySeenForIds(prevMap, ids) {
+  const next = { ...(prevMap || {}) };
+  ids.forEach((id) => {
+    const key = String(id || '').trim();
+    if (!key) return;
+    next[key] = true;
+  });
+  const keys = Object.keys(next);
+  if (keys.length <= NEWS_SEEN_MAX_KEYS) return next;
+  const trimmed = {};
+  keys.slice(keys.length - NEWS_SEEN_MAX_KEYS).forEach((k) => { trimmed[k] = true; });
+  return trimmed;
+}
 
 function findStandingTeamName(standings, teamName) {
   const clean = normalizeTeamName(teamName);
@@ -320,6 +406,7 @@ export default function App() {
   const [requestTargetProfile, setRequestTargetProfile] = useState('pro');
   const [requestMessage, setRequestMessage] = useState('');
   const [isAccessReady, setIsAccessReady] = useState(false);
+  const [newsSeenByCategory, setNewsSeenByCategory] = useState(() => normalizeNewsSeenState({}));
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
   const [isMobilePortrait, setIsMobilePortrait] = useState(() => {
@@ -330,7 +417,19 @@ export default function App() {
     }
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const parsed = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+      if (!Number.isFinite(parsed)) return SIDEBAR_WIDTH_DEFAULT;
+      return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(parsed)));
+    } catch {
+      return SIDEBAR_WIDTH_DEFAULT;
+    }
+  });
+  const [isSidebarResizing, setIsSidebarResizing] = useState(false);
+  const [sidebarLabelOverflowMap, setSidebarLabelOverflowMap] = useState({});
   const swipeStartRef = useRef(null);
+  const sidebarResizeStartRef = useRef(null);
   const lastTrackedSectionRef = useRef('');
   const [profileReveal, setProfileReveal] = useState({ sections: [], tabs: [] });
   const [ownerTeamName, setOwnerTeamName] = useState(() => {
@@ -479,6 +578,78 @@ export default function App() {
   const newsBachecaPosts = useMemo(() =>
     [...teamNews, ...filteredAdminPosts],
   [teamNews, filteredAdminPosts]);
+
+  const newsSistemaIds = useMemo(
+    () => newsBachecaPosts.map(buildPostNotificationId).filter(Boolean),
+    [newsBachecaPosts]
+  );
+  const newsOfferteIds = useMemo(
+    () => filteredAdminOffers.map(buildOfferNotificationId).filter(Boolean),
+    [filteredAdminOffers]
+  );
+
+  useEffect(() => {
+    setNewsSeenByCategory(readNewsSeenState(user?.uid || ''));
+  }, [user?.uid]);
+
+  const unreadNewsByCategory = useMemo(() => {
+    const sistemaSeen = newsSeenByCategory?.sistema || {};
+    const offerteSeen = newsSeenByCategory?.offerte || {};
+    const sistema = newsSistemaIds.filter((id) => !sistemaSeen[id]).length;
+    const offerte = newsOfferteIds.filter((id) => !offerteSeen[id]).length;
+    return { sistema, offerte };
+  }, [newsSeenByCategory, newsSistemaIds, newsOfferteIds]);
+
+  const sectionUnreadCountMap = useMemo(() => ({
+    home: (unreadNewsByCategory.sistema || 0) + (unreadNewsByCategory.offerte || 0),
+  }), [unreadNewsByCategory]);
+
+  useEffect(() => {
+    if (!canUseAdminUi || isMobilePortrait) {
+      setSidebarLabelOverflowMap({});
+      return undefined;
+    }
+    const computeOverflow = () => {
+      const nodes = Array.from(document.querySelectorAll('[data-sidebar-label-wrap]'));
+      const next = {};
+      nodes.forEach((wrap) => {
+        const key = String(wrap.getAttribute('data-sidebar-label-wrap') || '').trim();
+        if (!key) return;
+        const textNode = wrap.querySelector('[data-sidebar-label-text]');
+        if (!textNode) return;
+        next[key] = textNode.scrollWidth > wrap.clientWidth + 1;
+      });
+      setSidebarLabelOverflowMap((prev) => {
+        const prevKeys = Object.keys(prev || {});
+        const nextKeys = Object.keys(next);
+        if (prevKeys.length === nextKeys.length && nextKeys.every((k) => prev[k] === next[k])) return prev;
+        return next;
+      });
+    };
+    const rafId = requestAnimationFrame(computeOverflow);
+    window.addEventListener('resize', computeOverflow);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', computeOverflow);
+    };
+  }, [canUseAdminUi, isMobilePortrait, sidebarWidth, activeSection, sectionUnreadCountMap]);
+
+  const markNewsCategoryAsRead = useCallback((categoryId) => {
+    if (!user?.uid) return;
+    const category = String(categoryId || '').toLowerCase();
+    if (category !== 'sistema' && category !== 'offerte') return;
+    const ids = category === 'sistema' ? newsSistemaIds : newsOfferteIds;
+    if (!ids.length) return;
+    setNewsSeenByCategory((prev) => {
+      const base = normalizeNewsSeenState(prev);
+      const next = {
+        ...base,
+        [category]: applySeenForIds(base[category], ids),
+      };
+      writeNewsSeenState(user.uid, next);
+      return next;
+    });
+  }, [user?.uid, newsSistemaIds, newsOfferteIds]);
 
   useEffect(() => {
     if (!user?.uid || isAdmin || !myProfileRequest) return;
@@ -818,6 +989,38 @@ export default function App() {
       setIsSidebarOpen(false);
     }
   }, [isMobilePortrait]);
+
+  useEffect(() => {
+    try { localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth)); } catch {}
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (!isSidebarResizing || isMobilePortrait) return undefined;
+    const onMouseMove = (event) => {
+      const start = sidebarResizeStartRef.current;
+      if (!start) return;
+      const next = start.width + (event.clientX - start.x);
+      setSidebarWidth(Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(next))));
+    };
+    const onMouseUp = () => {
+      setIsSidebarResizing(false);
+      sidebarResizeStartRef.current = null;
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [isSidebarResizing, isMobilePortrait]);
+
+  const handleSidebarResizeStart = useCallback((event) => {
+    if (isMobilePortrait) return;
+    if (event.button !== 0) return;
+    event.preventDefault();
+    sidebarResizeStartRef.current = { x: event.clientX, width: sidebarWidth };
+    setIsSidebarResizing(true);
+  }, [isMobilePortrait, sidebarWidth]);
 
   const handleAppTouchStart = useCallback((event) => {
     if (!isMobilePortrait) return;
@@ -1418,15 +1621,19 @@ export default function App() {
           min-width: 0;
           flex: 1 1 auto;
           white-space: nowrap;
-          mask-image: linear-gradient(to right, transparent 0, black 8px, black calc(100% - 8px), transparent 100%);
-          -webkit-mask-image: linear-gradient(to right, transparent 0, black 8px, black calc(100% - 8px), transparent 100%);
+        }
+        .vpa-admin-sidebar-marquee-wrap.is-moving {
+          mask-image: linear-gradient(to right, black 0, black calc(100% - 8px), transparent 100%);
+          -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 8px), transparent 100%);
         }
         .vpa-admin-sidebar-marquee-track {
           display: inline-flex;
           align-items: center;
           min-width: max-content;
-          animation: vpa-admin-sidebar-marquee 9s linear infinite;
           will-change: transform;
+        }
+        .vpa-admin-sidebar-marquee-track.is-moving {
+          animation: vpa-admin-sidebar-marquee 9s linear infinite;
         }
         .vpa-admin-sidebar-marquee-gap {
           display: inline-block;
@@ -1615,8 +1822,8 @@ export default function App() {
         <nav
           className={`${isMobilePortrait
             ? `absolute left-0 top-0 h-full w-52 z-30 transform transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
-            : 'w-44 flex-shrink-0'} border-r border-white/5 py-3 px-2 flex flex-col gap-0.5`}
-          style={{ background: isMobilePortrait ? 'rgba(2,6,23,0.97)' : 'rgba(17,24,39,0.5)' }}
+            : 'flex-shrink-0'} border-r border-white/5 py-3 px-2 flex flex-col gap-0.5 relative overflow-y-auto overflow-x-hidden`}
+          style={{ background: isMobilePortrait ? 'rgba(2,6,23,0.97)' : 'rgba(17,24,39,0.5)', width: isMobilePortrait ? undefined : `${sidebarWidth}px`, userSelect: isSidebarResizing ? 'none' : undefined }}
         >
           {/* Profile badge in sidebar (mobile only) */}
           {isMobilePortrait && (
@@ -1637,6 +1844,8 @@ export default function App() {
           {visibleSections.map(section => {
             const active = activeSection === section.id;
             const reveal = profileReveal.sections.includes(section.id);
+            const unreadCount = Number(sectionUnreadCountMap?.[section.id] || 0);
+            const shouldMarquee = canUseAdminUi && !!sidebarLabelOverflowMap?.[section.id];
             return (
               <button
                 key={section.id}
@@ -1654,18 +1863,23 @@ export default function App() {
               >
                 <span className="text-base w-5 text-center leading-none">{section.icon}</span>
                 {canUseAdminUi ? (
-                  <span className="vpa-admin-sidebar-marquee-wrap">
-                    <span className="vpa-admin-sidebar-marquee-track">
-                      <span>{section.label}</span>
-                      <span aria-hidden="true" className="vpa-admin-sidebar-marquee-gap">•</span>
-                      <span aria-hidden="true">{section.label}</span>
+                  <span className={`vpa-admin-sidebar-marquee-wrap ${shouldMarquee ? 'is-moving' : ''}`} data-sidebar-label-wrap={section.id}>
+                    <span className={`vpa-admin-sidebar-marquee-track ${shouldMarquee ? 'is-moving' : ''}`}>
+                      <span data-sidebar-label-text>{section.label}</span>
+                      {shouldMarquee && <span aria-hidden="true" className="vpa-admin-sidebar-marquee-gap">•</span>}
+                      {shouldMarquee && <span aria-hidden="true">{section.label}</span>}
                     </span>
                   </span>
                 ) : (
                   <span className="truncate">{section.label}</span>
                 )}
+                {unreadCount > 0 && (
+                  <span className="ml-auto min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none shadow-[0_0_0_2px_rgba(15,23,42,0.65)]">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
                 {active && curSubTabs.length > 0 && (
-                  <span className="ml-auto text-[9px] font-normal text-gray-600">
+                  <span className={`${unreadCount > 0 ? 'ml-1' : 'ml-auto'} text-[9px] font-normal text-gray-600`}>
                     {curSubTabs.length}
                   </span>
                 )}
@@ -1680,6 +1894,14 @@ export default function App() {
               Database in Cloud
             </div>
           </div>
+          {!isMobilePortrait && (
+            <button
+              type="button"
+              onMouseDown={handleSidebarResizeStart}
+              aria-label="Ridimensiona sidebar"
+              className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize bg-transparent hover:bg-sky-400/30 active:bg-sky-400/50 transition-colors"
+            />
+          )}
         </nav>
 
         {/* ── Main Content ── */}
@@ -1746,6 +1968,8 @@ export default function App() {
                 newsAuthorEmail={user?.email || ''}
                 teamOffers={filteredAdminOffers}
                 onOffersChange={null}
+                newsUnreadByTab={unreadNewsByCategory}
+                onNewsTabViewed={markNewsCategoryAsRead}
                 onOpenDataImport={() => navigateTo('sistema', 'dati')}
               />
             )}
