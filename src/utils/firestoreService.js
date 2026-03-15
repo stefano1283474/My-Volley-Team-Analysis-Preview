@@ -110,7 +110,7 @@ function normalizeEmail(email) {
 }
 
 function normalizeAssignedProfile(profile) {
-  return PROFILE_VALUES.includes(profile) ? profile : 'pro';
+  return PROFILE_VALUES.includes(profile) ? profile : 'base';
 }
 
 function normalizeUserRole(role) {
@@ -510,7 +510,7 @@ export async function resolveSharedAccess(token, user) {
  * Logica ruolo (unica sorgente di verità = users/{uid}.role):
  *  - Se il documento NON esiste ancora (primo login):
  *      · BOOTSTRAP_ADMIN_EMAIL → role='admin', assignedProfile='promax'
- *      · tutti gli altri       → role='user',  assignedProfile='pro'
+ *      · tutti gli altri       → role='user',  assignedProfile='base'
  *  - Se il documento ESISTE GIÀ:
  *      · il ruolo viene preservato (non sovrascritto)
  *      · viene aggiornato solo lastLoginAt + dati anagrafici (displayName, photoURL)
@@ -532,9 +532,9 @@ export async function ensureUserAccessRecord(user) {
   const bootstrapRole = email === BOOTSTRAP_ADMIN_EMAIL ? 'admin' : 'user';
   const role = isNewUser ? bootstrapRole : existingRole;
 
-  // Profilo: preservato se esiste; bootstrap admin → promax, altri → pro
-  const existingProfile = normalizeAssignedProfile(currentData.assignedProfile || 'pro');
-  const bootstrapProfile = bootstrapRole === 'admin' ? 'promax' : 'pro';
+  // Profilo: preservato se esiste; bootstrap admin → promax, altri → base
+  const existingProfile = normalizeAssignedProfile(currentData.assignedProfile || 'base');
+  const bootstrapProfile = bootstrapRole === 'admin' ? 'promax' : 'base';
   const assignedProfile = isNewUser ? bootstrapProfile : existingProfile;
 
   const payload = sanitize({
@@ -826,7 +826,7 @@ export async function recordUserLoginUsage(user, access = {}, context = {}) {
     email: normalizeEmail(user.email),
     displayName: user.displayName || '',
     role: normalizeUserRole(access.role),
-    assignedProfile: normalizeAssignedProfile(access.assignedProfile || 'pro'),
+    assignedProfile: normalizeAssignedProfile(access.assignedProfile || 'base'),
     firstLoginAt: existing.firstLoginAt || serverTimestamp(),
     lastLoginAt: serverTimestamp(),
     lastSeenAt: serverTimestamp(),
@@ -869,7 +869,7 @@ export async function loadAllUserUsageStats() {
       email: normalizeEmail(data.email),
       displayName: data.displayName || '',
       role: normalizeUserRole(data.role),
-      assignedProfile: normalizeAssignedProfile(data.assignedProfile || 'pro'),
+      assignedProfile: normalizeAssignedProfile(data.assignedProfile || 'base'),
       loginCount: Math.max(0, Number(data.loginCount || 0)),
       lastSection: data.lastSection || '',
       sectionCounters: data.sectionCounters || {},

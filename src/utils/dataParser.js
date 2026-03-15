@@ -96,16 +96,50 @@ export function computeStandings(calendarMatches) {
 export function parseMatchFile(buffer, fileName) {
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
 
+  const roster     = parseRoster(wb);
+  let riepilogo    = parseRiepilogo(wb);
+  let gioco        = parseGioco(wb);
+  let giriDiRice   = parseGiriDiRice(wb);
+  let rallies      = parseAllRallies(wb);
+
+  // Se mancano i fogli formula (es. file .xlsx senza Riepilogo/Gioco/Giri di Rice),
+  // calcola le statistiche a partire dai dati grezzi nei fogli Set.
+  const needsStatsCompute = !riepilogo || !gioco || !giriDiRice;
+  const needsRallyFix = !needsStatsCompute && rallies.length > 0 &&
+                        rallies.every(r => !r.isPoint && !r.isError && r.rotation === 0);
+
+  if (needsStatsCompute || needsRallyFix) {
+    try {
+      const actionsBySet = buildActionsBySet(wb);
+      const hasEntries = Object.keys(actionsBySet).some(k =>
+        actionsBySet[k] && actionsBySet[k].length > 0
+      );
+      if (hasEntries) {
+        const computed = computeStatsFromActionsBySet(actionsBySet, roster);
+        if (needsStatsCompute) {
+          if (!riepilogo  && computed.riepilogo)   riepilogo  = computed.riepilogo;
+          if (!gioco      && computed.gioco)        gioco      = computed.gioco;
+          if (!giriDiRice && computed.giriDiRice)   giriDiRice = computed.giriDiRice;
+        }
+        if (computed.rallies && computed.rallies.length > 0) {
+          rallies = computed.rallies;
+        }
+      }
+    } catch (computeErr) {
+      console.warn('[dataParser] Errore nel calcolo statistiche da dati grezzi:', computeErr);
+    }
+  }
+
   const match = {
     id: crypto.randomUUID(),
     fileName,
     metadata: parseMetadata(wb),
-    roster: parseRoster(wb),
+    roster,
     sets: parseSets(wb),
-    riepilogo: parseRiepilogo(wb),
-    gioco: parseGioco(wb),
-    giriDiRice: parseGiriDiRice(wb),
-    rallies: parseAllRallies(wb),
+    riepilogo,
+    gioco,
+    giriDiRice,
+    rallies,
   };
 
   return match;
@@ -606,6 +640,404 @@ function parseQuartine(str) {
   }
 
   return actions;
+}
+
+// ─── Fallback stats computation for .xlsx files (no formula sheets) ────────
+// Determines rally outcome from parsed quartine tokens.
+function determineOutcomeFromQuartine(quartine) {
+  if (!quartine || !quartine.length) return 'continue';
+  const last = quartine[quartine.length - 1];
+  if (last.type === 'opponent_error') return 'home_point';
+  if (last.value === 5) return 'home_point';
+  if (last.value === 1) return 'away_point';
+  return 'continue';
+}
+
+// Builds actionsBySet from raw Set-sheet column B strings, computing
+// rotation, phase, and outcome algorithmically (mirrors xlsm-full-parser.js).
+function buildActionsBySet(wb) {
+  const actionsBySet = {};
+  for (let s = 1; s <= 6; s++) {
+    const ws = wb.Sheets['Set ' + s];
+    if (!ws) continue;
+    const finalScore = getCellValue(ws, 'C12');
+    if (!finalScore || Number(finalScore) === 0) continue;
+    const ourStartRot = Math.max(1, Math.min(6, n(getCellValue(ws, 'A7')) || 1));
+    let ourRot = ourStartRot;
+    let ourScore = 0, theirScore = 0;
+    let phase = null;
+    const entries = [];
+    for (let row = 18; row <= 600; row++) {
+      const rawCell = getCellValue(ws, 'B' + row);
+      if (!rawCell || String(rawCell).trim() === '' || String(rawCell) === '0') break;
+      const strVal = String(rawCell).trim();
+      if (strVal.length < 2) continue;
+      const quartine = parseQuartine(strVal);
+      if (!quartine.length) continue;
+      // Determine phase from first fundamental of rally
+      if (phase === null) {
+        phase = 'r';
+        for (let i = 0; i < quartine.length; i++) {
+          const f = quartine[i].fundamental;
+          if (f === 'b') { phase = 'b'; break; }
+          if (f === 'r') { phase = 'r'; break; }
+        }
+      }
+      const outcome = determineOutcomeFromQuartine(quartine);
+      const actions = quartine
+        .filter(q => q.type === 'action')
+        .map(q => ({ player: q.player, fundamental: q.fundamental, evaluation: q.value }));
+      entries.push({
+        result: { actions, result: outcome },
+        rotation: ourRot,
+        phase,
+        ourScore,
+        theirScore,
+        actionString: strVal,
+      });
+      if (outcome === 'home_point') ourScore++;
+      else if (outcome === 'away_point') theirScore++;
+      // Update rotation and phase
+      if (outcome === 'home_point') {
+        if (phase === 'r') { ourRot = (ourRot % 6) + 1; } // side-out → rotate
+        phase = 'b';
+      } else if (outcome === 'away_point') {
+        if (phase === 'b') { phase = 'r'; }
+      }
+    }
+    if (entries.length > 0) { actionsBySet[s] = entries; }
+  }
+  return actionsBySet;
+}
+
+// ── Stat helpers (ES-module port of live-stats-computer.js) ─────────────────
+function _mkStat()         { return { kill: 0, pos: 0, exc: 0, neg: 0, err: 0, tot: 0 }; }
+function _addEval(stat, e) {
+  stat.tot++;
+  e = Number(e) || 0;
+  if      (e === 5) stat.kill++;
+  else if (e === 4) stat.pos++;
+  else if (e === 3) stat.exc++;
+  else if (e === 2) stat.neg++;
+  else if (e === 1) stat.err++;
+}
+function _finalizeStat(s) {
+  if (!s || !s.tot) return Object.assign({}, s || _mkStat(), { pct: 0, efficacy: 0, efficiency: 0 });
+  return Object.assign({}, s, {
+    pct:        +(( s.kill                        / s.tot) * 100).toFixed(1),
+    efficacy:   +(((s.kill - s.err)               / s.tot) * 100).toFixed(1),
+    efficiency: +(((s.kill - s.err - s.neg)       / s.tot) * 100).toFixed(1),
+  });
+}
+function _parseRot(raw) {
+  if (!raw) return 0;
+  const v = parseInt(String(raw).replace(/^[Pp]/i, ''), 10);
+  return (v >= 1 && v <= 6) ? v : 0;
+}
+function _extractActions(entry) {
+  if (Array.isArray(entry?.result?.actions)) return entry.result.actions;
+  if (Array.isArray(entry?.actions))         return entry.actions;
+  return [];
+}
+function _extractOutcome(entry) {
+  const r = String(entry?.result?.result || entry?.outcome || entry?.result || '').toLowerCase();
+  if (r === 'home_point' || r === 'point') return 'home_point';
+  if (r === 'away_point' || r === 'error') return 'away_point';
+  return 'continue';
+}
+
+/**
+ * Computes riepilogo, gioco, giriDiRice and rallies from actionsBySet.
+ * Pure ES-module equivalent of window.liveStatsComputer.computeStatsFromLiveScout,
+ * used when formula sheets are absent (raw .xlsx files).
+ */
+function computeStatsFromActionsBySet(actionsBySet, roster) {
+  // ── Roster map ──────────────────────────────────────────────────────────────
+  const rosterMap = {};
+  (Array.isArray(roster) ? roster : []).forEach(p => {
+    const num = String(p.number || '').padStart(2, '0');
+    if (num) rosterMap[num] = { surname: String(p.surname || '').trim(), name: String(p.name || '').trim() };
+  });
+
+  // ── Riepilogo accumulators ───────────────────────────────────────────────────
+  const pMap   = {};
+  const team   = { attack: _mkStat(), serve: _mkStat(), block: _mkStat(), reception: _mkStat(), defense: _mkStat() };
+  const opp    = { attack: _mkStat(), serve: _mkStat(), reception: _mkStat(), defense: _mkStat() };
+  const rotMap = {};
+  let totalPointsMade = 0, totalErrors = 0;
+
+  const getP = num => {
+    const k = String(num || '').padStart(2, '0');
+    if (!pMap[k]) {
+      const info = rosterMap[k] || { surname: '', name: '' };
+      pMap[k] = { number: k, surname: info.surname, name: info.name,
+                  attack: _mkStat(), serve: _mkStat(), block: _mkStat(),
+                  reception: _mkStat(), defense: _mkStat(),
+                  pointsMade: 0, errors: 0 };
+    }
+    return pMap[k];
+  };
+
+  // ── Gioco accumulators ───────────────────────────────────────────────────────
+  const giocoOverview = { attack: _mkStat(), serve: _mkStat(), reception: _mkStat(), defense: _mkStat() };
+  const giocoRotStats = {};
+  const arBuckets = { R5: _mkStat(), R4: _mkStat(), R3: _mkStat() };
+  const adBuckets = { D5: _mkStat(), D4: _mkStat(), D3: _mkStat() };
+  const recByRot  = {};
+  const getGRS = r => {
+    if (!giocoRotStats[r]) giocoRotStats[r] = { rotation: r, attack: _mkStat(), serve: _mkStat(), reception: _mkStat(), defense: _mkStat() };
+    return giocoRotStats[r];
+  };
+
+  // ── Giri di Rice accumulators ────────────────────────────────────────────────
+  const serveRot   = {};
+  const receiveRot = {};
+  const getSR = r => { if (!serveRot[r])   serveRot[r]   = { rotation: r, breakPts: 0, attackPts: 0, blockPts: 0, errors: 0, total: 0 };   return serveRot[r]; };
+  const getRR = r => { if (!receiveRot[r]) receiveRot[r] = { rotation: r, attackPts: 0, blockPts: 0, oppServeErrors: 0, oppGiftPts: 0, total: 0 }; return receiveRot[r]; };
+
+  // ── Rallies array ────────────────────────────────────────────────────────────
+  const rallies = [];
+
+  Object.entries(actionsBySet).forEach(([setNumStr, setActions]) => {
+    if (!Array.isArray(setActions)) return;
+    const setNum = Number(setNumStr) || 0;
+    let lastRcvEval = null, lastDefEval = null, lastGRot = 0;
+    let grCurrentPhase = null;
+    let rallyOurScore = 0, rallyTheirScore = 0;
+    let rallyPhase = 'r';
+
+    setActions.forEach((entry, idx) => {
+      const acts    = _extractActions(entry);
+      const outcome = _extractOutcome(entry);
+      const rot     = _parseRot(entry?.rotation) || lastGRot;
+      lastGRot = rot;
+
+      // ── Riepilogo ─────────────────────────────────────────────────────────
+      if (rot) {
+        if (!rotMap[rot]) rotMap[rot] = { rotation: rot, totalPoints: 0, pointsMade: 0, pointsLost: 0 };
+        rotMap[rot].totalPoints++;
+        if (outcome === 'home_point') rotMap[rot].pointsMade++;
+        if (outcome === 'away_point') rotMap[rot].pointsLost++;
+      }
+      if (outcome === 'home_point') totalPointsMade++;
+      if (outcome === 'away_point') totalErrors++;
+
+      acts.forEach(act => {
+        const f = String(act?.fundamental || '').toLowerCase();
+        const e = Number(act?.evaluation !== undefined ? act.evaluation : (act?.value || 0));
+        const p = getP(act?.player);
+
+        switch (f) {
+          case 'a':
+            _addEval(p.attack,  e); _addEval(team.attack,  e);
+            if (e === 5)      { p.pointsMade++; _addEval(opp.defense,   1); }
+            else if (e === 1) { p.errors++;     _addEval(opp.defense,   5); }
+            else              {                 _addEval(opp.defense,   Math.max(1, Math.min(5, 5 - e + 1))); }
+            _addEval(giocoOverview.attack, e);
+            if (rot) _addEval(getGRS(rot).attack, e);
+            if (lastRcvEval !== null) {
+              const rk = lastRcvEval >= 4 ? 'R5' : (lastRcvEval >= 3 ? 'R4' : 'R3');
+              _addEval(arBuckets[rk], e); lastRcvEval = null;
+            }
+            if (lastDefEval !== null) {
+              const dk = lastDefEval >= 4 ? 'D5' : (lastDefEval >= 3 ? 'D4' : 'D3');
+              _addEval(adBuckets[dk], e); lastDefEval = null;
+            }
+            break;
+          case 'b':
+            _addEval(p.serve,   e); _addEval(team.serve,   e);
+            if (e === 5)      { p.pointsMade++; _addEval(opp.reception, 1); }
+            else if (e === 1) { p.errors++;     _addEval(opp.reception, 5); }
+            else              {                 _addEval(opp.reception, Math.max(1, Math.min(5, 5 - e + 1))); }
+            _addEval(giocoOverview.serve, e);
+            if (rot) _addEval(getGRS(rot).serve, e);
+            break;
+          case 'm':
+            _addEval(p.block,   e); _addEval(team.block,   e);
+            if (e === 5)      { p.pointsMade++; _addEval(opp.attack, 1); }
+            else if (e === 1) { p.errors++;     _addEval(opp.attack, 4); }
+            break;
+          case 'r':
+            _addEval(p.reception, e); _addEval(team.reception, e);
+            if      (e === 1) _addEval(opp.serve, 5);
+            else if (e >= 4)  _addEval(opp.serve, 2);
+            else              _addEval(opp.serve, 3);
+            _addEval(giocoOverview.reception, e);
+            if (rot) {
+              _addEval(getGRS(rot).reception, e);
+              if (!recByRot[rot]) recByRot[rot] = Object.assign({ rotation: rot }, _mkStat());
+              _addEval(recByRot[rot], e);
+            }
+            lastRcvEval = e; lastDefEval = null;
+            break;
+          case 'd':
+            _addEval(p.defense, e); _addEval(team.defense, e);
+            if      (e === 1) _addEval(opp.attack, 5);
+            else if (e >= 4)  _addEval(opp.attack, 2);
+            else              _addEval(opp.attack, 3);
+            _addEval(giocoOverview.defense, e);
+            if (rot) _addEval(getGRS(rot).defense, e);
+            lastDefEval = e; lastRcvEval = null;
+            break;
+        }
+      });
+
+      // ── Giri di Rice ───────────────────────────────────────────────────────
+      if (rot) {
+        let phase = grCurrentPhase;
+        for (let i = 0; i < acts.length; i++) {
+          const f0 = String(acts[i]?.fundamental || '').toLowerCase();
+          if (f0 === 'b') { phase = 'b'; break; }
+          if (f0 === 'r') { phase = 'r'; break; }
+        }
+        if (phase === null) phase = 'r';
+        grCurrentPhase = (outcome !== 'continue') ? (phase === 'b' ? 'r' : 'b') : phase;
+
+        if (phase === 'b') {
+          const sr = getSR(rot); sr.total++;
+          if (outcome === 'home_point') {
+            let scored = false;
+            for (let j = acts.length - 1; j >= 0; j--) {
+              const fa = String(acts[j]?.fundamental || '').toLowerCase();
+              const ea = Number(acts[j]?.evaluation !== undefined ? acts[j].evaluation : (acts[j]?.value || 0));
+              if (fa === 'a' && ea >= 4) { sr.attackPts++; scored = true; break; }
+              if (fa === 'm' && ea === 5) { sr.blockPts++;  scored = true; break; }
+              if (fa === 'b' && ea === 5) { sr.breakPts++;  scored = true; break; }
+            }
+            if (!scored) sr.breakPts++;
+          } else if (outcome === 'away_point') {
+            if (acts.some(a => String(a?.fundamental || '').toLowerCase() === 'b' &&
+                Number(a?.evaluation !== undefined ? a.evaluation : (a?.value || 0)) === 1)) sr.errors++;
+          }
+        } else {
+          const rr = getRR(rot); rr.total++;
+          if (outcome === 'home_point') {
+            if (acts.some(a => String(a?.fundamental || '').toLowerCase() === 'm' &&
+                Number(a?.evaluation !== undefined ? a.evaluation : (a?.value || 0)) === 5)) rr.blockPts++;
+            else rr.attackPts++;
+          } else if (outcome === 'away_point') {
+            if (acts.some(a => String(a?.fundamental || '').toLowerCase() === 'r' &&
+                Number(a?.evaluation !== undefined ? a.evaluation : (a?.value || 0)) === 1)) rr.oppServeErrors++;
+          }
+        }
+      }
+
+      // ── Rallies ────────────────────────────────────────────────────────────
+      if (acts.length) {
+        const f0 = String(acts[0]?.fundamental || '').toLowerCase();
+        if (f0 === 'b') rallyPhase = 'b';
+        else if (f0 === 'r') rallyPhase = 'r';
+      }
+      const quartine = acts.map(act => {
+        const player = String(act?.player || '').padStart(2, '0');
+        const fund   = String(act?.fundamental || '').toLowerCase();
+        const val    = Number(act?.evaluation !== undefined ? act.evaluation : (act?.value || 0));
+        return { type: 'action', player, fundamental: fund, value: val, raw: player + fund + val };
+      });
+      rallies.push({
+        set:          setNum,
+        row:          idx + 1,
+        quartine,
+        ourScore:     rallyOurScore,
+        theirScore:   rallyTheirScore,
+        isPoint:      outcome === 'home_point',
+        isError:      outcome === 'away_point',
+        rotation:     rot || 0,
+        phase:        rallyPhase,
+        actionString: String(entry?.actionString || ''),
+        pointDesc:    outcome === 'home_point' ? 'Punto' : '',
+        errorDesc:    outcome === 'away_point' ? 'Errore' : '',
+      });
+      if (outcome === 'home_point')       rallyOurScore++;
+      else if (outcome === 'away_point')  rallyTheirScore++;
+      if (outcome !== 'continue') rallyPhase = outcome === 'home_point' ? 'b' : 'r';
+    });
+  });
+
+  // ── Build riepilogo ─────────────────────────────────────────────────────────
+  const playerStats = Object.values(pMap).map(p => {
+    const tot = p.attack.tot + p.serve.tot + p.block.tot;
+    return {
+      number: p.number,
+      name:   (p.surname + (p.name ? ' ' + p.name : '')).trim() || p.number,
+      attack: _finalizeStat(p.attack),
+      serve:  _finalizeStat(p.serve),
+      block:  { kill: p.block.kill, pos: p.block.pos, exc: p.block.exc, neg: p.block.neg, err: p.block.err },
+      points: {
+        made:      p.pointsMade,
+        madePct:   tot ? +((p.pointsMade / tot) * 100).toFixed(1) : 0,
+        errors:    p.errors,
+        errorsPct: tot ? +((p.errors / tot) * 100).toFixed(1) : 0,
+        balance:   p.pointsMade - p.errors,
+      },
+    };
+  });
+  const playerReception = Object.values(pMap)
+    .filter(p => p.reception.tot > 0)
+    .map(p => Object.assign({ number: p.number, name: (p.surname + ' ' + p.name).trim() }, _finalizeStat(p.reception)));
+  const playerDefense = Object.values(pMap)
+    .filter(p => p.defense.tot > 0)
+    .map(p => Object.assign({ number: p.number, name: (p.surname + ' ' + p.name).trim() }, _finalizeStat(p.defense)));
+
+  const riepilogo = {
+    playerStats, playerReception, playerDefense,
+    team: {
+      attack:    _finalizeStat(team.attack),    serve:     _finalizeStat(team.serve),
+      block:     _finalizeStat(team.block),     reception: _finalizeStat(team.reception),
+      defense:   _finalizeStat(team.defense),
+    },
+    opponent: {
+      attack:    _finalizeStat(opp.attack),     serve:     _finalizeStat(opp.serve),
+      reception: _finalizeStat(opp.reception),  defense:   _finalizeStat(opp.defense),
+    },
+    rotations: Object.values(rotMap),
+    totalPointsMade, totalErrors,
+  };
+
+  // ── Build gioco ─────────────────────────────────────────────────────────────
+  const attackFromReception = {};
+  const attackFromDefense   = {};
+  ['R5', 'R4', 'R3'].forEach(k => {
+    const s = _finalizeStat(arBuckets[k]);
+    attackFromReception[k] = [{ role: 'ATT', attacks: s.tot, pointsStr: s.kill + '/' + s.err }];
+  });
+  ['D5', 'D4', 'D3'].forEach(k => {
+    const s = _finalizeStat(adBuckets[k]);
+    attackFromDefense[k] = [{ role: 'ATT', attacks: s.tot, pointsStr: s.kill + '/' + s.err }];
+  });
+  const receptionByRotation = Object.values(recByRot).map(({ rotation: rt, ...rest }) =>
+    Object.assign({ rotation: rt }, _finalizeStat(rest))
+  );
+  const gioco = {
+    overview: {
+      attack:    _finalizeStat(giocoOverview.attack),
+      serve:     _finalizeStat(giocoOverview.serve),
+      reception: _finalizeStat(giocoOverview.reception),
+      defense:   _finalizeStat(giocoOverview.defense),
+    },
+    rotationStats: Object.values(giocoRotStats).map(rs => ({
+      rotation: rs.rotation,
+      fundamentals: {
+        attack:    _finalizeStat(rs.attack),   serve:     _finalizeStat(rs.serve),
+        reception: _finalizeStat(rs.reception), defense:  _finalizeStat(rs.defense),
+      },
+    })),
+    attackFromReception, attackFromDefense, receptionByRotation,
+  };
+
+  // ── Build giriDiRice ────────────────────────────────────────────────────────
+  const giriDiRice = {
+    serveRotations:   Object.values(serveRot),
+    receiveRotations: Object.values(receiveRot),
+  };
+
+  console.log('[dataParser] Statistiche calcolate da dati grezzi:',
+    'playerStats:', riepilogo.playerStats.length,
+    'rallies:', rallies.length,
+    'rotazioni:', riepilogo.rotations.length
+  );
+
+  return { riepilogo, gioco, giriDiRice, rallies };
 }
 
 // ─── Parse Riepilogo_ALL.xlsx (aggregated stats) ───────────────────────────

@@ -349,7 +349,7 @@ export default function App() {
     : '';
   const isAdmin = userAccess?.role === 'admin';
   const canUseAdminUi = isAdmin && adminViewMode === 'admin';
-  const assignedProfile = userAccess?.assignedProfile || 'pro';
+  const assignedProfile = userAccess?.assignedProfile || 'base';
   const availableUpgradeTargets = useMemo(
     () => Object.keys(PROFILE_META).filter(p => PROFILE_ORDER[p] > PROFILE_ORDER[assignedProfile]),
     [assignedProfile]
@@ -550,7 +550,7 @@ export default function App() {
         const access = loadedAccess || ensuredAccess;
         if (cancelled) return;
         setUserAccess(access);
-        const forcedProfile = access?.assignedProfile || 'pro';
+        const forcedProfile = access?.assignedProfile || 'base';
         setActiveProfile(forcedProfile);
         try { localStorage.setItem('vpa_active_profile', forcedProfile); } catch {}
         if (access?.role === 'admin') {
@@ -762,6 +762,12 @@ export default function App() {
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
+
+  useEffect(() => {
+    setUserMenuOpen(false);
+    const t = setTimeout(() => setUserMenuOpen(false), 250);
+    return () => clearTimeout(t);
+  }, [user?.uid]);
 
   useEffect(() => {
     let mql = null;
@@ -1360,6 +1366,33 @@ export default function App() {
       onWeightProfileChange={handleProfileLoad}
     >
     <div className="h-screen flex flex-col overflow-hidden relative" onTouchStart={handleAppTouchStart} onTouchEnd={handleAppTouchEnd}>
+      <style>{`
+        @keyframes vpa-admin-sidebar-marquee {
+          0% { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+        .vpa-admin-sidebar-marquee-wrap {
+          position: relative;
+          overflow: hidden;
+          min-width: 0;
+          flex: 1 1 auto;
+          white-space: nowrap;
+          mask-image: linear-gradient(to right, transparent 0, black 8px, black calc(100% - 8px), transparent 100%);
+          -webkit-mask-image: linear-gradient(to right, transparent 0, black 8px, black calc(100% - 8px), transparent 100%);
+        }
+        .vpa-admin-sidebar-marquee-track {
+          display: inline-flex;
+          align-items: center;
+          min-width: max-content;
+          animation: vpa-admin-sidebar-marquee 9s linear infinite;
+          will-change: transform;
+        }
+        .vpa-admin-sidebar-marquee-gap {
+          display: inline-block;
+          padding: 0 14px;
+          opacity: .45;
+        }
+      `}</style>
       {/* ── Header ── */}
       <header
         className="sticky top-0 z-50 flex-shrink-0 border-b border-white/5 px-2.5 sm:px-4 py-2.5 flex items-center justify-between gap-2"
@@ -1579,7 +1612,17 @@ export default function App() {
                 } : undefined}
               >
                 <span className="text-base w-5 text-center leading-none">{section.icon}</span>
-                <span className="truncate">{section.label}</span>
+                {canUseAdminUi ? (
+                  <span className="vpa-admin-sidebar-marquee-wrap">
+                    <span className="vpa-admin-sidebar-marquee-track">
+                      <span>{section.label}</span>
+                      <span aria-hidden="true" className="vpa-admin-sidebar-marquee-gap">•</span>
+                      <span aria-hidden="true">{section.label}</span>
+                    </span>
+                  </span>
+                ) : (
+                  <span className="truncate">{section.label}</span>
+                )}
                 {active && curSubTabs.length > 0 && (
                   <span className="ml-auto text-[9px] font-normal text-gray-600">
                     {curSubTabs.length}
