@@ -62,8 +62,8 @@ function deduceOpponentServe(ourReception, rallies) {
   return {
     val5: serve5, val4: serve4, val3: serve3, val2: serve2, val1: serve1,
     total,
-    efficacy: total > 0 ? (serve5 - serve1) / total : 0,
-    efficiency: total > 0 ? (serve5 + serve4 - serve1) / total : 0,
+    efficacy:   total > 0 ? serve5 / total : 0,                          // Efficacia = Azioni Vincenti / Totale
+    efficiency: total > 0 ? (serve5 - serve1 - serve2) / total : 0,      // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale
     mediaPond: total > 0 ? (serve1 + 2*serve2 + 3*serve3 + 4*serve4 + 5*serve5) / total : 0,
   };
 }
@@ -103,8 +103,8 @@ function deduceOpponentAttack(ourDefense, rallies, ourBlock) {
   return {
     val5: attack5, val4: attack4, val3: attack3, val2: attack2, val1: attack1,
     total,
-    efficacy: total > 0 ? (attack5 - attack1) / total : 0,
-    efficiency: total > 0 ? (attack5 + attack4 - attack1) / total : 0,
+    efficacy:   total > 0 ? attack5 / total : 0,                           // Efficacia = Azioni Vincenti / Totale
+    efficiency: total > 0 ? (attack5 - attack1 - attack2) / total : 0,     // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale
     mediaPond: total > 0 ? (attack1 + 2*attack2 + 3*attack3 + 4*attack4 + 5*attack5) / total : 0,
   };
 }

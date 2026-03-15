@@ -334,14 +334,13 @@ function DetailedOppStatCard({ title, data, type }) {
   const total = data.total || 0;
   const pct = (v) => total > 0 ? ((v / total) * 100).toFixed(1) + '%' : '0.0%';
 
-  // Compute efficacy if not present (defense/reception don't have it set)
+  // Compute efficacy: Efficacia = Azioni Vincenti / Totale (val5 for serve/attack, val4+5 for defense/reception)
   let efficacy = data.efficacy;
   if (efficacy === undefined || efficacy === 0) {
     if (isServeOrAttack) {
-      efficacy = total > 0 ? ((data.val5 || 0) - (data.val1 || 0)) / total : 0;
+      efficacy = total > 0 ? (data.val5 || 0) / total : 0;                   // Efficacia = val5 / totale
     } else {
-      // For defense/reception: (val4+5 - val1) / total  analogous to (R5+R4-R1)/tot
-      efficacy = total > 0 ? ((data['val4+5'] || 0) - (data.val1 || 0)) / total : 0;
+      efficacy = total > 0 ? (data['val4+5'] || 0) / total : 0;              // Efficacia = val4+5 / totale
     }
   }
 
@@ -754,19 +753,14 @@ function computeTeamFundAverages(matchAnalytics) {
     ];
     for (const [key, data, total] of mappings) {
       if (!data || total <= 0) continue;
-      // Compute from raw counts using standard Federvolley/DataVolley definitions:
-      //   Efficacia  = positive / total      (quante volte ho fatto bene)
-      //   Efficienza = (positive - err) / total  (netto errori)
-      // defense & reception: positive = kill(5) + pos(4); others: positive = kill(5) only
-      let effcy, effncy;
-      if (key === 'defense' || key === 'reception') {
-        const pos45 = (data.kill || 0) + (data.pos || 0);
-        effcy  = pos45 / total;
-        effncy = (pos45 - (data.err || 0)) / total;
-      } else {
-        effcy  = (data.kill || 0) / total;
-        effncy = ((data.kill || 0) - (data.err || 0)) / total;
-      }
+      // Compute from raw counts using official volleyball definitions:
+      //   Efficacia  = Azioni Vincenti / Totale × 100 = kill / total
+      //   Efficienza = (Azioni Vincenti - Errori - Muri Subiti) / Totale × 100 = (kill - err - neg) / total
+      const kill = data.kill || 0;
+      const err  = data.err  || 0;
+      const neg  = data.neg  || 0;
+      const effcy  = kill / total;
+      const effncy = (kill - err - neg) / total;
       acc[key].efficacy.push(effcy * 100);
       acc[key].efficiency.push(effncy * 100);
       // Media Ponderata — our team has all individual values (kill=5, pos=4, exc=3, neg=2, err=1)
@@ -803,13 +797,11 @@ function getMatchTeamValue(selectedMatchMA, key, metric) {
     const mp = (1*(data.err||0) + 2*(data.neg||0) + 3*(data.exc||0) + 4*(data.pos||0) + 5*(data.kill||0)) / tot;
     return Number.isFinite(mp) ? roundValue(mp) : null;
   }
-  if (key === 'defense' || key === 'reception') {
-    const pos45 = (data.kill || 0) + (data.pos || 0);
-    value = metric === 'efficacy' ? pos45 / tot : (pos45 - (data.err || 0)) / tot;
-  } else {
-    const kill = data.kill || 0;
-    value = metric === 'efficacy' ? kill / tot : (kill - (data.err || 0)) / tot;
-  }
+  // Official volleyball definitions applied uniformly to all fundamentals:
+  //   Efficacia  = Azioni Vincenti / Totale = kill / tot
+  //   Efficienza = (Azioni Vincenti - Errori - Muri Subiti) / Totale = (kill - err - neg) / tot
+  const kill = data.kill || 0;
+  value = metric === 'efficacy' ? kill / tot : (kill - (data.err || 0) - (data.neg || 0)) / tot;
   return Number.isFinite(value) ? roundValue(value * 100) : null;
 }
 

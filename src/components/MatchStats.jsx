@@ -201,13 +201,13 @@ function aggregateFundRows(matches, fund, matchWeightMap) {
   }
   return Object.values(map).map(p => {
     const tot = p.tot || 0;
-    const efficacy   = tot > 0 ? (p.kill - p.err) / tot : null;
-    const efficiency = tot > 0 ? (p.kill + (p.pos||0) - (p.neg||0) - p.err) / tot : null;
+    const efficacy   = tot > 0 ? p.kill / tot : null;                              // Efficacia = Azioni Vincenti / Totale
+    const efficiency = tot > 0 ? (p.kill - p.err - (p.neg||0)) / tot : null;       // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale
     const cfg = FUND_CFG[fund];
     let pct = null;
     if (cfg.hasTot && tot > 0) pct = fund === 'reception' ? (p.kill + p.pos + p.exc) / tot : p.kill / tot;
-    const blkEff = fund === 'block' && (p.kill + p.err) > 0
-      ? (p.kill - p.err) / (p.kill + p.pos + p.exc + p.neg + p.err) : null;
+    const blkEff = fund === 'block' && tot > 0
+      ? p.kill / tot : null;  // Efficacia muro = Kill / Totale
     const weightedEff = p.weightedEffVals.length > 0
       ? p.weightedEffVals.reduce((s, v) => s + v, 0) / p.weightedEffVals.length : null;
     return { ...p, efficacy: fund==='block'?blkEff:efficacy, efficiency: fund==='block'?null:efficiency, pct, weightedEff };
@@ -239,8 +239,8 @@ function buildOpponentTableData(matches, fund, standings) {
 
   return Object.values(oppMap).map(o => {
     const tot = o.tot;
-    const efficacy   = tot > 0 ? (o.kill - o.err) / tot : null;
-    const efficiency = tot > 0 ? (o.kill + o.pos - o.neg - o.err) / tot : null;
+    const efficacy   = tot > 0 ? o.kill / tot : null;                          // Efficacia = Azioni Vincenti / Totale
+    const efficiency = tot > 0 ? (o.kill - o.err - o.neg) / tot : null;        // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale
     const valMedio   = valoreMedio(o.kill, o.pos, o.exc, o.neg, o.err);
     const deltaCamp  = (valMedio!=null && valCamp!=null) ? valMedio - valCamp : null;
     const si         = findOpponentRank(standings, o.name);
@@ -298,8 +298,8 @@ function buildPlayerTableData(matches, fund) {
 
   return Object.values(playerMap).map(p => {
     const tot = p.tot;
-    const efficacy   = tot > 0 ? (p.kill - p.err) / tot : null;
-    const efficiency = (fund !== 'block' && tot > 0) ? (p.kill + p.pos - p.neg - p.err) / tot : null;
+    const efficacy   = tot > 0 ? p.kill / tot : null;                                          // Efficacia = Azioni Vincenti / Totale
+    const efficiency = (fund !== 'block' && tot > 0) ? (p.kill - p.err - p.neg) / tot : null; // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale
     const valMedio   = valoreMedio(p.kill, p.pos, p.exc, p.neg, p.err);
     const deltaSquadra = (valMedio!=null && valSquadra!=null) ? valMedio - valSquadra : null;
     return {
@@ -362,29 +362,29 @@ const COL_GROUPS = [
     {key:'att_kill',    label:'Kill', fmt:fNum, colorFn:null},
     {key:'att_tot',     label:'Tot',  fmt:fNum, colorFn:null},
     {key:'att_err',     label:'Err',  fmt:fNum, colorFn:null},
-    {key:'att_killPct', label:'%Kill',fmt:fPct, colorFn:killColor},
-    {key:'att_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
+    {key:'att_killPct', label:'%Kill',     fmt:fPct, colorFn:killColor},
+    {key:'att_eff',     label:'Efficacia', fmt:fEff, colorFn:effColor},
   ]},
   { id:'battuta',   label:'BATTUTA',  color:'#8b5cf6', bg:'rgba(139,92,246,0.08)', cols:[
-    {key:'ser_kill',    label:'Ace',  fmt:fNum, colorFn:null},
-    {key:'ser_tot',     label:'Tot',  fmt:fNum, colorFn:null},
-    {key:'ser_err',     label:'Err',  fmt:fNum, colorFn:null},
-    {key:'ser_acePct',  label:'%Ace', fmt:fPct, colorFn:killColor},
-    {key:'ser_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
+    {key:'ser_kill',    label:'Ace',       fmt:fNum, colorFn:null},
+    {key:'ser_tot',     label:'Tot',       fmt:fNum, colorFn:null},
+    {key:'ser_err',     label:'Err',       fmt:fNum, colorFn:null},
+    {key:'ser_acePct',  label:'%Ace',      fmt:fPct, colorFn:killColor},
+    {key:'ser_eff',     label:'Efficacia', fmt:fEff, colorFn:effColor},
   ]},
   { id:'ricezione', label:'RICEZIONE',color:'#0ea5e9', bg:'rgba(14,165,233,0.08)', cols:[
-    {key:'rec_tot',     label:'Tot',  fmt:fNum, colorFn:null},
-    {key:'rec_err',     label:'Err',  fmt:fNum, colorFn:null},
-    {key:'rec_posPct',  label:'%Pos', fmt:fPct, colorFn:recColor},
-    {key:'rec_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
+    {key:'rec_tot',     label:'Tot',       fmt:fNum, colorFn:null},
+    {key:'rec_err',     label:'Err',       fmt:fNum, colorFn:null},
+    {key:'rec_posPct',  label:'%Pos',      fmt:fPct, colorFn:recColor},
+    {key:'rec_eff',     label:'Efficacia', fmt:fEff, colorFn:effColor},
   ]},
   { id:'muro',      label:'MURO',     color:'#f59e0b', bg:'rgba(245,158,11,0.08)', cols:[
     {key:'blk_kill',    label:'Kill', fmt:fNum, colorFn:null},
     {key:'blk_err',     label:'Err',  fmt:fNum, colorFn:null},
   ]},
   { id:'difesa',    label:'DIFESA',   color:'#10b981', bg:'rgba(16,185,129,0.08)',cols:[
-    {key:'def_tot',     label:'Tot',  fmt:fNum, colorFn:null},
-    {key:'def_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
+    {key:'def_tot',     label:'Tot',       fmt:fNum, colorFn:null},
+    {key:'def_eff',     label:'Efficacia', fmt:fEff, colorFn:effColor},
   ]},
   { id:'punti',     label:'PUNTI',    color:'#94a3b8', bg:'rgba(148,163,184,0.06)',cols:[
     {key:'pts_made',    label:'Fatti',fmt:fNum, colorFn:null},
@@ -395,14 +395,14 @@ const OPP_GROUPS = [
   { id:'opp_att', label:'ATT. AVV.', color:'#f43f5e', bg:'rgba(244,63,94,0.06)', cols:[
     {key:'opp_att_kill',    label:'Kill', fmt:fNum, colorFn:null},
     {key:'opp_att_tot',     label:'Tot',  fmt:fNum, colorFn:null},
-    {key:'opp_att_killPct', label:'%Kill',fmt:fPct, colorFn:killColor},
-    {key:'opp_att_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
+    {key:'opp_att_killPct', label:'%Kill',     fmt:fPct, colorFn:killColor},
+    {key:'opp_att_eff',     label:'Efficacia', fmt:fEff, colorFn:effColor},
   ]},
   { id:'opp_ser', label:'BAT. AVV.', color:'#8b5cf6', bg:'rgba(139,92,246,0.06)', cols:[
-    {key:'opp_ser_kill',    label:'Ace',  fmt:fNum, colorFn:null},
-    {key:'opp_ser_tot',     label:'Tot',  fmt:fNum, colorFn:null},
-    {key:'opp_ser_acePct',  label:'%Ace', fmt:fPct, colorFn:killColor},
-    {key:'opp_ser_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
+    {key:'opp_ser_kill',    label:'Ace',       fmt:fNum, colorFn:null},
+    {key:'opp_ser_tot',     label:'Tot',       fmt:fNum, colorFn:null},
+    {key:'opp_ser_acePct',  label:'%Ace',      fmt:fPct, colorFn:killColor},
+    {key:'opp_ser_eff',     label:'Efficacia', fmt:fEff, colorFn:effColor},
   ]},
 ];
 
@@ -509,11 +509,11 @@ export default function MatchStats({ matches, analytics, standings }) {
       t.neg+=r.neg||0; t.err+=r.err||0; t.tot+=r.tot||0;
     }
     const cfg = FUND_CFG[activeFund];
-    const eff   = t.tot>0?(t.kill-t.err)/t.tot:null;
-    const effic = t.tot>0?(t.kill+t.pos-t.neg-t.err)/t.tot:null;
+    const eff   = t.tot>0?t.kill/t.tot:null;                                // Efficacia = Azioni Vincenti / Totale
+    const effic = t.tot>0?(t.kill-t.err-t.neg)/t.tot:null;                  // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale
     let pct=null;
     if (cfg.hasTot && t.tot>0) pct = activeFund==='reception'?(t.kill+t.pos+t.exc)/t.tot:t.kill/t.tot;
-    const blkEff = activeFund==='block'&&(t.kill+t.err)>0?(t.kill-t.err)/(t.kill+t.pos+t.exc+t.neg+t.err):null;
+    const blkEff = activeFund==='block'&&t.tot>0?t.kill/t.tot:null;         // Efficacia muro = Kill / Totale
     return { ...t, efficacy:activeFund==='block'?blkEff:eff, efficiency:activeFund==='block'?null:effic, pct, weightedEff:null };
   }, [playerRows, activeFund]);
 
@@ -649,7 +649,7 @@ export default function MatchStats({ matches, analytics, standings }) {
             </tbody>
           </table>
         </div>
-        <div className="text-[10px] text-gray-600">Kill%=kill/tot · Ace%=ace/tot · Pos%=(kill+pos+exc)/tot · Eff%=(kill−err)/tot</div>
+        <div className="text-[10px] text-gray-600">Kill%=kill/tot · Ace%=ace/tot · Pos%=(kill+pos+exc)/tot · Efficacia=kill/tot · Efficienza=(kill−err−neg)/tot</div>
       </div>
 
       {/* ══ Section 2: Per-player fundamental tables ══════════════════════════ */}
@@ -849,8 +849,8 @@ function PlayerFundTable({ rows, totals, fund, cfg, hasWeightedEff }) {
     { key:'err',   label:'Err',         fmt:fInt, colorFn:null },
     ...(cfg.hasTot?[{key:'tot',label:'Tot',fmt:fInt,colorFn:null}]:[]),
     ...(cfg.pctLabel?[{key:'pct',label:cfg.pctLabel,fmt:fPct,colorFn:cfg.colorFn}]:[]),
-    { key:'efficacy',  label:'Eff%',   fmt:fEff, colorFn:effColor },
-    ...(fund!=='block'?[{key:'efficiency',label:'Effic%',fmt:fEff,colorFn:effColor}]:[]),
+    { key:'efficacy',  label:'Efficacia',  fmt:fEff, colorFn:effColor },
+    ...(fund!=='block'?[{key:'efficiency',label:'Efficienza',fmt:fEff,colorFn:effColor}]:[]),
     ...(hasWeightedEff?[{key:'weightedEff',label:'Eff% Pes.',fmt:fEff,colorFn:effColor}]:[]),
   ];
   const derivedCols = cols.slice(5);
@@ -997,8 +997,8 @@ function OpponentFullTable({ rows, fund }) {
                 {l}{sortKey===k?(sortAsc?' ↑':' ↓'):''}
               </th>
             ))}
-            <th onClick={()=>hs('efficacy')}   className={thCls('efficacy')}>Eff%{sortKey==='efficacy'?(sortAsc?' ↑':' ↓'):''}</th>
-            <th onClick={()=>hs('efficiency')} className={thCls('efficiency')}>Effic%{sortKey==='efficiency'?(sortAsc?' ↑':' ↓'):''}</th>
+            <th onClick={()=>hs('efficacy')}   className={thCls('efficacy')}>Efficacia{sortKey==='efficacy'?(sortAsc?' ↑':' ↓'):''}</th>
+            <th onClick={()=>hs('efficiency')} className={thCls('efficiency')}>Efficienza{sortKey==='efficiency'?(sortAsc?' ↑':' ↓'):''}</th>
             <th onClick={()=>hs('valMedio')}   className={thCls('valMedio')+' text-amber-400/90'}>Val.Med.{sortKey==='valMedio'?(sortAsc?' ↑':' ↓'):''}</th>
             <th onClick={()=>hs('valCamp')}    className={thCls('valCamp')}>Med.Camp.{sortKey==='valCamp'?(sortAsc?' ↑':' ↓'):''}</th>
             <th onClick={()=>hs('deltaCamp')}  className={thCls('deltaCamp')}>Δ Camp.{sortKey==='deltaCamp'?(sortAsc?' ↑':' ↓'):''}</th>
@@ -1106,8 +1106,8 @@ function PlayerFullTable({ rows, fund }) {
             {[['killPct',valLabel+'%'],['posPct','+%'],['excPct','!%'],['negPct','−%'],['errPct','Err%']].map(([k,l])=>(
               <th key={k} onClick={()=>hs(k)} className={thCls(k)}>{l}{sortKey===k?(sortAsc?' ↑':' ↓'):''}</th>
             ))}
-            <th onClick={()=>hs('efficacy')}    className={thCls('efficacy')}>Eff%{sortKey==='efficacy'?(sortAsc?' ↑':' ↓'):''}</th>
-            <th onClick={()=>hs('efficiency')}  className={thCls('efficiency')}>Effic%{sortKey==='efficiency'?(sortAsc?' ↑':' ↓'):''}</th>
+            <th onClick={()=>hs('efficacy')}    className={thCls('efficacy')}>Efficacia{sortKey==='efficacy'?(sortAsc?' ↑':' ↓'):''}</th>
+            <th onClick={()=>hs('efficiency')}  className={thCls('efficiency')}>Efficienza{sortKey==='efficiency'?(sortAsc?' ↑':' ↓'):''}</th>
             <th onClick={()=>hs('valMedio')}    className={thCls('valMedio')+' text-amber-400/90'}>Val.Med.{sortKey==='valMedio'?(sortAsc?' ↑':' ↓'):''}</th>
             <th onClick={()=>hs('valSquadra')}  className={thCls('valSquadra')}>Media Squadra{sortKey==='valSquadra'?(sortAsc?' ↑':' ↓'):''}</th>
             <th onClick={()=>hs('deltaSquadra')}className={thCls('deltaSquadra')}>Δ Squadra{sortKey==='deltaSquadra'?(sortAsc?' ↑':' ↓'):''}</th>

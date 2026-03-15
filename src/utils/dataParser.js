@@ -732,8 +732,8 @@ function _finalizeStat(s) {
   if (!s || !s.tot) return Object.assign({}, s || _mkStat(), { pct: 0, efficacy: 0, efficiency: 0 });
   return Object.assign({}, s, {
     pct:        +(( s.kill                        / s.tot) * 100).toFixed(1),
-    efficacy:   +(((s.kill - s.err)               / s.tot) * 100).toFixed(1),
-    efficiency: +(((s.kill - s.err - s.neg)       / s.tot) * 100).toFixed(1),
+    efficacy:   +(( s.kill                        / s.tot) * 100).toFixed(1),   // Efficacia = Azioni Vincenti / Totale × 100
+    efficiency: +(((s.kill - s.err - s.neg)       / s.tot) * 100).toFixed(1),   // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale × 100
   });
 }
 function _parseRot(raw) {
