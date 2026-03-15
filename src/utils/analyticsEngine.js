@@ -5,6 +5,14 @@
 
 import { INVERSE_MAP, DEFAULT_WEIGHTS, RESULT_FACTORS, TEAM_MAP, ROLE_CORE_FUNDAMENTALS, DEFAULT_FNC_CONFIG } from './constants';
 
+// ─── Date normalisation helper (DD/MM/YYYY or YYYY-MM-DD → YYYY-MM-DD) ───────
+function _normDate(d) {
+  if (!d) return '';
+  const m = String(d).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return String(d);
+}
+
 // ─── Reconstruct Opponent Stats from Our Data ──────────────────────────────
 export function reconstructOpponent(match) {
   if (!match.riepilogo) return null;
@@ -372,7 +380,7 @@ export function computePlayerTrends(allMatchPlayerStats) {
 
   // Sort by date and compute trends
   for (const player of Object.values(playerMap)) {
-    player.matches.sort((a, b) => a.date.localeCompare(b.date));
+    player.matches.sort((a, b) => _normDate(a.date).localeCompare(_normDate(b.date)));
 
     // Compute rolling averages (window of 3)
     // IMPORTANT: exclude matches where the player had 0 total actions in a fundamental

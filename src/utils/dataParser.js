@@ -159,9 +159,16 @@ function parseMetadata(wb) {
 
   let date = '';
   if (dateRaw instanceof Date) {
-    date = dateRaw.toISOString().split('T')[0];
+    date = dateRaw.toISOString().split('T')[0]; // YYYY-MM-DD
   } else if (typeof dateRaw === 'string') {
-    date = dateRaw;
+    const raw = dateRaw.trim();
+    // Normalize DD/MM/YYYY → YYYY-MM-DD for correct chronological sorting
+    const dmyMatch = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (dmyMatch) {
+      date = `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+    } else {
+      date = raw;
+    }
   }
 
   return { teamName, opponent, date, matchType, homeAway, phase };

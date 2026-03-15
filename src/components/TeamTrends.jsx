@@ -4,6 +4,14 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { COLORS } from '../utils/constants';
 import { analyzeRotationalChains } from '../utils/analyticsEngine';
 
+// Normalise DD/MM/YYYY or YYYY-MM-DD → YYYY-MM-DD for correct chronological sort
+function _normDate(d) {
+  if (!d) return '';
+  const m = String(d).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return String(d);
+}
+
 export default function TeamTrends({ analytics, matches, standings, dataMode = 'raw' }) {
   if (!analytics || matches.length < 2) {
     return (
@@ -22,7 +30,7 @@ export default function TeamTrends({ analytics, matches, standings, dataMode = '
   // Build timeline data
   const timelineData = useMemo(() => {
     return matchAnalytics
-      .sort((a, b) => (a.match.metadata.date || '').localeCompare(b.match.metadata.date || ''))
+      .sort((a, b) => _normDate(a.match.metadata.date).localeCompare(_normDate(b.match.metadata.date)))
       .map((ma, i) => {
         const team = ma.match.riepilogo?.team;
         const w = ma.matchWeight.final;

@@ -119,11 +119,12 @@ const SECTION_TABS = {
     { id: 'piano',        label: 'Piano',        icon: '🔗', minProfile: 'promax' },
   ],
   sistema: [
-    { id: 'dati',      label: 'Dati',      icon: '☰',  minProfile: 'base'   },
-    { id: 'guida',     label: 'Guida',     icon: '❓', minProfile: 'base'   },
-    { id: 'glossario', label: 'Glossario', icon: '📖', minProfile: 'base'   },
-    { id: 'config',    label: 'Config',    icon: '🔧', minProfile: 'pro'    },
-    { id: 'grafici',   label: 'Grafici',   icon: '📊', minProfile: 'promax' },
+    { id: 'tipologia', label: 'Tipologia Gare', icon: '🏷', minProfile: 'base'   },
+    { id: 'dati',      label: 'Dati',           icon: '☰',  minProfile: 'base'   },
+    { id: 'guida',     label: 'Guida',          icon: '❓', minProfile: 'base'   },
+    { id: 'glossario', label: 'Glossario',      icon: '📖', minProfile: 'base'   },
+    { id: 'config',    label: 'Config',         icon: '🔧', minProfile: 'pro'    },
+    { id: 'grafici',   label: 'Grafici',        icon: '📊', minProfile: 'promax' },
   ],
 };
 
@@ -192,6 +193,14 @@ export default function App() {
       const v = Number(localStorage.getItem('vpa_cap_max_priority'));
       return Number.isFinite(v) ? Math.min(5, Math.max(1, Math.round(v))) : 4;
     } catch { return 4; }
+  });
+
+  // ── Match-type / home-away filter ─────────────────────────────────────────
+  const [filterMatchType, setFilterMatchType] = useState(() => {
+    try { return localStorage.getItem('vpa_filter_match_type') || 'Campionato'; } catch { return 'Campionato'; }
+  });
+  const [filterHomeAway, setFilterHomeAway] = useState(() => {
+    try { return localStorage.getItem('vpa_filter_home_away') || 'all'; } catch { return 'all'; }
   });
 
   // ── FNC & Profile state ──────────────────────────────────────────────────
@@ -1235,19 +1244,49 @@ export default function App() {
     }
   }, [user, dataOwnerUid, canEditDataset]);
 
+  // ─── Available match types (derived from raw matches list) ──────────────
+  const availableMatchTypes = useMemo(() => {
+    const types = new Set();
+    for (const m of matches) {
+      const t = m.metadata?.matchType;
+      if (t && String(t).trim()) types.add(String(t).trim());
+    }
+    return Array.from(types).sort();
+  }, [matches]);
+
+  // ─── Filtered matches (by type + home/away, sorted by date) ─────────────
+  const filteredMatches = useMemo(() => {
+    let result = matches;
+    if (filterMatchType !== 'all') {
+      result = result.filter(m => (m.metadata?.matchType || '') === filterMatchType);
+    }
+    if (filterHomeAway !== 'all') {
+      result = result.filter(m => (m.metadata?.homeAway || '') === filterHomeAway);
+    }
+    // Normalise DD/MM/YYYY → YYYY-MM-DD before sorting so chronological order is always correct
+    const normDate = (d) => {
+      if (!d) return '';
+      const m = String(d).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      return m ? `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}` : String(d);
+    };
+    return [...result].sort((a, b) =>
+      normDate(a.metadata?.date).localeCompare(normDate(b.metadata?.date))
+    );
+  }, [matches, filterMatchType, filterHomeAway]);
+
   // ─── Fundamental baselines — depends only on match DATA (not on weights/FNC) ─
   const baselines = useMemo(() => {
-    if (matches.length === 0) return null;
-    return computeFundamentalBaselines(matches);
-  }, [matches]);
+    if (filteredMatches.length === 0) return null;
+    return computeFundamentalBaselines(filteredMatches);
+  }, [filteredMatches]);
 
   // ─── Computed analytics ──────────────────────────────────────────────────
   const analytics = useMemo(() => {
-    if (matches.length === 0) return null;
+    if (filteredMatches.length === 0) return null;
 
-    const matchAnalytics = matches.map(match => {
-      const matchWeight = computeMatchWeight(match, standings, matches, weights);
-      const fundWeights = computeFundamentalWeights(match, matches, standings);
+    const matchAnalytics = filteredMatches.map(match => {
+      const matchWeight = computeMatchWeight(match, standings, filteredMatches, weights);
+      const fundWeights = computeFundamentalWeights(match, filteredMatches, standings);
       const playerStats = computeWeightedPlayerStats(match, matchWeight, fundWeights);
       const chains      = analyzeRallyChains(match.rallies);
       const report      = generateMatchReport(match, matchWeight, standings);
@@ -1265,7 +1304,7 @@ export default function App() {
     const playerTrends = computePlayerTrends(allMatchPlayerStats);
 
     const rosterMap = {};
-    for (const m of matches) {
+    for (const m of filteredMatches) {
       for (const p of m.roster || []) {
         if (p.number && !rosterMap[p.number]) rosterMap[p.number] = p;
       }
@@ -1280,22 +1319,22 @@ export default function App() {
 
     // ─── Chain / sequence analytics (new Analisi Sequenze section) ───────────
     const chainData = {
-      rdToA:             analyzeRDtoAConversions(matches, roster),
-      sideOutVsTransition: analyzeSideOutVsTransition(matches, roster),
-      serveDefense:      analyzeServeDefenseChain(matches),
-      rallyLength:       analyzeRallyLengthPerformance(matches, roster),
-      rotationalChains:  analyzeRotationalChains(matches),
+      rdToA:             analyzeRDtoAConversions(filteredMatches, roster),
+      sideOutVsTransition: analyzeSideOutVsTransition(filteredMatches, roster),
+      serveDefense:      analyzeServeDefenseChain(filteredMatches),
+      rallyLength:       analyzeRallyLengthPerformance(filteredMatches, roster),
+      rotationalChains:  analyzeRotationalChains(filteredMatches),
     };
     const chainSuggestions = generateChainSuggestions(chainData, roster);
 
     // ─── Setter distribution analytics ──────────────────────────────────────
-    const setterDistribution = analyzeSetterDistribution(matches, roster);
+    const setterDistribution = analyzeSetterDistribution(filteredMatches, roster);
     const setterDiagnostics = buildSetterDiagnostics(setterDistribution, playerTrends, roster);
 
     return { matchAnalytics, playerTrends, trainingSuggestions: suggestions, chainData, chainSuggestions, setterDistribution, setterDiagnostics };
   // fncConfig intentionally NOT in deps: FNC is applied at display-time in components,
   // not recalculated in the engine (baselines are separate, weights trigger re-compute)
-  }, [matches, standings, weights]);
+  }, [filteredMatches, standings, weights]);
 
   // ─── Roster da tutte le partite ──────────────────────────────────────────
   const allPlayers = useMemo(() => {
@@ -1675,6 +1714,7 @@ export default function App() {
             </div>
           )}
 
+
           {/* ── Content area ── */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
           <PinProvider dashboardConfig={dashboardConfig} onConfigChange={handleDashboardConfigChange}>
@@ -1712,7 +1752,7 @@ export default function App() {
             {activeSection === 'analisi' && curSubTab === 'partite' && (
               <MatchReport
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 standings={standings}
                 dataMode={dataMode}
                 selectedMatch={selectedMatch}
@@ -1727,7 +1767,7 @@ export default function App() {
               <PlayerCard
                 analytics={analytics}
                 allPlayers={allPlayers}
-                matches={matches}
+                matches={filteredMatches}
                 dataMode={dataMode}
                 selectedPlayer={selectedPlayer}
                 onSelectPlayer={setSelectedPlayer}
@@ -1737,7 +1777,7 @@ export default function App() {
             )}
 
             {activeSection === 'analisi' && curSubTab === 'squadra' && (
-              <TeamAnalysis matches={matches} />
+              <TeamAnalysis matches={filteredMatches} />
             )}
 
             {activeSection === 'analisi' && curSubTab === 'avversari' && (
@@ -1754,7 +1794,7 @@ export default function App() {
             {activeSection === 'analisi' && curSubTab === 'gioco' && (() => {
               const roster = (() => {
                 const seen = {};
-                for (const m of matches) {
+                for (const m of filteredMatches) {
                   for (const p of m.roster || []) {
                     if (p.number && !seen[p.number]) seen[p.number] = p;
                   }
@@ -1762,7 +1802,7 @@ export default function App() {
                 return Object.values(seen);
               })();
               return (
-                <GiocoAnalysis matches={matches} standings={standings} roster={roster} />
+                <GiocoAnalysis matches={filteredMatches} standings={standings} roster={roster} />
               );
             })()}
 
@@ -1770,7 +1810,7 @@ export default function App() {
             {activeSection === 'evidenze' && curSubTab === 'suggerimenti' && (
               <TrainingSuggestions
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 dataMode={dataMode}
                 readOnly={!canEditDataset}
                 datasetOwnerUid={dataOwnerUid}
@@ -1794,7 +1834,7 @@ export default function App() {
             {activeSection === 'evidenze' && curSubTab === 'trend' && (
               <TeamTrends
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 standings={standings}
                 dataMode={dataMode}
               />
@@ -1803,7 +1843,7 @@ export default function App() {
             {activeSection === 'evidenze' && curSubTab === 'rotazioni' && (
               <RotationAnalysis
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 allPlayers={allPlayers}
                 dataMode={dataMode}
               />
@@ -1812,7 +1852,7 @@ export default function App() {
             {activeSection === 'evidenze' && curSubTab === 'attacco' && (
               <AttackAnalysis
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 allPlayers={allPlayers}
                 dataMode={dataMode}
               />
@@ -1822,7 +1862,7 @@ export default function App() {
               <SequenceAnalysis
                 chainData={analytics?.chainData}
                 chainSuggestions={analytics?.chainSuggestions}
-                matches={matches}
+                matches={filteredMatches}
                 dataMode={dataMode}
                 capFilterEnabled={capFilterEnabled}
                 onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
@@ -1845,7 +1885,7 @@ export default function App() {
             {activeSection === 'training' && curSubTab === 'suggerimenti' && (
               <TrainingSuggestions
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 dataMode={dataMode}
                 readOnly={!canEditDataset}
                 datasetOwnerUid={dataOwnerUid}
@@ -1869,7 +1909,7 @@ export default function App() {
             {activeSection === 'training' && curSubTab === 'settimana' && (
               <TrainPage
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 calendar={calendar}
                 standings={standings}
                 ownerTeamName={ownerTeamName}
@@ -1883,7 +1923,7 @@ export default function App() {
             {activeSection === 'training' && curSubTab === 'piano' && (
               <ChainTrainingPlan
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 calendar={calendar}
                 standings={standings}
                 ownerTeamName={ownerTeamName}
@@ -1894,7 +1934,100 @@ export default function App() {
               />
             )}
 
-            {/* SISTEMA */}
+            {/* SISTEMA — Tipologia Gare */}
+            {activeSection === 'sistema' && curSubTab === 'tipologia' && (
+              <div className="max-w-2xl mx-auto space-y-6">
+                <div>
+                  <h2 className="text-base font-semibold text-white mb-1">Tipologia Gare</h2>
+                  <p className="text-xs text-gray-500">
+                    Seleziona quali gare includere nell'analisi. Il filtro si applica a tutte le sezioni
+                    (Analisi, Evidenze, Training). Le gare sono sempre considerate in ordine cronologico.
+                  </p>
+                </div>
+
+                {/* Type filter */}
+                <div className="rounded-xl border border-white/8 p-4 space-y-3"
+                  style={{ background: 'rgba(255,255,255,0.03)' }}>
+                  <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Tipo di gara</p>
+                  <div className="flex flex-wrap gap-2">
+                    {['all', ...availableMatchTypes].map(type => {
+                      const active = filterMatchType === type;
+                      return (
+                        <button
+                          key={type}
+                          onClick={() => {
+                            setFilterMatchType(type);
+                            try { localStorage.setItem('vpa_filter_match_type', type); } catch {}
+                          }}
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all
+                            ${active
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5 border border-white/10'}`}
+                        >
+                          {type === 'all' ? '🏐 Tutte le tipologie' : type}
+                        </button>
+                      );
+                    })}
+                    {availableMatchTypes.length === 0 && (
+                      <p className="text-xs text-gray-600 italic">
+                        Nessuna tipologia rilevata — assicurati che le gare abbiano il campo "Tipo" compilato in MVS.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Home/Away filter */}
+                <div className="rounded-xl border border-white/8 p-4 space-y-3"
+                  style={{ background: 'rgba(255,255,255,0.03)' }}>
+                  <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Casa / Trasferta</p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { value: 'all',        label: '🏐 Tutte',        desc: 'Casa e trasferta' },
+                      { value: 'Casa',       label: '🏠 Casa',          desc: 'Solo gare in casa' },
+                      { value: 'Trasferta',  label: '✈️ Trasferta',     desc: 'Solo gare in trasferta' },
+                    ].map(({ value, label, desc }) => {
+                      const active = filterHomeAway === value;
+                      return (
+                        <button
+                          key={value}
+                          onClick={() => {
+                            setFilterHomeAway(value);
+                            try { localStorage.setItem('vpa_filter_home_away', value); } catch {}
+                          }}
+                          className={`flex flex-col items-start px-4 py-2.5 rounded-lg text-sm font-medium transition-all min-w-[130px]
+                            ${active
+                              ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5 border border-white/10'}`}
+                        >
+                          <span>{label}</span>
+                          <span className={`text-xs font-normal mt-0.5 ${active ? 'text-sky-400/70' : 'text-gray-600'}`}>{desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Active filter summary */}
+                <div className="rounded-xl border border-amber-500/20 p-4 flex items-center gap-4"
+                  style={{ background: 'rgba(245,158,11,0.05)' }}>
+                  <span className="text-2xl">📊</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-amber-200">
+                      {filteredMatches.length === matches.length
+                        ? `Analisi su tutte le ${matches.length} gare`
+                        : `Analisi su ${filteredMatches.length} di ${matches.length} gare`}
+                    </p>
+                    <p className="text-xs text-amber-500/70 mt-0.5">
+                      Tipo: <span className="font-medium">{filterMatchType === 'all' ? 'Tutte le tipologie' : filterMatchType}</span>
+                      {' · '}
+                      Sede: <span className="font-medium">{filterHomeAway === 'all' ? 'Casa + Trasferta' : filterHomeAway}</span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* SISTEMA — Dati */}
             {activeSection === 'sistema' && curSubTab === 'dati' && (
               <div className="space-y-8">
                 <DatasetManager
