@@ -75,6 +75,7 @@ import AdminUsersPanel from './components/AdminUsersPanel';
 import AdminRequestsPanel from './components/AdminRequestsPanel';
 import AdminContentPanel from './components/AdminContentPanel';
 import AdminUsageStatsPanel from './components/AdminUsageStatsPanel';
+import MatchStats from './components/MatchStats';
 
 // ─── Profile system ───────────────────────────────────────────────────────────
 const PROFILE_ORDER = { base: 0, pro: 1, promax: 2 };
@@ -86,11 +87,12 @@ const PROFILE_META = {
 
 // ─── Navigation structure ─────────────────────────────────────────────────────
 const SECTIONS = [
-  { id: 'home',     label: 'Home',     icon: '🏠', minProfile: 'base' },
-  { id: 'analisi',  label: 'Analisi',  icon: '🔬', minProfile: 'base' },
-  { id: 'evidenze', label: 'Evidenze', icon: '📈', minProfile: 'pro'  },
-  { id: 'training', label: 'Training', icon: '🏋️', minProfile: 'base' },
-  { id: 'sistema',  label: 'Sistema',  icon: '⚙️', minProfile: 'base' },
+  { id: 'home',        label: 'Home',        icon: '🏠', minProfile: 'base' },
+  { id: 'analisi',     label: 'Analisi',     icon: '🔬', minProfile: 'base' },
+  { id: 'matchstats',  label: 'Match-stats', icon: '📋', minProfile: 'base' },
+  { id: 'evidenze',    label: 'Evidenze',    icon: '📈', minProfile: 'pro'  },
+  { id: 'training',    label: 'Training',    icon: '🏋️', minProfile: 'base' },
+  { id: 'sistema',     label: 'Sistema',     icon: '⚙️', minProfile: 'base' },
   { id: 'admin_users',    label: 'Gestione Utenti',    icon: '🛡️', minProfile: 'base' },
   { id: 'admin_requests', label: 'Richieste Upgrade',  icon: '📨', minProfile: 'base' },
   { id: 'admin_content',  label: 'Bacheca & Offerte',  icon: '📋', minProfile: 'base' },
@@ -1746,6 +1748,11 @@ export default function App() {
                 onOffersChange={null}
                 onOpenDataImport={() => navigateTo('sistema', 'dati')}
               />
+            )}
+
+            {/* MATCH-STATS */}
+            {activeSection === 'matchstats' && (
+              <MatchStats matches={filteredMatches} />
             )}
 
             {/* ANALISI */}
