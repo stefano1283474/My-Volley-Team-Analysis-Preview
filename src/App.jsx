@@ -1752,7 +1752,7 @@ export default function App() {
 
             {/* MATCH-STATS */}
             {activeSection === 'matchstats' && (
-              <MatchStats matches={filteredMatches} />
+              <MatchStats matches={filteredMatches} analytics={analytics} standings={standings} />
             )}
 
             {/* ANALISI */}

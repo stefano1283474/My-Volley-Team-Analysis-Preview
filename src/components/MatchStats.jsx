@@ -1,5 +1,5 @@
 // ============================================================================
-// MATCH-STATS — Riepilogo statistiche per partita + tabelle per giocatrice
+// MATCH-STATS — Riepilogo statistiche per partita + tabelle per giocatrice + avversario
 // ============================================================================
 import { useState, useMemo } from 'react';
 
@@ -27,6 +27,13 @@ function recColor(v) {
   if (v >= 0.50) return 'text-emerald-400';
   if (v >= 0.35) return 'text-amber-400';
   return 'text-yellow-500';
+}
+function coeffColor(c) {
+  if (c == null || !Number.isFinite(c)) return 'text-gray-500';
+  if (c <= -3) return 'text-red-400';
+  if (c <= 0)  return 'text-amber-400';
+  if (c <= 3)  return 'text-emerald-400';
+  return 'text-green-300 font-bold';
 }
 
 function normDate(d) {
@@ -75,28 +82,99 @@ const FUND_CFG = {
   },
 };
 const FUND_ORDER = ['attack', 'serve', 'reception', 'defense', 'block'];
+const OPPONENT_FUNDS = ['attack', 'serve', 'reception', 'defense'];
+
+// ─── Build match-weight lookup map from analytics ─────────────────────────────
+function buildMatchWeightMap(analytics) {
+  if (!analytics?.matchAnalytics) return {};
+  const map = {};
+  for (const entry of analytics.matchAnalytics) {
+    const matchId = entry.match?.id;
+    if (!matchId) continue;
+    map[matchId] = {
+      weight:      entry.matchWeight?.final ?? 1,
+      fundWeights: entry.fundWeights || {},
+      playerStats: entry.playerStats || [],
+    };
+  }
+  return map;
+}
+
+// ─── Forecast coefficient (rank 1 = -5 hardest, rank N = +5 easiest) ─────────
+function forecastCoeff(rank, N) {
+  if (!rank || !N || N <= 1) return null;
+  const c = Math.round(5 * (2 * (rank - 1) / (N - 1) - 1));
+  return Math.max(-5, Math.min(5, c));
+}
+
+// ─── Find opponent rank in standings (fuzzy name match) ───────────────────────
+function findOpponentRank(standings, opponentName) {
+  if (!standings?.length || !opponentName) return null;
+  const norm = (s) => String(s || '').trim().toUpperCase();
+  const oppNorm = norm(opponentName);
+  const found = standings.find(s => {
+    const sn = norm(s.name);
+    return sn === oppNorm || sn.includes(oppNorm) || oppNorm.includes(sn);
+  });
+  return found ? { rank: found.rank, pts: found.pts } : null;
+}
 
 // ─── Extract player rows for a fundamental from a single match ────────────────
-function extractFundRows(match, fund) {
+function extractFundRows(match, fund, matchWeightMap) {
   const r = match?.riepilogo;
   if (!r) return [];
-  if (fund === 'reception') return (r.playerReception || []).map(p => ({ number: p.number, name: p.name, kill: p.kill, pos: p.pos, exc: p.exc, neg: p.neg, err: p.err, tot: p.tot, pct: p.pct, efficacy: p.efficacy, efficiency: p.efficiency }));
-  if (fund === 'defense')   return (r.playerDefense   || []).map(p => ({ number: p.number, name: p.name, kill: p.kill, pos: p.pos, exc: p.exc, neg: p.neg, err: p.err, tot: p.tot, pct: p.pct, efficacy: p.efficacy, efficiency: p.efficiency }));
-  return (r.playerStats || []).map(p => {
-    const s = p[fund] || {};
-    return { number: p.number, name: p.name, kill: s.kill, pos: s.pos, exc: s.exc, neg: s.neg, err: s.err, tot: s.tot, pct: s.pct, efficacy: s.efficacy, efficiency: s.efficiency };
-  });
+
+  // Weighted efficacy lookup for this match
+  const mwEntry = matchWeightMap?.[match.id];
+  const getWeightedEff = (number, name) => {
+    if (!mwEntry?.playerStats?.length) return null;
+    const ps = mwEntry.playerStats.find(p => p.number === number || p.name === name);
+    return ps?.weighted?.[fund]?.efficacy ?? null;
+  };
+
+  let rows = [];
+  if (fund === 'reception') {
+    rows = (r.playerReception || []).map(p => ({
+      number: p.number, name: p.name,
+      kill: p.kill, pos: p.pos, exc: p.exc, neg: p.neg, err: p.err,
+      tot: p.tot, pct: p.pct, efficacy: p.efficacy, efficiency: p.efficiency,
+    }));
+  } else if (fund === 'defense') {
+    rows = (r.playerDefense || []).map(p => ({
+      number: p.number, name: p.name,
+      kill: p.kill, pos: p.pos, exc: p.exc, neg: p.neg, err: p.err,
+      tot: p.tot, pct: p.pct, efficacy: p.efficacy, efficiency: p.efficiency,
+    }));
+  } else {
+    rows = (r.playerStats || []).map(p => {
+      const s = p[fund] || {};
+      return {
+        number: p.number, name: p.name,
+        kill: s.kill, pos: s.pos, exc: s.exc, neg: s.neg, err: s.err,
+        tot: s.tot, pct: s.pct, efficacy: s.efficacy, efficiency: s.efficiency,
+      };
+    });
+  }
+
+  return rows.map(row => ({
+    ...row,
+    weightedEff: getWeightedEff(row.number, row.name),
+  }));
 }
 
 // ─── Aggregate player rows across multiple matches ────────────────────────────
-function aggregateFundRows(matches, fund) {
-  const map = {}; // key: playerNumber or name
+function aggregateFundRows(matches, fund, matchWeightMap) {
+  const map = {};
   for (const m of matches) {
-    const rows = extractFundRows(m, fund);
+    const rows = extractFundRows(m, fund, matchWeightMap);
     for (const r of rows) {
       const key = r.number || r.name;
       if (!key) continue;
-      if (!map[key]) map[key] = { number: r.number, name: r.name, kill: 0, pos: 0, exc: 0, neg: 0, err: 0, tot: 0 };
+      if (!map[key]) map[key] = {
+        number: r.number, name: r.name,
+        kill: 0, pos: 0, exc: 0, neg: 0, err: 0, tot: 0,
+        weightedEffVals: [],
+      };
       const p = map[key];
       p.kill += r.kill || 0;
       p.pos  += r.pos  || 0;
@@ -104,23 +182,85 @@ function aggregateFundRows(matches, fund) {
       p.neg  += r.neg  || 0;
       p.err  += r.err  || 0;
       p.tot  += r.tot  || 0;
+      if (r.weightedEff != null && Number.isFinite(r.weightedEff)) {
+        p.weightedEffVals.push(r.weightedEff);
+      }
     }
   }
   return Object.values(map).map(p => {
     const tot = p.tot || 0;
     const efficacy   = tot > 0 ? (p.kill - p.err) / tot : null;
     const efficiency = tot > 0 ? (p.kill + (p.pos||0) - (p.neg||0) - p.err) / tot : null;
-    // pct: for reception it's (kill+pos+exc)/tot; for attack/serve it's kill/tot; block has no tot
     const cfg = FUND_CFG[fund];
     let pct = null;
     if (cfg.hasTot && tot > 0) {
       pct = fund === 'reception' ? (p.kill + p.pos + p.exc) / tot : p.kill / tot;
     }
-    // For block: efficacy by kill count (no tot)
-    const blkEff = fund === 'block' && (p.kill + p.err) > 0 ? (p.kill - p.err) / (p.kill + p.pos + p.exc + p.neg + p.err) : null;
-    return { ...p, efficacy: fund === 'block' ? blkEff : efficacy, efficiency: fund === 'block' ? null : efficiency, pct };
-  }).filter(p => (p.kill||0) + (p.pos||0) + (p.exc||0) + (p.neg||0) + (p.err||0) + (p.tot||0) > 0)
+    const blkEff = fund === 'block' && (p.kill + p.err) > 0
+      ? (p.kill - p.err) / (p.kill + p.pos + p.exc + p.neg + p.err) : null;
+    const weightedEff = p.weightedEffVals.length > 0
+      ? p.weightedEffVals.reduce((s, v) => s + v, 0) / p.weightedEffVals.length : null;
+    return {
+      ...p,
+      efficacy:    fund === 'block' ? blkEff : efficacy,
+      efficiency:  fund === 'block' ? null   : efficiency,
+      pct,
+      weightedEff,
+    };
+  })
+    .filter(p => (p.kill||0)+(p.pos||0)+(p.exc||0)+(p.neg||0)+(p.err||0)+(p.tot||0) > 0)
     .sort((a, b) => (a.number || '').localeCompare(b.number || ''));
+}
+
+// ─── Build per-opponent rows for a fundamental ────────────────────────────────
+function buildOpponentRows(matches, fund, matchWeightMap, standings) {
+  const N = standings?.length || 0;
+  const oppMap = {};
+
+  for (const m of matches) {
+    const oppName = m.metadata?.opponent;
+    if (!oppName) continue;
+    const r = m.riepilogo;
+    if (!r) continue;
+    const teamEff = r.team?.[fund]?.efficacy;
+    if (teamEff == null || !Number.isFinite(teamEff)) continue;
+
+    const weight = matchWeightMap?.[m.id]?.weight ?? 1;
+
+    if (!oppMap[oppName]) {
+      oppMap[oppName] = { name: oppName, weightedSum: 0, weightSum: 0, matchCount: 0 };
+    }
+    const o = oppMap[oppName];
+    o.weightedSum += teamEff * weight;
+    o.weightSum   += weight;
+    o.matchCount++;
+  }
+
+  // Media Campionato = average team efficacy across ALL filtered matches for this fund
+  const allEffs = matches
+    .map(m => m.riepilogo?.team?.[fund]?.efficacy)
+    .filter(v => v != null && Number.isFinite(v));
+  const campionato = allEffs.length > 0
+    ? allEffs.reduce((s, v) => s + v, 0) / allEffs.length : null;
+
+  return Object.values(oppMap).map(o => {
+    const weightedAvg = o.weightSum > 0 ? o.weightedSum / o.weightSum : null;
+    const standingInfo = findOpponentRank(standings, o.name);
+    const coeff = standingInfo ? forecastCoeff(standingInfo.rank, N) : null;
+    return {
+      name:       o.name,
+      matchCount: o.matchCount,
+      weightedAvg,
+      campionato,
+      coeff,
+      rank: standingInfo?.rank ?? null,
+    };
+  }).sort((a, b) => {
+    if (a.rank != null && b.rank != null) return a.rank - b.rank;
+    if (a.rank != null) return -1;
+    if (b.rank != null) return 1;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 // ─── Build match summary rows ─────────────────────────────────────────────────
@@ -173,35 +313,35 @@ function sumArr(arr) {
 
 // ─── Column groups for the summary table ─────────────────────────────────────
 const COL_GROUPS = [
-  { id:'attacco',   label:'ATTACCO',          color:'#f43f5e', bg:'rgba(244,63,94,0.08)',   cols:[
+  { id:'attacco',   label:'ATTACCO',  color:'#f43f5e', bg:'rgba(244,63,94,0.08)',   cols:[
     {key:'att_kill',    label:'Kill', fmt:fNum, colorFn:null},
     {key:'att_tot',     label:'Tot',  fmt:fNum, colorFn:null},
     {key:'att_err',     label:'Err',  fmt:fNum, colorFn:null},
     {key:'att_killPct', label:'%Kill',fmt:fPct, colorFn:killColor},
     {key:'att_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
   ]},
-  { id:'battuta',   label:'BATTUTA',          color:'#8b5cf6', bg:'rgba(139,92,246,0.08)',  cols:[
+  { id:'battuta',   label:'BATTUTA',  color:'#8b5cf6', bg:'rgba(139,92,246,0.08)', cols:[
     {key:'ser_kill',    label:'Ace',  fmt:fNum, colorFn:null},
     {key:'ser_tot',     label:'Tot',  fmt:fNum, colorFn:null},
     {key:'ser_err',     label:'Err',  fmt:fNum, colorFn:null},
     {key:'ser_acePct',  label:'%Ace', fmt:fPct, colorFn:killColor},
     {key:'ser_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
   ]},
-  { id:'ricezione', label:'RICEZIONE',         color:'#0ea5e9', bg:'rgba(14,165,233,0.08)',  cols:[
+  { id:'ricezione', label:'RICEZIONE',color:'#0ea5e9', bg:'rgba(14,165,233,0.08)', cols:[
     {key:'rec_tot',     label:'Tot',  fmt:fNum, colorFn:null},
     {key:'rec_err',     label:'Err',  fmt:fNum, colorFn:null},
     {key:'rec_posPct',  label:'%Pos', fmt:fPct, colorFn:recColor},
     {key:'rec_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
   ]},
-  { id:'muro',      label:'MURO',             color:'#f59e0b', bg:'rgba(245,158,11,0.08)',  cols:[
+  { id:'muro',      label:'MURO',     color:'#f59e0b', bg:'rgba(245,158,11,0.08)', cols:[
     {key:'blk_kill',    label:'Kill', fmt:fNum, colorFn:null},
     {key:'blk_err',     label:'Err',  fmt:fNum, colorFn:null},
   ]},
-  { id:'difesa',    label:'DIFESA',           color:'#10b981', bg:'rgba(16,185,129,0.08)', cols:[
+  { id:'difesa',    label:'DIFESA',   color:'#10b981', bg:'rgba(16,185,129,0.08)',cols:[
     {key:'def_tot',     label:'Tot',  fmt:fNum, colorFn:null},
     {key:'def_eff',     label:'Eff%', fmt:fEff, colorFn:effColor},
   ]},
-  { id:'punti',     label:'PUNTI',            color:'#94a3b8', bg:'rgba(148,163,184,0.06)',cols:[
+  { id:'punti',     label:'PUNTI',    color:'#94a3b8', bg:'rgba(148,163,184,0.06)',cols:[
     {key:'pts_made',    label:'Fatti',fmt:fNum, colorFn:null},
     {key:'pts_err',     label:'Err',  fmt:fNum, colorFn:null},
   ]},
@@ -222,7 +362,7 @@ const OPP_GROUPS = [
 ];
 
 // ─── Main component ───────────────────────────────────────────────────────────
-export default function MatchStats({ matches }) {
+export default function MatchStats({ matches, analytics, standings }) {
   // Summary table state
   const [sortKey,  setSortKey]  = useState('date');
   const [sortAsc,  setSortAsc]  = useState(true);
@@ -232,6 +372,12 @@ export default function MatchStats({ matches }) {
   // Player tables state
   const [playerMatchId, setPlayerMatchId] = useState('all');
   const [activeFund,    setActiveFund]    = useState('attack');
+
+  // Opponent comparison state
+  const [activeOppFund, setActiveOppFund] = useState('attack');
+
+  // Build match-weight map from analytics
+  const matchWeightMap = useMemo(() => buildMatchWeightMap(analytics), [analytics]);
 
   const rows = useMemo(() => matches.map(buildMatchRow), [matches]);
 
@@ -257,8 +403,13 @@ export default function MatchStats({ matches }) {
   const playerRows = useMemo(() => {
     const target = playerMatchId === 'all' ? matches : matches.filter(m => m.id === playerMatchId);
     if (target.length === 0) return [];
-    return aggregateFundRows(target, activeFund);
-  }, [matches, playerMatchId, activeFund]);
+    return aggregateFundRows(target, activeFund, matchWeightMap);
+  }, [matches, playerMatchId, activeFund, matchWeightMap]);
+
+  // Opponent comparison rows for active fundamental
+  const opponentRows = useMemo(() => {
+    return buildOpponentRows(matches, activeOppFund, matchWeightMap, standings || []);
+  }, [matches, activeOppFund, matchWeightMap, standings]);
 
   const wins = rows.filter(r => r.won).length;
   const visibleGroups = showOpp ? [...COL_GROUPS, ...OPP_GROUPS] : COL_GROUPS;
@@ -277,12 +428,12 @@ export default function MatchStats({ matches }) {
       t.neg  += r.neg ||0; t.err += r.err||0; t.tot += r.tot||0;
     }
     const cfg = FUND_CFG[activeFund];
-    const eff  = t.tot > 0 ? (t.kill - t.err) / t.tot : null;
+    const eff   = t.tot > 0 ? (t.kill - t.err) / t.tot : null;
     const effic = t.tot > 0 ? (t.kill + t.pos - t.neg - t.err) / t.tot : null;
     let pct = null;
     if (cfg.hasTot && t.tot > 0) pct = activeFund === 'reception' ? (t.kill+t.pos+t.exc)/t.tot : t.kill/t.tot;
     const blkEff = activeFund === 'block' && (t.kill+t.err) > 0 ? (t.kill-t.err)/(t.kill+t.pos+t.exc+t.neg+t.err) : null;
-    return { ...t, efficacy: activeFund==='block' ? blkEff : eff, efficiency: activeFund==='block' ? null : effic, pct };
+    return { ...t, efficacy: activeFund==='block' ? blkEff : eff, efficiency: activeFund==='block' ? null : effic, pct, weightedEff: null };
   }, [playerRows, activeFund]);
 
   if (matches.length === 0) {
@@ -300,7 +451,7 @@ export default function MatchStats({ matches }) {
   const cfg = FUND_CFG[activeFund];
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-10">
       {/* ── Section 1: Summary table ── */}
       <div className="space-y-3">
         {/* Header */}
@@ -497,15 +648,65 @@ export default function MatchStats({ matches }) {
             totals={playerTotals}
             fund={activeFund}
             cfg={cfg}
+            hasWeightedEff={!!analytics}
           />
         )}
+      </div>
+
+      {/* ── Section 3: Opponent comparison ── */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">🆚</span>
+          <div>
+            <h2 className="text-base font-semibold text-white">Confronto per Avversario</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Media ponderata · Media campionato · Coefficiente di previsione</p>
+          </div>
+        </div>
+
+        {/* Fundamental tabs (no block) */}
+        <div className="flex flex-wrap gap-1.5">
+          {OPPONENT_FUNDS.map(fund => {
+            const c = FUND_CFG[fund];
+            const isActive = activeOppFund === fund;
+            return (
+              <button key={fund} onClick={() => setActiveOppFund(fund)}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${isActive ? 'border-current' : 'border-white/10 text-gray-500 hover:text-gray-300 hover:bg-white/5'}`}
+                style={isActive ? { color: c.color, background: c.bg, borderColor: c.color+'60' } : undefined}>
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Opponent comparison table */}
+        {opponentRows.length === 0 ? (
+          <div className="flex items-center justify-center h-32 rounded-xl border border-white/8 text-sm text-gray-600"
+            style={{ background:'rgba(10,14,26,0.5)' }}>
+            Nessun dato disponibile
+          </div>
+        ) : (
+          <OpponentFundTable rows={opponentRows} fund={activeOppFund} hasWeightedEff={!!analytics} />
+        )}
+
+        {/* Legend */}
+        <div className="text-[10px] text-gray-600 space-y-0.5">
+          <p>Media Pond. = Σ(Eff%×Peso) / ΣPeso per le gare vs questo avversario</p>
+          <p>Media Camp. = media Eff% su tutte le gare nel filtro corrente</p>
+          <p>
+            Coeff. Prev. = scala −5→+5 basata su classifica (−5 più difficile, +5 più facile) ·{' '}
+            <span className="text-red-400">≤−3</span>{' '}
+            <span className="text-amber-400">−2/0</span>{' '}
+            <span className="text-emerald-400">+1/+3</span>{' '}
+            <span className="text-green-300">≥+4</span>
+          </p>
+        </div>
       </div>
     </div>
   );
 }
 
 // ─── Per-player fundamental table ─────────────────────────────────────────────
-function PlayerFundTable({ rows, totals, fund, cfg }) {
+function PlayerFundTable({ rows, totals, fund, cfg, hasWeightedEff }) {
   const [sortKey, setSortKey] = useState('number');
   const [sortAsc, setSortAsc] = useState(true);
 
@@ -530,16 +731,20 @@ function PlayerFundTable({ rows, totals, fund, cfg }) {
 
   // Column definitions based on fundamental
   const cols = [
-    { key: 'kill',       label: cfg.killLabel,   fmt: fInt,  colorFn: null },
-    { key: 'pos',        label: '+',              fmt: fInt,  colorFn: null },
-    { key: 'exc',        label: '!',              fmt: fInt,  colorFn: null },
-    { key: 'neg',        label: '−',              fmt: fInt,  colorFn: null },
-    { key: 'err',        label: 'Err',            fmt: fInt,  colorFn: null },
-    ...(cfg.hasTot ? [{ key: 'tot', label: 'Tot', fmt: fInt, colorFn: null }] : []),
-    ...(cfg.pctLabel ? [{ key: 'pct', label: cfg.pctLabel, fmt: fPct, colorFn: cfg.colorFn }] : []),
-    { key: 'efficacy',   label: 'Eff%',           fmt: fEff,  colorFn: effColor },
+    { key: 'kill',       label: cfg.killLabel,  fmt: fInt,  colorFn: null },
+    { key: 'pos',        label: '+',             fmt: fInt,  colorFn: null },
+    { key: 'exc',        label: '!',             fmt: fInt,  colorFn: null },
+    { key: 'neg',        label: '−',             fmt: fInt,  colorFn: null },
+    { key: 'err',        label: 'Err',           fmt: fInt,  colorFn: null },
+    ...(cfg.hasTot ? [{ key: 'tot',         label: 'Tot',       fmt: fInt,  colorFn: null }] : []),
+    ...(cfg.pctLabel ? [{ key: 'pct',       label: cfg.pctLabel,fmt: fPct,  colorFn: cfg.colorFn }] : []),
+    { key: 'efficacy',   label: 'Eff%',          fmt: fEff,  colorFn: effColor },
     ...(fund !== 'block' ? [{ key: 'efficiency', label: 'Effic%', fmt: fEff, colorFn: effColor }] : []),
+    ...(hasWeightedEff ? [{ key: 'weightedEff', label: 'Eff% Pes.', fmt: fEff, colorFn: effColor }] : []),
   ];
+
+  // How many derived cols are there after the 5 base values?
+  const derivedCols = cols.slice(5);
 
   return (
     <div className="overflow-x-auto rounded-xl border border-white/8" style={{ background:'rgba(10,14,26,0.7)' }}>
@@ -556,16 +761,11 @@ function PlayerFundTable({ rows, totals, fund, cfg }) {
               style={{ color: cfg.color, background: cfg.bg }}>
               5 Valori
             </th>
-            {cfg.hasTot && (
-              <th className="px-2 py-1 text-center text-[10px] text-gray-600 uppercase border-b border-white/5">Tot</th>
-            )}
-            {cfg.pctLabel && (
-              <th className="px-2 py-1 text-center text-[10px] text-gray-600 uppercase border-b border-white/5">{cfg.pctLabel}</th>
-            )}
-            <th className="px-2 py-1 text-center text-[10px] text-gray-500 uppercase border-b border-white/5">Eff%</th>
-            {fund !== 'block' && (
-              <th className="px-2 py-1 text-center text-[10px] text-gray-500 uppercase border-b border-white/5">Effic%</th>
-            )}
+            {derivedCols.map(col => (
+              <th key={col.key} className="px-2 py-1 text-center text-[10px] text-gray-500 uppercase border-b border-white/5">
+                {col.label}
+              </th>
+            ))}
           </tr>
           {/* Column headers */}
           <tr style={{ background:'rgba(0,0,0,0.2)' }}>
@@ -607,18 +807,99 @@ function PlayerFundTable({ rows, totals, fund, cfg }) {
                 SQUADRA
               </td>
               {cols.map((col, ci) => {
-                const val = totals[col.key];
+                const val = col.key === 'weightedEff' ? null : totals[col.key];
                 const colorCls = col.colorFn ? col.colorFn(val) : 'text-gray-200';
                 return (
                   <td key={col.key}
                     className={'px-2 py-2 text-center text-xs font-bold whitespace-nowrap border-b border-white/5 ' + colorCls + (ci === 0 ? ' border-l border-white/8' : '')}
                     style={ci < 5 ? { background: cfg.bg } : undefined}>
-                    {col.fmt(val)}
+                    {col.key === 'weightedEff' ? '—' : col.fmt(val)}
                   </td>
                 );
               })}
             </tr>
           )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── Opponent comparison table ─────────────────────────────────────────────────
+function OpponentFundTable({ rows, fund, hasWeightedEff }) {
+  const cfg = FUND_CFG[fund];
+
+  const thCls = 'px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-gray-500 border-b border-white/8 whitespace-nowrap';
+  const tdCls = 'px-3 py-2.5 text-center text-xs whitespace-nowrap border-b border-white/4';
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-white/8" style={{ background:'rgba(10,14,26,0.7)' }}>
+      <table className="w-full border-collapse" style={{ minWidth: 480 }}>
+        <thead>
+          <tr style={{ background:'rgba(0,0,0,0.3)' }}>
+            <th colSpan={2} className="px-3 py-1 text-left text-[10px] text-gray-600 uppercase tracking-wider border-b border-white/5">
+              Avversario
+            </th>
+            {hasWeightedEff && (
+              <th className="px-3 py-1 text-center text-[10px] font-bold uppercase tracking-wider border-b border-white/5 border-l border-white/5"
+                style={{ color: cfg.color, background: cfg.bg }}>
+                Media Ponderata
+              </th>
+            )}
+            <th className="px-3 py-1 text-center text-[10px] text-gray-500 uppercase border-b border-white/5">
+              Media Campionato
+            </th>
+            <th className="px-3 py-1 text-center text-[10px] text-gray-500 uppercase border-b border-white/5">
+              Coeff. Prev.
+            </th>
+          </tr>
+          <tr style={{ background:'rgba(0,0,0,0.2)' }}>
+            <th className={thCls + ' text-left pl-4'}>Avversario</th>
+            <th className={thCls}>N.Gare</th>
+            {hasWeightedEff && (
+              <th className={thCls + ' border-l border-white/8'} style={{ color: cfg.color }}>
+                Eff% Pes.
+              </th>
+            )}
+            <th className={thCls}>Eff% Camp.</th>
+            <th className={thCls}>Coeff.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={row.name}
+              className={`transition-colors hover:bg-white/[0.03] ${idx % 2 === 0 ? '' : 'bg-white/[0.015]'}`}>
+              <td className={tdCls + ' pl-4 text-left text-gray-200 font-medium min-w-[140px]'}>
+                {row.name}
+              </td>
+              <td className={tdCls + ' text-gray-400 font-mono text-[11px]'}>
+                {row.matchCount}
+              </td>
+              {hasWeightedEff && (
+                <td className={tdCls + ' border-l border-white/8 font-semibold ' + effColor(row.weightedAvg)}>
+                  {fEff(row.weightedAvg)}
+                </td>
+              )}
+              <td className={tdCls + ' ' + effColor(row.campionato)}>
+                {fEff(row.campionato)}
+              </td>
+              <td className={tdCls}>
+                {row.coeff != null ? (
+                  <span className={`inline-flex items-center justify-center w-8 h-6 rounded text-[12px] font-bold ${coeffColor(row.coeff)}`}
+                    style={row.coeff != null ? {
+                      background: row.coeff <= -3 ? 'rgba(248,113,113,0.10)'
+                        : row.coeff <= 0 ? 'rgba(251,191,36,0.10)'
+                        : row.coeff <= 3 ? 'rgba(52,211,153,0.10)'
+                        : 'rgba(134,239,172,0.12)'
+                    } : undefined}>
+                    {row.coeff >= 0 ? '+' : ''}{row.coeff}
+                  </span>
+                ) : (
+                  <span className="text-gray-600 text-[11px]">n/d</span>
+                )}
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
