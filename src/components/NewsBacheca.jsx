@@ -429,16 +429,174 @@ function NoTeamPrompt({ onScrollToStandings }) {
   );
 }
 
+function NoCalendarPrompt({ onOpenDataImport, onScrollToStandings }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-amber-400/30 bg-amber-500/5 p-5 flex flex-col items-center text-center gap-3">
+      <div className="text-3xl">🗓️</div>
+      <div>
+        <p className="text-sm font-semibold text-amber-200 mb-1">Calendario campionato non importato</p>
+        <p className="text-xs text-gray-400 max-w-md">
+          Per attivare le news del campionato devi prima importare il file CSV del calendario.
+          Vai in <span className="text-gray-200 font-medium">Sistema → Dati</span>, carica il calendario e poi torna in questa sezione.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {onOpenDataImport && (
+          <button
+            onClick={onOpenDataImport}
+            className="text-xs px-4 py-2 rounded-xl bg-amber-500/15 text-amber-200 border border-amber-500/35 hover:bg-amber-500/25 transition-all font-medium"
+          >
+            → Importa campionato
+          </button>
+        )}
+        {onScrollToStandings && (
+          <button
+            onClick={onScrollToStandings}
+            className="text-xs px-4 py-2 rounded-xl bg-white/[0.04] text-gray-300 border border-white/15 hover:bg-white/[0.08] transition-all font-medium"
+          >
+            → Apri classifica
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Visibilità (Sistema + Offerte) ──────────────────────────────────────────
+
+const VIS_MODES = [
+  { id: 'all',      label: '🌐 Tutti',             desc: 'Visibile a tutti gli utenti' },
+  { id: 'profiles', label: '🎫 Per profilo',        desc: 'Solo utenti con profilo selezionato' },
+  { id: 'users',    label: '👤 Utenti specifici',   desc: 'Solo utenti selezionati manualmente' },
+];
+
+const PROFILE_LABELS = { base: 'Base', pro: 'Pro', promax: 'Pro Max' };
+const PROFILE_BADGE_STYLE = {
+  base:   'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  pro:    'bg-violet-500/10 text-violet-400 border-violet-500/20',
+  promax: 'bg-red-500/10 text-red-400 border-red-500/20',
+};
+
+function VisibilitySelector({ visMode, setVisMode, visProfiles, setVisProfiles, visUserIds, setVisUserIds, allUsers }) {
+  const toggleProfile = (p) =>
+    setVisProfiles(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
+  const toggleUser = (uid) =>
+    setVisUserIds(prev => prev.includes(uid) ? prev.filter(x => x !== uid) : [...prev, uid]);
+
+  return (
+    <div className="space-y-2 pt-1">
+      <div className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">👁 Visibilità</div>
+      <div className="flex gap-1.5 flex-wrap">
+        {VIS_MODES.map(m => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setVisMode(m.id)}
+            className={`text-[10px] px-2.5 py-1 rounded-full border transition-all ${
+              visMode === m.id
+                ? 'bg-purple-500/15 border-purple-500/30 text-purple-300 font-bold'
+                : 'border-white/8 text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {visMode === 'profiles' && (
+        <div className="flex gap-1.5 flex-wrap pl-2">
+          {['base', 'pro', 'promax'].map(p => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => toggleProfile(p)}
+              className={`text-[10px] px-2.5 py-1 rounded-full border transition-all ${
+                visProfiles.includes(p)
+                  ? `${PROFILE_BADGE_STYLE[p]} font-bold`
+                  : 'border-white/8 text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {PROFILE_LABELS[p]}
+            </button>
+          ))}
+          {visProfiles.length === 0 && (
+            <span className="text-[10px] text-amber-400/80">⚠ Seleziona almeno un profilo</span>
+          )}
+        </div>
+      )}
+      {visMode === 'users' && (
+        <div className="pl-2 space-y-1 max-h-28 overflow-y-auto">
+          {allUsers.length === 0 && (
+            <div className="text-[10px] text-gray-600">Nessun utente disponibile</div>
+          )}
+          {allUsers.map(u => (
+            <label key={u.uid} className="flex items-center gap-2 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={visUserIds.includes(u.uid)}
+                onChange={() => toggleUser(u.uid)}
+                className="rounded border-white/20 bg-white/[0.04] accent-purple-400"
+              />
+              <span className="text-[11px] text-gray-300 group-hover:text-white transition-colors truncate">
+                {u.email || u.displayName || u.uid}
+              </span>
+              {u.assignedProfile && (
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full border shrink-0 ${PROFILE_BADGE_STYLE[u.assignedProfile] || 'bg-white/5 text-gray-400 border-white/10'}`}>
+                  {PROFILE_LABELS[u.assignedProfile] || u.assignedProfile}
+                </span>
+              )}
+            </label>
+          ))}
+          {visUserIds.length === 0 && allUsers.length > 0 && (
+            <div className="text-[10px] text-amber-400/80">⚠ Seleziona almeno un utente</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildVisibility(visMode, visProfiles, visUserIds) {
+  if (visMode === 'profiles') return { mode: 'profiles', profiles: visProfiles };
+  if (visMode === 'users')    return { mode: 'users',    userIds:  visUserIds  };
+  return { mode: 'all' };
+}
+
+function VisibilityBadge({ visibility }) {
+  if (!visibility || visibility.mode === 'all') return null;
+  if (visibility.mode === 'profiles') {
+    const labels = (visibility.profiles || []).map(p => PROFILE_LABELS[p] || p).join(', ');
+    return (
+      <span className="text-[9px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 shrink-0">
+        🎫 {labels || '–'}
+      </span>
+    );
+  }
+  if (visibility.mode === 'users') {
+    const count = (visibility.userIds || []).length;
+    return (
+      <span className="text-[9px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shrink-0">
+        👤 {count} {count === 1 ? 'utente' : 'utenti'}
+      </span>
+    );
+  }
+  return null;
+}
+
 // ─── Sistema: PostForm ────────────────────────────────────────────────────────
 
-export function PostForm({ onSave, onCancel, authorEmail }) {
-  const [type, setType]     = useState('info');
-  const [text, setText]     = useState('');
-  const [eventDate, setED]  = useState('');
-  const [saving, setSaving] = useState(false);
+export function PostForm({ onSave, onCancel, authorEmail, allUsers = [] }) {
+  const [type, setType]         = useState('info');
+  const [text, setText]         = useState('');
+  const [eventDate, setED]      = useState('');
+  const [saving, setSaving]     = useState(false);
+  const [visMode, setVisMode]   = useState('all');
+  const [visProfiles, setVP]    = useState([]);
+  const [visUserIds, setVU]     = useState([]);
 
   const submit = async () => {
     if (!text.trim()) return;
+    if (visMode === 'profiles' && visProfiles.length === 0) return;
+    if (visMode === 'users'    && visUserIds.length  === 0) return;
     setSaving(true);
     try {
       await onSave({
@@ -447,8 +605,9 @@ export function PostForm({ onSave, onCancel, authorEmail }) {
         eventDate: eventDate || null,
         createdAt: new Date().toISOString(),
         authorEmail: authorEmail || '',
+        visibility: buildVisibility(visMode, visProfiles, visUserIds),
       });
-      setText(''); setED(''); setType('info');
+      setText(''); setED(''); setType('info'); setVisMode('all'); setVP([]); setVU([]);
     } finally { setSaving(false); }
   };
 
@@ -491,13 +650,19 @@ export function PostForm({ onSave, onCancel, authorEmail }) {
           <button onClick={() => setED('')} className="text-[10px] text-gray-500 hover:text-gray-300">✕</button>
         )}
       </div>
+      <VisibilitySelector
+        visMode={visMode} setVisMode={setVisMode}
+        visProfiles={visProfiles} setVisProfiles={setVP}
+        visUserIds={visUserIds} setVisUserIds={setVU}
+        allUsers={allUsers}
+      />
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-lg text-gray-500 hover:text-gray-300 transition-colors">
           Annulla
         </button>
         <button
           onClick={submit}
-          disabled={!text.trim() || saving}
+          disabled={!text.trim() || saving || (visMode === 'profiles' && visProfiles.length === 0) || (visMode === 'users' && visUserIds.length === 0)}
           className="text-xs px-4 py-1.5 rounded-lg bg-sky-500/20 text-sky-300 border border-sky-500/30 hover:bg-sky-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-medium"
         >
           {saving ? 'Salvo…' : 'Pubblica'}
@@ -534,6 +699,7 @@ export function PostCard({ post, canEdit, onDelete }) {
             📅 {dateStr}
           </span>
         )}
+        {canEdit && <VisibilityBadge visibility={post.visibility} />}
         {canEdit && (
           <button
             onClick={() => onDelete(post.id)}
@@ -555,16 +721,21 @@ export function PostCard({ post, canEdit, onDelete }) {
 
 // ─── Offerte: OfferForm (admin) ───────────────────────────────────────────────
 
-export function OfferForm({ onSave, onCancel, authorEmail }) {
+export function OfferForm({ onSave, onCancel, authorEmail, allUsers = [] }) {
   const [category,   setCat]      = useState('promozione');
   const [title,      setTitle]    = useState('');
   const [desc,       setDesc]     = useState('');
   const [price,      setPrice]    = useState('');
   const [validUntil, setValid]    = useState('');
   const [saving,     setSaving]   = useState(false);
+  const [visMode,    setVisMode]  = useState('all');
+  const [visProfiles, setVP]      = useState([]);
+  const [visUserIds,  setVU]      = useState([]);
 
   const submit = async () => {
     if (!title.trim() || !desc.trim()) return;
+    if (visMode === 'profiles' && visProfiles.length === 0) return;
+    if (visMode === 'users'    && visUserIds.length  === 0) return;
     setSaving(true);
     try {
       await onSave({
@@ -577,8 +748,10 @@ export function OfferForm({ onSave, onCancel, authorEmail }) {
         active: true,
         createdAt: new Date().toISOString(),
         authorEmail: authorEmail || '',
+        visibility: buildVisibility(visMode, visProfiles, visUserIds),
       });
       setTitle(''); setDesc(''); setPrice(''); setValid(''); setCat('promozione');
+      setVisMode('all'); setVP([]); setVU([]);
     } finally { setSaving(false); }
   };
 
@@ -641,6 +814,12 @@ export function OfferForm({ onSave, onCancel, authorEmail }) {
           )}
         </div>
       </div>
+      <VisibilitySelector
+        visMode={visMode} setVisMode={setVisMode}
+        visProfiles={visProfiles} setVisProfiles={setVP}
+        visUserIds={visUserIds} setVisUserIds={setVU}
+        allUsers={allUsers}
+      />
       {/* Actions */}
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="text-xs px-3 py-1.5 rounded-lg text-gray-500 hover:text-gray-300 transition-colors">
@@ -648,7 +827,7 @@ export function OfferForm({ onSave, onCancel, authorEmail }) {
         </button>
         <button
           onClick={submit}
-          disabled={!title.trim() || !desc.trim() || saving}
+          disabled={!title.trim() || !desc.trim() || saving || (visMode === 'profiles' && visProfiles.length === 0) || (visMode === 'users' && visUserIds.length === 0)}
           className="text-xs px-4 py-1.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-medium"
         >
           {saving ? 'Salvo…' : 'Pubblica offerta'}
@@ -704,6 +883,7 @@ export function OfferCard({ offer, canEdit, onDelete }) {
           </div>
           <p className="text-sm font-semibold text-white leading-snug">{offer.title}</p>
           <p className="text-xs text-gray-400 mt-0.5 leading-relaxed line-clamp-2">{offer.description}</p>
+          {canEdit && <div className="mt-1"><VisibilityBadge visibility={offer.visibility} /></div>}
         </div>
         {canEdit && onDelete && (
           <button
@@ -791,17 +971,16 @@ export default function NewsBacheca({
   ownerTeamName = null,
   posts = [],
   onPostsChange,
-  canEdit = false,
+  canEdit = false,       // mantenuto per retrocompat (non usato per create/delete qui)
   authorEmail = '',
   offers = [],
   onOffersChange,
   onScrollToStandings,
+  onOpenDataImport,
   onSelectMatch,
   onSelectPlayer,
 }) {
-  const [activeTab,     setActiveTab]   = useState('campionato');
-  const [showForm,      setShowForm]    = useState(false);
-  const [showOfferForm, setShowOFForm]  = useState(false);
+  const [activeTab, setActiveTab] = useState('campionato');
 
   const matchAnalytics = analytics?.matchAnalytics || [];
   const playerTrends   = analytics?.playerTrends   || {};
@@ -817,6 +996,7 @@ export default function NewsBacheca({
   const sortedPosts = useMemo(() => sortPosts(posts), [posts]);
 
   const hasTeam = !!ownerTeamName;
+  const hasCalendar = Array.isArray(calendar) && calendar.length > 0;
 
   const handleAction = useCallback((action) => {
     if (!action) return;
@@ -825,23 +1005,9 @@ export default function NewsBacheca({
     if (action.type === 'scrollStandings' && onScrollToStandings) onScrollToStandings();
   }, [onSelectMatch, onSelectPlayer, onScrollToStandings]);
 
-  const handleSavePost = useCallback(async (post) => {
-    await onPostsChange?.([...posts, post]);
-    setShowForm(false);
-  }, [posts, onPostsChange]);
+  // Nota: create/delete di posts e offerte avviene esclusivamente da AdminContentPanel.
+  // NewsBacheca è view-only per tutti (incluso admin).
 
-  const handleDeletePost = useCallback(async (id) => {
-    await onPostsChange?.(posts.filter(p => p.id !== id));
-  }, [posts, onPostsChange]);
-
-  const handleSaveOffer = useCallback(async (offer) => {
-    await onOffersChange?.([...offers, offer]);
-    setShowOFForm(false);
-  }, [offers, onOffersChange]);
-
-  const handleDeleteOffer = useCallback(async (id) => {
-    await onOffersChange?.(offers.filter(o => o.id !== id));
-  }, [offers, onOffersChange]);
 
   // Sorted offers: active first (by validUntil asc), expired last
   const sortedOffers = useMemo(() => {
@@ -869,22 +1035,7 @@ export default function NewsBacheca({
             </span>
           )}
         </div>
-        {activeTab === 'sistema' && canEdit && hasTeam && !showForm && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="text-[10px] px-2.5 py-1 rounded-lg bg-sky-500/15 text-sky-300 border border-sky-500/25 hover:bg-sky-500/25 transition-all font-medium"
-          >
-            + Nuovo post
-          </button>
-        )}
-        {activeTab === 'offerte' && canEdit && hasTeam && !showOfferForm && (
-          <button
-            onClick={() => setShowOFForm(true)}
-            className="text-[10px] px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/25 hover:bg-amber-500/25 transition-all font-medium"
-          >
-            + Nuova offerta
-          </button>
-        )}
+        {/* Create/delete avviene da AdminContentPanel — nessun pulsante qui */}
       </div>
 
       {/* Tab bar */}
@@ -895,7 +1046,7 @@ export default function NewsBacheca({
           return (
             <button
               key={tab.id}
-              onClick={() => { setActiveTab(tab.id); setShowForm(false); setShowOFForm(false); }}
+              onClick={() => setActiveTab(tab.id)}
               className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                 active
                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
@@ -919,7 +1070,9 @@ export default function NewsBacheca({
 
         {/* ── CAMPIONATO ── */}
         {activeTab === 'campionato' && (
-          !hasTeam
+          !hasCalendar
+            ? <NoCalendarPrompt onOpenDataImport={onOpenDataImport} onScrollToStandings={onScrollToStandings} />
+            : !hasTeam
             ? <NoTeamPrompt onScrollToStandings={onScrollToStandings} />
             : campNews.length === 0
               ? <EmptyState icon="🏆" text="Carica il calendario per visualizzare le news del campionato." />
@@ -947,25 +1100,13 @@ export default function NewsBacheca({
         {/* ── SISTEMA ── */}
         {activeTab === 'sistema' && (
           <>
-            {!hasTeam && sortedPosts.length === 0 && !showForm && (
-              <NoTeamPrompt onScrollToStandings={onScrollToStandings} />
-            )}
-            {showForm && canEdit && hasTeam && (
-              <PostForm
-                onSave={handleSavePost}
-                onCancel={() => setShowForm(false)}
-                authorEmail={authorEmail}
-              />
-            )}
-            {sortedPosts.length === 0 && !showForm && (
+            {sortedPosts.length === 0 && (
               <div className="text-center py-6 text-gray-600 text-xs">
-                {canEdit
-                  ? 'Nessun post ancora. Clicca "+ Nuovo post" per iniziare.'
-                  : 'Nessun post nella bacheca.'}
+                Nessun post nella bacheca.
               </div>
             )}
             {sortedPosts.map(post => (
-              <PostCard key={post.id} post={post} canEdit={canEdit} onDelete={handleDeletePost} />
+              <PostCard key={post.id} post={post} canEdit={false} onDelete={null} />
             ))}
           </>
         )}
@@ -973,33 +1114,10 @@ export default function NewsBacheca({
         {/* ── OFFERTE ── */}
         {activeTab === 'offerte' && (
           <>
-            {!hasTeam && <NoTeamPrompt onScrollToStandings={onScrollToStandings} />}
-
-            {hasTeam && showOfferForm && canEdit && (
-              <OfferForm
-                onSave={handleSaveOffer}
-                onCancel={() => setShowOFForm(false)}
-                authorEmail={authorEmail}
-              />
+            {sortedOffers.length === 0 && (
+              <EmptyState icon="🏷️" text="Nessuna offerta disponibile al momento." />
             )}
-
-            {hasTeam && sortedOffers.length === 0 && !showOfferForm && (
-              canEdit
-                ? <EmptyState icon="🏷️" text="Nessuna offerta ancora. Clicca &quot;+ Nuova offerta&quot; per aggiungerne una." />
-                : <EmptyState icon="🏷️" text="Nessuna offerta disponibile al momento." />
-            )}
-
-            {/* Admin view: compact list */}
-            {hasTeam && canEdit && !showOfferForm && sortedOffers.length > 0 && (
-              <div className="space-y-2">
-                {sortedOffers.map(offer => (
-                  <OfferCard key={offer.id} offer={offer} canEdit={true} onDelete={handleDeleteOffer} />
-                ))}
-              </div>
-            )}
-
-            {/* User view: rich card grid */}
-            {hasTeam && !canEdit && sortedOffers.length > 0 && (
+            {sortedOffers.length > 0 && (
               <div className="space-y-3">
                 {sortedOffers.map(offer => (
                   <OfferCard key={offer.id} offer={offer} canEdit={false} onDelete={null} />

@@ -883,3 +883,62 @@ export async function loadAllUserUsageStats() {
   });
   return rows.sort((a, b) => timestampToMs(b.lastSeenAt) - timestampToMs(a.lastSeenAt));
 }
+
+// ─── Admin Content globale (Sistema posts + Offerte con visibilità) ───────────
+//
+// Documento: volley_team_analysis_6_0_admin_content/global
+//   { posts: [...], offers: [...], updatedAt }
+//
+// visibility shape: { mode: 'all'|'profiles'|'users', profiles?: string[], userIds?: string[] }
+//   'all'      → tutti gli utenti autenticati
+//   'profiles' → utenti con assignedProfile in vis.profiles
+//   'users'    → utenti con uid in vis.userIds
+
+const ADMIN_CONTENT_COLLECTION = 'volley_team_analysis_6_0_admin_content';
+const ADMIN_CONTENT_DOC_ID = 'global';
+
+function adminContentRef() {
+  return doc(db, ADMIN_CONTENT_COLLECTION, ADMIN_CONTENT_DOC_ID);
+}
+
+export async function loadAdminContent() {
+  try {
+    const snap = await getDoc(adminContentRef());
+    if (!snap.exists()) return { posts: [], offers: [] };
+    const data = snap.data() || {};
+    return {
+      posts:  Array.isArray(data.posts)  ? data.posts  : [],
+      offers: Array.isArray(data.offers) ? data.offers : [],
+    };
+  } catch (err) {
+    if (err?.code !== 'permission-denied') {
+      console.error('[AdminContent] loadAdminContent:', err);
+    }
+    return { posts: [], offers: [] };
+  }
+}
+
+export async function saveAdminPosts(posts) {
+  await setDoc(adminContentRef(), sanitize({ posts, updatedAt: serverTimestamp() }), { merge: true });
+}
+
+export async function saveAdminOffers(offers) {
+  await setDoc(adminContentRef(), sanitize({ offers, updatedAt: serverTimestamp() }), { merge: true });
+}
+
+/**
+ * Restituisce true se l'item (post o offerta) è visibile all'utente.
+ * Se isAdmin=true, restituisce sempre true.
+ */
+export function isAdminContentVisibleToUser(item, userUid, userProfile, isAdmin) {
+  if (isAdmin) return true;
+  const vis = item?.visibility;
+  if (!vis || vis.mode === 'all') return true;
+  if (vis.mode === 'profiles') {
+    return Array.isArray(vis.profiles) && vis.profiles.includes(userProfile);
+  }
+  if (vis.mode === 'users') {
+    return Array.isArray(vis.userIds) && vis.userIds.includes(userUid);
+  }
+  return true;
+}

@@ -96,6 +96,7 @@ export default function Dashboard({
   newsAuthorEmail = '',
   teamOffers = [],
   onOffersChange,
+  onOpenDataImport,
 }) {
   const hasData = !!analytics && matches.length > 0;
 
@@ -288,6 +289,7 @@ export default function Dashboard({
           offers={teamOffers}
           onOffersChange={onOffersChange}
           onScrollToStandings={scrollToStandings}
+          onOpenDataImport={onOpenDataImport}
           onSelectMatch={onSelectMatch}
           onSelectPlayer={onSelectPlayer}
         />
@@ -473,6 +475,7 @@ export default function Dashboard({
         canEdit={canEditNews}
         authorEmail={newsAuthorEmail}
         onScrollToStandings={scrollToStandings}
+        onOpenDataImport={onOpenDataImport}
         onSelectMatch={onSelectMatch}
         onSelectPlayer={onSelectPlayer}
       />

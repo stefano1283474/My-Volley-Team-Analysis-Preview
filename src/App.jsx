@@ -44,6 +44,10 @@ import {
   saveTeamNews,
   loadTeamOffers,
   saveTeamOffers,
+  loadAdminContent,
+  saveAdminPosts,
+  saveAdminOffers,
+  isAdminContentVisibleToUser,
 } from './utils/firestoreService';
 import { useAuth } from './context/AuthContext';
 import { PinProvider } from './context/PinContext';
@@ -408,7 +412,7 @@ export default function App() {
     profile === 'promax' ? 'Pro Max' : profile === 'pro' ? 'Pro' : 'Base'
   ), []);
 
-  // ─── Team Offerte ─────────────────────────────────────────────────────────
+  // ─── Team Offerte (legacy per-user — mantenuto per backward compat) ───────
   const [teamOffers, setTeamOffers] = useState([]);
   const handleOffersChange = useCallback(async (newOffers) => {
     const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
@@ -418,6 +422,52 @@ export default function App() {
       console.error('[App] saveTeamOffers:', err);
     }
   }, [isSharedMode, sharedAccess, user]);
+
+  // ─── Admin Content globale (Sistema posts + Offerte con visibilità) ───────
+  const [adminPosts,  setAdminPosts]  = useState([]);
+  const [adminOffers, setAdminOffers] = useState([]);
+
+  // Carica admin content quando l'utente è autenticato
+  useEffect(() => {
+    if (!user?.uid) return;
+    loadAdminContent().then(({ posts, offers }) => {
+      setAdminPosts(posts   || []);
+      setAdminOffers(offers || []);
+    }).catch(err => console.warn('[App] loadAdminContent:', err));
+  }, [user?.uid]);
+
+  // Handler admin per posts (salva su admin_content/global)
+  const handleAdminPostsChange = useCallback(async (newPosts) => {
+    if (!isAdmin) return;
+    setAdminPosts(newPosts);
+    try { await saveAdminPosts(newPosts); } catch (err) {
+      console.error('[App] saveAdminPosts:', err);
+    }
+  }, [isAdmin]);
+
+  // Handler admin per offerte (salva su admin_content/global)
+  const handleAdminOffersChange = useCallback(async (newOffers) => {
+    if (!isAdmin) return;
+    setAdminOffers(newOffers);
+    try { await saveAdminOffers(newOffers); } catch (err) {
+      console.error('[App] saveAdminOffers:', err);
+    }
+  }, [isAdmin]);
+
+  // Posts filtrati per l'utente corrente (admin vede tutto)
+  const filteredAdminPosts = useMemo(() =>
+    adminPosts.filter(p => isAdminContentVisibleToUser(p, user?.uid, assignedProfile, isAdmin)),
+  [adminPosts, user?.uid, assignedProfile, isAdmin]);
+
+  // Offerte filtrate per l'utente corrente
+  const filteredAdminOffers = useMemo(() =>
+    adminOffers.filter(o => isAdminContentVisibleToUser(o, user?.uid, assignedProfile, isAdmin)),
+  [adminOffers, user?.uid, assignedProfile, isAdmin]);
+
+  // Posts totali per NewsBacheca = notifiche personali + posts admin filtrati
+  const newsBachecaPosts = useMemo(() =>
+    [...teamNews, ...filteredAdminPosts],
+  [teamNews, filteredAdminPosts]);
 
   useEffect(() => {
     if (!user?.uid || isAdmin || !myProfileRequest) return;
@@ -1605,12 +1655,13 @@ export default function App() {
                 ownerTeamName={ownerTeamName}
                 onOwnerTeamChange={handleOwnerTeamChange}
                 onOpenOpponentReport={handleOpenOpponentReportFromDashboard}
-                teamNews={teamNews}
+                teamNews={newsBachecaPosts}
                 onNewsChange={handleNewsChange}
-                canEditNews={isAdmin || (!isSharedMode && user?.uid === dataOwnerUid)}
+                canEditNews={false}
                 newsAuthorEmail={user?.email || ''}
-                teamOffers={teamOffers}
-                onOffersChange={handleOffersChange}
+                teamOffers={filteredAdminOffers}
+                onOffersChange={null}
+                onOpenDataImport={() => navigateTo('sistema', 'dati')}
               />
             )}
 
@@ -1888,12 +1939,13 @@ export default function App() {
 
             {activeSection === 'admin_content' && canUseAdminUi && (
               <AdminContentPanel
-                teamNews={teamNews}
-                onNewsChange={handleNewsChange}
+                adminPosts={adminPosts}
+                onPostsChange={handleAdminPostsChange}
+                adminOffers={adminOffers}
+                onOffersChange={handleAdminOffersChange}
                 newsAuthorEmail={user?.email || ''}
                 ownerTeamName={ownerTeamName}
-                teamOffers={teamOffers}
-                onOffersChange={handleOffersChange}
+                allUsers={adminUsers || []}
               />
             )}
 

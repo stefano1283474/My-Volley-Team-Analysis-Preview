@@ -160,6 +160,34 @@ export default function DatasetManager({
     e.target.value = '';
   };
 
+  const handleExportCalendarTemplate = () => {
+    const headers = [
+      'GIORNATA', 'DATA', 'ORA', 'OSPITANTE', 'OSPITE', 'SET1', 'SET2',
+      'PNT1_1', 'PNT2_1', 'PNT1_2', 'PNT2_2', 'PNT1_3', 'PNT2_3', 'PNT1_4', 'PNT2_4', 'PNT1_5', 'PNT2_5',
+      'DENOMINAZIONE',
+    ];
+    const sample = [
+      '1', '2026-09-20', '18:00', 'BOLLATE TEAM VOLLEY', 'SQUADRA OSPITE', '0', '0',
+      '0', '0', '0', '0', '0', '0', '0', '0', '0', '0',
+      'PALESTRA COMUNALE',
+    ];
+    const esc = (value) => {
+      const text = String(value ?? '');
+      if (/[;"\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+      return text;
+    };
+    const csvText = `\uFEFF${headers.map(esc).join(';')}\r\n${sample.map(esc).join(';')}\r\n`;
+    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'template_calendario_campionato.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const handleClearArchive = async () => {
     if (!onClearArchive || readOnly || archiveBusy) return;
     const confirmed = window.confirm('Confermi la pulizia totale dell’archivio dati? Verranno eliminate tutte le partite e tutto il calendario.');
@@ -347,9 +375,18 @@ export default function DatasetManager({
 
           {/* Carica Calendario */}
           <div className="space-y-2">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-sky-400">📅</span>
-              <p className="text-sm font-semibold text-gray-200">Calendario Campionato</p>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sky-400">📅</span>
+                <p className="text-sm font-semibold text-gray-200">Calendario Campionato</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleExportCalendarTemplate}
+                className="px-2.5 py-1 rounded-lg text-[11px] bg-sky-500/15 text-sky-300 border border-sky-500/25 hover:bg-sky-500/25 transition-colors"
+              >
+                Esporta template Calendario
+              </button>
             </div>
             <p className="text-[11px] text-gray-500 mb-2">Calendario esportato dalla federazione o preparato manualmente. Formato accettato: <span className="text-sky-300 font-mono">.csv</span></p>
             <div

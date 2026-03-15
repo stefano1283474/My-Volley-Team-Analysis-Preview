@@ -7,13 +7,13 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: 'AIzaSyCVlsHEejZn-eFjFZQlZZeg8LFkW2oI1WU',
-  authDomain: 'volley-analisys-1aafc.firebaseapp.com',
-  projectId: 'volley-analisys-1aafc',
-  storageBucket: 'volley-analisys-1aafc.firebasestorage.app',
-  messagingSenderId: '304243190555',
-  appId: '1:304243190555:web:34dcc783ca09a92c4201be',
-  measurementId: 'G-KW5TR4HBSB',
+  apiKey: 'AIzaSyCl_ppzWIZW8xL0UNdoL-bwFX9vpFbMo0Q',
+  authDomain: 'volley-data-studio.firebaseapp.com',
+  projectId: 'volley-data-studio',
+  storageBucket: 'volley-data-studio.firebasestorage.app',
+  messagingSenderId: '55271933225',
+  appId: '1:55271933225:web:19980c83c3f0d21283e338',
+  measurementId: 'G-F79R9P9JQM',
 };
 
 const app = initializeApp(firebaseConfig);
