@@ -197,16 +197,31 @@ export function analyzeOverUnderPerformance(match, avgOppProfile, scales, standi
 // ─── 4. Coefficiente di Trasformazione Contestuale ───────────────────────
 // Per ogni attaccante: capacità di trasformare R/D in A, pesata per
 // la difficoltà dell'avversario
-export function computeTransformationCoefficients(matches, scales) {
+export function computeTransformationCoefficients(matches, scales, roster) {
   // Per-player: matrice [inputQuality][outputQuality] con contesto avversario
   const playerTransf = {};
   const teamTransf = { fromRcv: {}, fromDef: {} };
+
+  // Costruisce set di numeri palleggiatori (da escludere dagli attaccanti)
+  const setterNums = new Set(
+    (roster || [])
+      .filter(p => isSetterRole(p.role))
+      .map(p => String(p.number || '').padStart(2, '0'))
+  );
 
   for (const match of matches) {
     const opp = match?.riepilogo?.opponent;
     const oppDefMP = opp?.defense ? mediaPonderata(opp.defense) : 0;
     const defScale = scales?.defense;
     const oppDefPosition = positionOnScale(oppDefMP, defScale);
+
+    // Costruisce set locale di palleggiatori dal roster della partita
+    const matchSetterNums = new Set(
+      (match?.roster || [])
+        .filter(p => isSetterRole(p.role))
+        .map(p => String(p.number || '').padStart(2, '0'))
+    );
+    const allSetters = new Set([...setterNums, ...matchSetterNums]);
 
     // Analizza rally per rally
     const rallies = match?.rallies || [];
@@ -222,6 +237,7 @@ export function computeTransformationCoefficients(matches, scales) {
         const f = String(token.fundamental || '').toLowerCase();
         const e = Number(token.value || token.evaluation || 0);
         const player = String(token.player || '');
+        const playerPad = player.padStart(2, '0');
 
         if (f === 'r' && e >= 3) {
           lastInputType = 'r';
@@ -230,6 +246,8 @@ export function computeTransformationCoefficients(matches, scales) {
           lastInputType = 'd';
           lastInputEval = e;
         } else if (f === 'a' && lastInputType && lastInputEval >= 3) {
+          // Escludi attacchi dei palleggiatori
+          if (allSetters.has(playerPad)) { lastInputType = null; lastInputEval = 0; continue; }
           // Registra trasformazione
           const key = `${lastInputType.toUpperCase()}${lastInputEval}`;
           const aKey = `A${e}`;
@@ -704,7 +722,7 @@ export function computeCoachProMax(matches, roster, standings) {
   const avgOpp = buildAverageOpponentProfile(matches);
   const { scales, oppProfiles } = buildFundamentalScale(matches);
   const teamAvg = buildTeamAverageProfile(matches);
-  const transf = computeTransformationCoefficients(matches, scales);
+  const transf = computeTransformationCoefficients(matches, scales, roster);
   const setterAttrib = attributeSetterToAttacks(matches, roster);
   const roles = compareRoles(matches, roster);
 
