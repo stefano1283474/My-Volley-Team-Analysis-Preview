@@ -365,6 +365,8 @@ export function attributeSetterToAttacks(matches, roster) {
           else if (f === 'd' && e >= 3) { lastInput = 'D'; lastInputEval = e; }
           else if (f === 'a' && lastInput && lastInputEval >= 3) {
             // Questo attacco è stato servito da seg.setter
+            // Escludiamo attacchi dei palleggiatori stessi
+            if (setters.includes(player)) { lastInput = null; continue; }
             const inputKey = `${lastInput}${lastInputEval}`;
             setterMap[seg.setter].totalAttacks++;
 
