@@ -4,6 +4,7 @@
 // ============================================================================
 
 import { useMemo, useState, useCallback } from 'react';
+import { playerDisplayName } from '../utils/playerUtils';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend,
   LineChart, Line, CartesianGrid, ReferenceLine, ScatterChart, Scatter,
@@ -428,7 +429,7 @@ function PlayerView({ transformData, scale, scalePositions }) {
     .map(p => {
       const sp  = scalePositions?.[p.number];
       const row = {
-        number: p.number, name: p.name, role: p.role,
+        number: p.number, name: p.name, nickname: (roster || []).find(r => String(r.number||'') === String(p.number||''))?.nickname || '', role: p.role,
         overall: sp?.overallScalePos ?? null,
         totalAttacks: sp?.totalAttacks ?? 0,
       };
@@ -487,7 +488,7 @@ function PlayerView({ transformData, scale, scalePositions }) {
                     className={`border-t border-white/5 cursor-pointer transition-colors
                       ${selectedPlayer === row.number ? 'bg-amber-500/10' : 'hover:bg-white/3'}`}
                     onClick={() => setSelectedPlayer(selectedPlayer === row.number ? null : row.number)}>
-                  <td className="py-2 px-2 font-semibold text-gray-200">#{row.number} {row.name}</td>
+                  <td className="py-2 px-2 font-semibold text-gray-200">#{row.number} {row.nickname || row.name}</td>
                   <td className="py-2 px-2 text-gray-500 text-[11px]">{row.role || '—'}</td>
                   {filteredKeys.map(k => {
                     const wgt = row[`wgt_${k}`];
@@ -535,7 +536,7 @@ function PlayerView({ transformData, scale, scalePositions }) {
       {activePlayer && activeScalePos && (
         <div className={`${S.card} p-4`}>
           <p className={S.header}>
-            #{activePlayer.number} {activePlayer.name}
+            #{activePlayer.number} {activePlayer.nickname || activePlayer.name}
             {activePlayer.role && <span className="text-gray-600 ml-2 normal-case font-normal text-[11px]">({activePlayer.role})</span>}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
@@ -618,7 +619,7 @@ function PlayerView({ transformData, scale, scalePositions }) {
           )}
 
           <div className="mt-4">
-            <TransformationMatrix matrix={activePlayer.matrix} title={`Matrice — ${activePlayer.name}`} />
+            <TransformationMatrix matrix={activePlayer.matrix} title={`Matrice — #${activePlayer.number} ${activePlayer.nickname || activePlayer.name}`} />
           </div>
         </div>
       )}

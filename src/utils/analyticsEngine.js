@@ -401,7 +401,7 @@ export function computePlayerTrends(allMatchPlayerStats) {
   for (const matchData of allMatchPlayerStats) {
     for (const ps of matchData.playerStats) {
       if (!playerMap[ps.number]) {
-        playerMap[ps.number] = { number: ps.number, name: ps.name, matches: [] };
+        playerMap[ps.number] = { number: ps.number, name: ps.name, nickname: ps.nickname || '', matches: [] };
       }
       playerMap[ps.number].matches.push({
         matchId: matchData.matchId,
@@ -481,9 +481,16 @@ export function computePlayerTrends(allMatchPlayerStats) {
 export function generateTrainingSuggestions(playerTrends, teamStats, roster = []) {
   const suggestions = [];
 
+  // Helper: display name for a player (nickname > name)
+  const pDisplay = (player) => (player.nickname && player.nickname.trim()) ? player.nickname.trim() : (player.name || `#${player.number}`);
+
   // Build a lookup: playerNumber → role code (e.g., 'M1', 'C2', 'L1')
   const playerRoleMap = {};
+  const playerNickMap = {};
   for (const p of roster) {
+    if (p.number) {
+      playerNickMap[p.number] = (p.nickname || '').trim() || (p.name || '').trim();
+    }
     if (p.number && p.role) {
       playerRoleMap[p.number] = p.role.trim();
     }
@@ -540,19 +547,19 @@ export function generateTrainingSuggestions(playerTrends, teamStats, roster = []
           let message;
           if (rawTrendDiffers && trend.rawTrend !== 'declining') {
             // Raw is stable/improving but weighted declines — context reveals hidden issue
-            message = `${player.name} (${roleLabel || '?'}): ${fundLabel(fund)} — il dato grezzo sembra ${trend.rawTrend === 'stable' ? 'stabile' : 'in miglioramento'} ma contestualizzando la difficoltà degli avversari affrontati emerge un calo reale del ${decline.toFixed(0)}% (ultime 3 partite: ${(recentAvg * 100).toFixed(1)}% vs precedente: ${(olderAvg * 100).toFixed(1)}%).${isCoreFund ? ' ⚠ Fondamentale CORE per il suo ruolo.' : ''}`;
+            message = `${pDisplay(player)} (${roleLabel || '?'}): ${fundLabel(fund)} — il dato grezzo sembra ${trend.rawTrend === 'stable' ? 'stabile' : 'in miglioramento'} ma contestualizzando la difficoltà degli avversari affrontati emerge un calo reale del ${decline.toFixed(0)}% (ultime 3 partite: ${(recentAvg * 100).toFixed(1)}% vs precedente: ${(olderAvg * 100).toFixed(1)}%).${isCoreFund ? ' ⚠ Fondamentale CORE per il suo ruolo.' : ''}`;
           } else {
             // Both declining — show the actual segment comparison + last match for context
             const lastMatchNote = lastVal > recentAvg
               ? ` Ultima partita (${(lastVal * 100).toFixed(1)}%) sopra la media recente — monitorare.`
               : ` Ultima partita: ${(lastVal * 100).toFixed(1)}%.`;
-            message = `${player.name} (${roleLabel || '?'}): ${fundLabel(fund)} in calo (${decline.toFixed(0)}% nelle ultime 3 partite). Ultime 3: ${(recentAvg * 100).toFixed(1)}% vs precedente: ${(olderAvg * 100).toFixed(1)}%.${lastMatchNote}${isCoreFund ? ' ⚠ Fondamentale CORE per il suo ruolo.' : ''}`;
+            message = `${pDisplay(player)} (${roleLabel || '?'}): ${fundLabel(fund)} in calo (${decline.toFixed(0)}% nelle ultime 3 partite). Ultime 3: ${(recentAvg * 100).toFixed(1)}% vs precedente: ${(olderAvg * 100).toFixed(1)}%.${lastMatchNote}${isCoreFund ? ' ⚠ Fondamentale CORE per il suo ruolo.' : ''}`;
           }
 
           suggestions.push({
             type: 'player_decline',
             priority,
-            player: player.name,
+            player: pDisplay(player),
             playerNumber: num,
             role: roleLabel,
             roleCode,
@@ -571,13 +578,13 @@ export function generateTrainingSuggestions(playerTrends, teamStats, roster = []
         suggestions.push({
           type: 'context_warning',
           priority: isCoreFund ? 3 : 2,
-          player: player.name,
+          player: pDisplay(player),
           playerNumber: num,
           role: roleLabel,
           roleCode,
           fundamental: fund,
           isCore: isCoreFund,
-          message: `${player.name} (${roleLabel}): ${fundLabel(fund)} — dato grezzo stabile ma il contesto avversari rivela un calo nascosto. Le ultime partite erano contro avversari più deboli che mascherano la flessione.${isCoreFund ? ' Fondamentale core: monitorare con attenzione.' : ''}`,
+          message: `${pDisplay(player)} (${roleLabel}): ${fundLabel(fund)} — dato grezzo stabile ma il contesto avversari rivela un calo nascosto. Le ultime partite erano contro avversari più deboli che mascherano la flessione.${isCoreFund ? ' Fondamentale core: monitorare con attenzione.' : ''}`,
           action: `Monitorare nelle prossime partite contro avversari forti. Inserire drill specifici in allenamento.`,
           chartData,
           showWeighted: true, // here the delta IS the point
@@ -596,15 +603,15 @@ export function generateTrainingSuggestions(playerTrends, teamStats, roster = []
         if (improvement > 15 && (isCoreFund || isSecondaryFund)) {
           let message;
           if (rawTrendDiffers && trend.rawTrend !== 'improving') {
-            message = `${player.name} (${roleLabel}): ${fundLabel(fund)} — il dato grezzo non lo mostra chiaramente, ma contestualizzando gli avversari affrontati il miglioramento è del +${improvement.toFixed(0)}% (ultime 3: ${(recentAvgI * 100).toFixed(1)}% vs precedente: ${(olderAvgI * 100).toFixed(1)}%). Il lavoro in allenamento sta pagando.`;
+            message = `${pDisplay(player)} (${roleLabel}): ${fundLabel(fund)} — il dato grezzo non lo mostra chiaramente, ma contestualizzando gli avversari affrontati il miglioramento è del +${improvement.toFixed(0)}% (ultime 3: ${(recentAvgI * 100).toFixed(1)}% vs precedente: ${(olderAvgI * 100).toFixed(1)}%). Il lavoro in allenamento sta pagando.`;
           } else {
-            message = `${player.name} (${roleLabel}): ${fundLabel(fund)} in netto miglioramento (+${improvement.toFixed(0)}%). Ultime 3 partite: ${(recentAvgI * 100).toFixed(1)}% vs precedente: ${(olderAvgI * 100).toFixed(1)}%.`;
+            message = `${pDisplay(player)} (${roleLabel}): ${fundLabel(fund)} in netto miglioramento (+${improvement.toFixed(0)}%). Ultime 3 partite: ${(recentAvgI * 100).toFixed(1)}% vs precedente: ${(olderAvgI * 100).toFixed(1)}%.`;
           }
 
           suggestions.push({
             type: 'player_improvement',
             priority: 1,
-            player: player.name,
+            player: pDisplay(player),
             playerNumber: num,
             role: roleLabel,
             roleCode,
@@ -1149,38 +1156,38 @@ function getSuggestionAction(fund, decline, player, roleCode, roleConfig) {
   const roleActions = {
     // SCHIACCIATRICE/BANDA (M) — tutti i fondamentali sono core
     M1: {
-      attack: `Lavorare sull'attacco con ${player.name}. Come schiacciatrice, focus su palloni di qualità 3 (da bagher) e palloni staccati. Esercizi di attacco contro muro schierato e in situazione di rigiocata.`,
-      reception: `Drill di ricezione per ${player.name} con battute aggressive. Come banda è fondamentale: lavorare su float, salto e potenza. Esercizi in coppia con il libero.`,
-      serve: `Sessione battuta per ${player.name}. Valutare l'equilibrio aggressività/errori. Lavorare su variazione tattica: float corta, potenza lunga.`,
-      defense: `Lavorare sulla difesa con ${player.name}. Come schiacciatrice le toccherà difendere diagonale e attacchi da posto 2. Esercizi di reazione e posizionamento.`,
-      block: `Muro per ${player.name}: focus sulla chiusura in zona 4. Lavorare sul timing contro l'opposto avversario e sui fast centrali.`,
+      attack: `Lavorare sull'attacco con ${pDisplay(player)}. Come schiacciatrice, focus su palloni di qualità 3 (da bagher) e palloni staccati. Esercizi di attacco contro muro schierato e in situazione di rigiocata.`,
+      reception: `Drill di ricezione per ${pDisplay(player)} con battute aggressive. Come banda è fondamentale: lavorare su float, salto e potenza. Esercizi in coppia con il libero.`,
+      serve: `Sessione battuta per ${pDisplay(player)}. Valutare l'equilibrio aggressività/errori. Lavorare su variazione tattica: float corta, potenza lunga.`,
+      defense: `Lavorare sulla difesa con ${pDisplay(player)}. Come schiacciatrice le toccherà difendere diagonale e attacchi da posto 2. Esercizi di reazione e posizionamento.`,
+      block: `Muro per ${pDisplay(player)}: focus sulla chiusura in zona 4. Lavorare sul timing contro l'opposto avversario e sui fast centrali.`,
     },
     M2: null, // same as M1, will fallback
     // CENTRALE (C) — core: attacco (primo tempo), muro, battuta
     C1: {
-      attack: `Lavorare sul timing del primo tempo con ${player.name}. Esercizi di attacco rapido con la palleggiatrice, variando l'altezza e la velocità dell'alzata. Focus sulla lettura del muro avversario.`,
-      block: `Drill di muro per ${player.name}: lettura dell'alzata avversaria, spostamento laterale veloce, timing. Esercizi di muro a 2 con le bande.`,
-      serve: `Sessione battuta per ${player.name}. Come centrale la battuta è un'arma tattica: lavorare su precisione e variazione più che su potenza.`,
+      attack: `Lavorare sul timing del primo tempo con ${pDisplay(player)}. Esercizi di attacco rapido con la palleggiatrice, variando l'altezza e la velocità dell'alzata. Focus sulla lettura del muro avversario.`,
+      block: `Drill di muro per ${pDisplay(player)}: lettura dell'alzata avversaria, spostamento laterale veloce, timing. Esercizi di muro a 2 con le bande.`,
+      serve: `Sessione battuta per ${pDisplay(player)}. Come centrale la battuta è un'arma tattica: lavorare su precisione e variazione più che su potenza.`,
     },
     C2: null, // same as C1
     // OPPOSTO — core: attacco, muro, battuta
     O: {
-      attack: `Lavorare sull'attacco con ${player.name}. Come opposto è il terminale principale: focus su attacco da zona 2 e da seconda linea (pipe/zona 1). Palloni alti, staccati e situazioni di muro a 2.`,
-      block: `Muro per ${player.name} in zona 2: lettura dello schiacciatore avversario di posto 4. Timing e chiusura del varco.`,
-      serve: `Battuta per ${player.name}. Come opposto la battuta è un'arma importante: lavorare su potenza in salto e variazione tattica.`,
-      defense: `Difesa secondaria per ${player.name}. Come opposto non è il core ma deve saper difendere in zona 1: esercizi specifici ma senza sottrarre tempo all'attacco.`,
+      attack: `Lavorare sull'attacco con ${pDisplay(player)}. Come opposto è il terminale principale: focus su attacco da zona 2 e da seconda linea (pipe/zona 1). Palloni alti, staccati e situazioni di muro a 2.`,
+      block: `Muro per ${pDisplay(player)} in zona 2: lettura dello schiacciatore avversario di posto 4. Timing e chiusura del varco.`,
+      serve: `Battuta per ${pDisplay(player)}. Come opposto la battuta è un'arma importante: lavorare su potenza in salto e variazione tattica.`,
+      defense: `Difesa secondaria per ${pDisplay(player)}. Come opposto non è il core ma deve saper difendere in zona 1: esercizi specifici ma senza sottrarre tempo all'attacco.`,
     },
     // PALLEGGIATRICE — core: difesa; secondary: battuta, muro
     P1: {
-      defense: `Lavorare sulla difesa con ${player.name}. Come palleggiatrice la difesa in seconda linea è fondamentale per la transizione. Esercizi di lettura e posizionamento in zona 1 e 6.`,
-      block: `Muro per ${player.name}: come palleggiatrice è l'anello tattico del muro. Lavorare sulla lettura e sul posizionamento, non serve altezza ma tempismo.`,
-      serve: `Battuta per ${player.name}. Come palleggiatrice la battuta è tattica: float precisa e variata. Non serve potenza ma efficacia nel mettere in difficoltà la ricezione avversaria.`,
+      defense: `Lavorare sulla difesa con ${pDisplay(player)}. Come palleggiatrice la difesa in seconda linea è fondamentale per la transizione. Esercizi di lettura e posizionamento in zona 1 e 6.`,
+      block: `Muro per ${pDisplay(player)}: come palleggiatrice è l'anello tattico del muro. Lavorare sulla lettura e sul posizionamento, non serve altezza ma tempismo.`,
+      serve: `Battuta per ${pDisplay(player)}. Come palleggiatrice la battuta è tattica: float precisa e variata. Non serve potenza ma efficacia nel mettere in difficoltà la ricezione avversaria.`,
     },
     P2: null,
     // LIBERO — core: ricezione, difesa (UNICI fondamentali possibili)
     L1: {
-      reception: `Drill intensivi di ricezione per ${player.name}. Come libero è IL fondamentale: battute aggressive, float, salto, da diverse posizioni. Lavorare sulla comunicazione con le bande e sul posizionamento.`,
-      defense: `Lavorare sulla difesa con ${player.name}. Come libero è fondamentale: esercizi di reazione su attacchi forti, lettura del muro, difesa su palle sporche e attacchi da seconda linea.`,
+      reception: `Drill intensivi di ricezione per ${pDisplay(player)}. Come libero è IL fondamentale: battute aggressive, float, salto, da diverse posizioni. Lavorare sulla comunicazione con le bande e sul posizionamento.`,
+      defense: `Lavorare sulla difesa con ${pDisplay(player)}. Come libero è fondamentale: esercizi di reazione su attacchi forti, lettura del muro, difesa su palle sporche e attacchi da seconda linea.`,
     },
     L2: null,
   };
@@ -1195,7 +1202,7 @@ function getSuggestionAction(fund, decline, player, roleCode, roleConfig) {
   if (fallbackActions[fund]) return fallbackActions[fund];
 
   // Generic fallback
-  return `Approfondire l'analisi su ${fundLabel(fund)} per ${player.name} (${roleName}). Verificare se il calo è strutturale o contestuale.`;
+  return `Approfondire l'analisi su ${fundLabel(fund)} per ${pDisplay(player)} (${roleName}). Verificare se il calo è strutturale o contestuale.`;
 }
 
 function getTargetRolesForFundamental(fund) {

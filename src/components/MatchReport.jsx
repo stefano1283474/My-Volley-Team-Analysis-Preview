@@ -975,7 +975,7 @@ function buildPlayerCatalog(matchAnalytics) {
   for (const ma of matchAnalytics || []) {
     for (const p of ma?.playerStats || []) {
       if (!p?.number || map.has(p.number)) continue;
-      map.set(p.number, { number: p.number, name: p.name || `#${p.number}` });
+      map.set(p.number, { number: p.number, name: p.name || `#${p.number}`, nickname: p.nickname || '' });
     }
   }
   return [...map.values()].sort((a, b) => a.number.localeCompare(b.number));
@@ -1760,7 +1760,7 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
   ), [ma, matchAnalytics, playerLineMode, selectedOppAgg, seasonOppAgg]);
   const playerOptions = playerCharts.map(item => ({
     number: item.player.number,
-    nick: (item.player.name || '').trim().split(/\s+/)[0].slice(0, 10),
+    nick: (item.player.nickname || (item.player.name || '').trim().split(/\s+/)[0] || '').slice(0, 12),
     data: item.data,
   }));
   const activePlayerNumber = playerOptions.some(p => p.number === selectedPlayerNumber)

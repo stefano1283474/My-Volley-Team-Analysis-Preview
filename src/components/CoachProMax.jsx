@@ -9,6 +9,7 @@ import {
   CartesianGrid, ReferenceLine, Cell, LineChart, Line,
 } from 'recharts';
 import { computeCoachProMax, mediaPonderata, positionOnScale } from '../utils/coachProMaxEngine';
+import { playerDisplayName, playerLabel } from '../utils/playerUtils';
 
 // ─── Styling ─────────────────────────────────────────────────────────────────
 const S = {
@@ -187,11 +188,11 @@ function buildCoeffInsights(transf, roster) {
 
   items.push({ type: null, text: 'Migliori 3 situazioni di trasformazione:' });
   for (const s of top3) {
-    items.push({ type: 'good', text: `#${s.player} (${s.role}) da ${s.key}: coeff. ${fmt(s.coeff)} su ${s.total} azioni (output medio ${s.avgOutput})` });
+    items.push({ type: 'good', text: `${playerLabel(s.player, roster)} (${s.role}) da ${s.key}: coeff. ${fmt(s.coeff)} su ${s.total} azioni (output medio ${s.avgOutput})` });
   }
   items.push({ type: null, text: 'Peggiori 3 situazioni di trasformazione:' });
   for (const s of bot3) {
-    items.push({ type: 'bad', text: `#${s.player} (${s.role}) da ${s.key}: coeff. ${fmt(s.coeff)} su ${s.total} azioni (output medio ${s.avgOutput})` });
+    items.push({ type: 'bad', text: `${playerLabel(s.player, roster)} (${s.role}) da ${s.key}: coeff. ${fmt(s.coeff)} su ${s.total} azioni (output medio ${s.avgOutput})` });
   }
 
   // Per-role summary
@@ -216,7 +217,7 @@ function buildCoeffInsights(transf, roster) {
 }
 
 // ─── Helper: generate setter insights ────────────────────────────────────────
-function buildSetterInsights(setter, setterNum, data) {
+function buildSetterInsights(setter, setterNum, data, roster) {
   const items = [];
   items.push({ type: null, text: `Attacchi totali serviti: ${data.totalAttacks}, output medio Ø ${data.avgOutput}, kill rate ${data.killRate}%` });
 
@@ -228,8 +229,8 @@ function buildSetterInsights(setter, setterNum, data) {
   if (attackers.length >= 2) {
     const best = attackers[0];
     const worst = attackers[attackers.length - 1];
-    items.push({ type: 'good', text: `Miglior connessione: #${best.player} — Ø ${best.avgOutput} su ${best.total} attacchi (efficacia ${fmtPct(best.efficacy)})` });
-    items.push({ type: 'bad', text: `Connessione più debole: #${worst.player} — Ø ${worst.avgOutput} su ${worst.total} attacchi (efficacia ${fmtPct(worst.efficacy)})` });
+    items.push({ type: 'good', text: `Miglior connessione: ${playerLabel(best.player, roster)} — Ø ${best.avgOutput} su ${best.total} attacchi (efficacia ${fmtPct(best.efficacy)})` });
+    items.push({ type: 'bad', text: `Connessione più debole: ${playerLabel(worst.player, roster)} — Ø ${worst.avgOutput} su ${worst.total} attacchi (efficacia ${fmtPct(worst.efficacy)})` });
   }
 
   // Input quality analysis
@@ -412,7 +413,7 @@ function CoefficienteTab({ cpx, roster }) {
             <tbody>
               {players.map(p => (
                 <tr key={p.number} className="border-b border-white/3 hover:bg-white/3">
-                  <td className="py-2 px-2 font-mono text-amber-400">{p.number}</td>
+                  <td className="py-2 px-2 font-mono text-amber-400">{playerLabel(p.number, roster)}</td>
                   <td className="py-2 px-2 text-right text-gray-300">{p.totalActions}</td>
                   <td className="py-2 px-2 text-right font-semibold text-white">{fmt(p.avgCoeff)}</td>
                   {['R3','R4','R5','D3','D4','D5'].map(key => {
@@ -466,7 +467,7 @@ function TeamTransfCard({ title, data }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 3. PALLEGGIATORE
 // ═══════════════════════════════════════════════════════════════════════════════
-function PalleggiatoreTab({ cpx }) {
+function PalleggiatoreTab({ cpx, roster }) {
   const sa = cpx?.setterAttribution;
   const setterEntries = useMemo(() => {
     if (!sa?.setterMap) return [];
@@ -484,8 +485,8 @@ function PalleggiatoreTab({ cpx }) {
 
   const currentData = setterEntries.find(([k]) => k === effectiveSetter)?.[1];
   const insights = useMemo(
-    () => currentData ? buildSetterInsights(effectiveSetter, effectiveSetter, currentData) : [],
-    [effectiveSetter, currentData],
+    () => currentData ? buildSetterInsights(effectiveSetter, effectiveSetter, currentData, roster) : [],
+    [effectiveSetter, currentData, roster],
   );
 
   return (
@@ -502,7 +503,7 @@ function PalleggiatoreTab({ cpx }) {
                 : 'bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10'
             }`}
           >
-            Palleggiatore #{setter}
+            {playerLabel(setter, roster)}
             <span className="ml-2 text-[10px] opacity-60">{data.totalAttacks} att.</span>
           </button>
         ))}
@@ -511,12 +512,12 @@ function PalleggiatoreTab({ cpx }) {
       {currentData && (
         <>
           {/* Descriptive insights */}
-          <InsightBox items={insights} title={`Analisi Palleggiatore #${effectiveSetter}`} />
+          <InsightBox items={insights} title={`Analisi — ${playerLabel(effectiveSetter, roster)}`} />
 
           {/* Stats tables */}
           <div className={S.card}>
             <h3 className={S.header}>
-              Distribuzione per Attaccante — #{effectiveSetter}
+              Distribuzione per Attaccante — {playerLabel(effectiveSetter, roster)}
               <span className="ml-3 text-gray-500 normal-case tracking-normal">
                 Ø output {currentData.avgOutput} — Kill rate {currentData.killRate}%
               </span>
@@ -525,7 +526,7 @@ function PalleggiatoreTab({ cpx }) {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-gray-500 border-b border-white/5">
-                    <th className="text-left py-1.5 px-2">#</th>
+                    <th className="text-left py-1.5 px-2">Giocatrice</th>
                     <th className="text-right py-1.5 px-2">Tot</th>
                     <th className="text-right py-1.5 px-2">Ø Output</th>
                     <th className="text-right py-1.5 px-2">Kills</th>
@@ -539,7 +540,7 @@ function PalleggiatoreTab({ cpx }) {
                     .sort(([, a], [, b]) => b.total - a.total)
                     .map(([player, stats]) => (
                       <tr key={player} className="border-b border-white/3 hover:bg-white/3">
-                        <td className="py-1.5 px-2 font-mono text-amber-400">{player}</td>
+                        <td className="py-1.5 px-2 font-mono text-amber-400">{playerLabel(player, roster)}</td>
                         <td className="py-1.5 px-2 text-right text-gray-300">{stats.total}</td>
                         <td className="py-1.5 px-2 text-right text-white font-semibold">{stats.avgOutput}</td>
                         <td className="py-1.5 px-2 text-right text-emerald-400">{stats.kills}</td>
@@ -577,7 +578,7 @@ function PalleggiatoreTab({ cpx }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 4. RUOLI — con andamentale per partita
 // ═══════════════════════════════════════════════════════════════════════════════
-function RuoliTab({ cpx, matches }) {
+function RuoliTab({ cpx, matches, roster }) {
   const rc = cpx?.roleComparisons;
   if (!rc?.comparisons || !Object.keys(rc.comparisons).length) {
     return <NoData msg="Nessun confronto ruoli disponibile. Serve un roster con ruoli assegnati (S, C, L, P)." />;
@@ -601,15 +602,19 @@ function RuoliTab({ cpx, matches }) {
         for (const pNum of playerNums) {
           const pStats = (m?.riepilogo?.playerStats || []).find(ps => String(ps.number || '').padStart(2, '0') === pNum);
           if (pStats?.[primaryFund]) {
-            point[`#${pNum}`] = mediaPonderata(pStats[primaryFund]);
+            // Usa il soprannome come chiave per il grafico
+            const key = playerLabel(pNum, roster);
+            point[key] = mediaPonderata(pStats[primaryFund]);
           }
         }
         return point;
       });
-      result[group] = { series, playerNums, primaryFund };
+      // Chiavi per le linee del grafico
+      const playerKeys = playerNums.map(n => playerLabel(n, roster));
+      result[group] = { series, playerNums, playerKeys, primaryFund };
     }
     return result;
-  }, [rc, matches]);
+  }, [rc, matches, roster]);
 
   return (
     <div className="space-y-4">
@@ -662,8 +667,8 @@ function RoleComparisonCard({ comp, type, trend }) {
           <tbody>
             {(comp.players || []).map(p => (
               <tr key={p.number} className="border-b border-white/3 hover:bg-white/3">
-                <td className="py-2 px-2 font-mono text-amber-400">{p.number}</td>
-                <td className="py-2 px-2 text-gray-300">{p.name || '—'}</td>
+                <td className="py-2 px-2 font-mono text-amber-400">#{p.number}</td>
+                <td className="py-2 px-2 text-gray-300">{playerDisplayName(p) || '—'}</td>
                 <td className="py-2 px-2 text-gray-500">{p.role}</td>
                 <td className="py-2 px-2 text-right text-gray-400">{p.matchCount || 0}</td>
                 {fundCols.map(f => <td key={f} className="py-2 px-2 text-right font-semibold text-white">{p[f]?.mediaPond != null ? fmt(p[f].mediaPond, 3) : '—'}</td>)}
@@ -688,11 +693,12 @@ function RoleComparisonCard({ comp, type, trend }) {
               <Tooltip contentStyle={{ background: '#111827', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <ReferenceLine y={3} stroke="#4b5563" strokeDasharray="5 5" />
-              {trend.playerNums.map((num, i) => (
+              {(trend.playerKeys || trend.playerNums.map(n => `#${n}`)).map((key, i) => (
                 <Line
-                  key={num}
+                  key={key}
                   type="monotone"
-                  dataKey={`#${num}`}
+                  dataKey={key}
+                  name={key}
                   stroke={PLAYER_COLORS[i % PLAYER_COLORS.length]}
                   strokeWidth={2}
                   dot={{ r: 3 }}
@@ -720,7 +726,7 @@ function CandidateCard({ label, player, accent }) {
   return (
     <div className={`rounded-lg border p-3 ${colors[accent] || colors.amber}`}>
       <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">{label}</div>
-      <div className="text-sm font-semibold text-white">#{player.number} {player.name || ''}</div>
+      <div className="text-sm font-semibold text-white">#{player.number} {playerDisplayName(player)}</div>
     </div>
   );
 }
@@ -741,7 +747,7 @@ function RoleRadarChart({ players, fundCols }) {
           <PolarAngleAxis dataKey="fund" tick={{ fill: '#9ca3af', fontSize: 11 }} />
           <PolarRadiusAxis tick={{ fill: '#6b7280', fontSize: 10 }} domain={[0, 5]} />
           {players.map((p, i) => (
-            <Radar key={p.number} name={`#${p.number}`} dataKey={`p${i}`}
+            <Radar key={p.number} name={`#${p.number} ${playerDisplayName(p)}`} dataKey={`p${i}`}
               stroke={RADAR_COLORS[i % RADAR_COLORS.length]} fill={RADAR_COLORS[i % RADAR_COLORS.length]} fillOpacity={0.1} />
           ))}
           <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -898,8 +904,8 @@ export default function CoachProMax({ matches, standings, analytics, activeSubTa
 
       {tab === 'profilo' && <ProfiloPartita cpx={cpx} />}
       {tab === 'coefficienti' && <CoefficienteTab cpx={cpx} roster={roster} />}
-      {tab === 'palleggiatore' && <PalleggiatoreTab cpx={cpx} />}
-      {tab === 'ruoli' && <RuoliTab cpx={cpx} matches={matches} />}
+      {tab === 'palleggiatore' && <PalleggiatoreTab cpx={cpx} roster={roster} />}
+      {tab === 'ruoli' && <RuoliTab cpx={cpx} matches={matches} roster={roster} />}
       {tab === 'ritorno' && <PrepRitornoTab cpx={cpx} />}
     </div>
   );

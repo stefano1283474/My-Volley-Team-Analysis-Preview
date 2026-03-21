@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { COLORS } from '../utils/constants';
 import { applyFNCToEfficacy } from '../utils/analyticsEngine';
+import { playerDisplayName } from '../utils/playerUtils';
 import { usePin } from '../context/PinContext';
 import { useProfile } from '../context/ProfileContext';
 import DataModeSelector from './DataModeSelector';
@@ -227,7 +228,7 @@ export default function Dashboard({
     const map = {};
     for (const m of matches) {
       for (const p of m.roster || []) {
-        if (p.number && !map[p.number]) map[p.number] = { name: p.name, roleCode: p.role || '' };
+        if (p.number && !map[p.number]) map[p.number] = { name: p.name, nickname: p.nickname || '', roleCode: p.role || '' };
       }
     }
     return map;
@@ -238,8 +239,12 @@ export default function Dashboard({
     if (!playerTrends) return [];
     return Object.values(playerTrends)
       .filter(p => p.matches.length >= 2)
-      .map(p => ({ ...p, roleCode: rosterRoleMap[p.number]?.roleCode || '' }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .map(p => ({
+        ...p,
+        nickname: rosterRoleMap[p.number]?.nickname || '',
+        roleCode: rosterRoleMap[p.number]?.roleCode || '',
+      }))
+      .sort((a, b) => (a.nickname || a.name).localeCompare(b.nickname || b.name));
   }, [playerTrends, rosterRoleMap]);
 
   // Top performers — sort key usa la modalità specifica del grafico top_performers
@@ -534,7 +539,7 @@ export default function Dashboard({
                   >
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-xs font-mono text-amber-400">#{p.number}</span>
-                      <span className="text-sm font-medium text-white">{p.name}</span>
+                      <span className="text-sm font-medium text-white">{p.nickname || p.name}</span>
                     </div>
                     <div className="flex gap-3 text-[10px]">
                       {showRaw && (
@@ -1160,7 +1165,7 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
                   }`}
                 >
                   <span className="font-mono text-[10px] opacity-70">#{p.number}</span>
-                  <span className="font-medium">{p.name}</span>
+                  <span className="font-medium">{p.nickname || p.name}</span>
                   {p.roleCode && (
                     <span className="text-[9px] px-1 py-0.5 rounded bg-white/5 text-gray-500">{p.roleCode}</span>
                   )}
@@ -1181,14 +1186,14 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
       {chartData.length < 2 ? (
         <EmptyChart label={
           effectiveNum
-            ? `${selectedPlayerData?.name} non ha abbastanza dati per ${FUND_LABELS[selectedFund]}.`
+            ? `${selectedPlayerData?.nickname || selectedPlayerData?.name} non ha abbastanza dati per ${FUND_LABELS[selectedFund]}.`
             : 'Seleziona una giocatrice.'
         } />
       ) : (
         <div>
           <div className="flex items-center gap-4 mb-3 text-[11px]">
             <span className="text-white font-semibold">
-              #{effectiveNum} {selectedPlayerData?.name}
+              #{effectiveNum} {selectedPlayerData?.nickname || selectedPlayerData?.name}
             </span>
             <span className="text-gray-500">
               Media {FUND_LABELS[selectedFund]}: <span style={{ color: FUND_COLORS[selectedFund] }}>{(playerAvg * 100).toFixed(1)}%</span>
@@ -1207,13 +1212,13 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
             {showRaw && (
               <span className="flex items-center gap-1.5">
                 <span className="w-4 h-0.5 rounded inline-block" style={{ background: FUND_COLORS[selectedFund] }} />
-                {selectedPlayerData?.name} (grezzo)
+                {selectedPlayerData?.nickname || selectedPlayerData?.name} (grezzo)
               </span>
             )}
             {showWgt && (
               <span className="flex items-center gap-1.5">
                 <span className="w-4 h-0.5 rounded inline-block" style={{ background: COLORS.weighted }} />
-                {dataMode === 'both' ? `${selectedPlayerData?.name} (pesato)` : selectedPlayerData?.name}
+                {dataMode === 'both' ? `${selectedPlayerData?.nickname || selectedPlayerData?.name} (pesato)` : (selectedPlayerData?.nickname || selectedPlayerData?.name)}
               </span>
             )}
             <span className="flex items-center gap-1.5">
@@ -1233,7 +1238,7 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
               {showRaw && (
                 <Line
                   type="monotone" dataKey="player"
-                  name={`${selectedPlayerData?.name || 'Giocatrice'} (grezzo)`}
+                  name={`${selectedPlayerData?.nickname || selectedPlayerData?.name || 'Giocatrice'} (grezzo)`}
                   stroke={FUND_COLORS[selectedFund]}
                   strokeWidth={2.5}
                   dot={{ r: 4, fill: FUND_COLORS[selectedFund] }}
@@ -1244,7 +1249,7 @@ function PlayerTrendChart({ playerList, playerTrends, sortedMA, dataMode = 'raw'
               {showWgt && (
                 <Line
                   type="monotone" dataKey="playerW"
-                  name={`${selectedPlayerData?.name || 'Giocatrice'} (pesato)`}
+                  name={`${selectedPlayerData?.nickname || selectedPlayerData?.name || 'Giocatrice'} (pesato)`}
                   stroke={COLORS.weighted}
                   strokeWidth={dataMode === 'both' ? 2 : 2.5}
                   strokeDasharray={dataMode === 'both' ? '6 2' : undefined}

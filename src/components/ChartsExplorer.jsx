@@ -10,6 +10,7 @@ import {
   LineChart, Line, ReferenceLine,
 } from 'recharts';
 import { COLORS } from '../utils/constants';
+import { playerDisplayName } from '../utils/playerUtils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -154,7 +155,7 @@ export default function ChartsExplorer({
     const map = {};
     for (const m of matches) {
       for (const p of m.roster || []) {
-        if (p.number && !map[p.number]) map[p.number] = { name: p.name, roleCode: p.role || '' };
+        if (p.number && !map[p.number]) map[p.number] = { name: p.name, nickname: p.nickname || '', roleCode: p.role || '' };
       }
     }
     return map;
@@ -164,8 +165,12 @@ export default function ChartsExplorer({
     if (!playerTrends) return [];
     return Object.values(playerTrends)
       .filter(p => p.matches.length >= 2)
-      .map(p => ({ ...p, roleCode: rosterRoleMap[p.number]?.roleCode || '' }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .map(p => ({
+        ...p,
+        nickname: rosterRoleMap[p.number]?.nickname || '',
+        roleCode: rosterRoleMap[p.number]?.roleCode || '',
+      }))
+      .sort((a, b) => (a.nickname || a.name).localeCompare(b.nickname || b.name));
   }, [playerTrends, rosterRoleMap]);
 
   const topPerformers = useMemo(() => {
@@ -432,7 +437,7 @@ function ExTopPerformers({ topPerformers, onSelectPlayer }) {
         >
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs font-mono text-amber-400">#{p.number}</span>
-            <span className="text-sm font-medium text-white truncate">{p.name}</span>
+            <span className="text-sm font-medium text-white truncate">{p.nickname || p.name}</span>
           </div>
           <div className="flex gap-3 text-[10px]">
             <div>
@@ -609,7 +614,7 @@ function PlayerRankingChart({ fund, playerTrends, rosterRoleMap, matchAnalytics 
           : [...new Set((p.trends[selectedFund]?.matchLabels || []).map(formatMatchLabel))];
 
         return {
-          name:     (p.name || '').substring(0, 16),
+          name:     (p.nickname || p.name || '').substring(0, 16),
           number:   p.number,
           role,
           raw:      +raw.toFixed(1),
@@ -735,7 +740,7 @@ function PlayerRankingChart({ fund, playerTrends, rosterRoleMap, matchAnalytics 
                     className="rounded-lg border border-white/10 p-3 text-[11px]"
                     style={{ background: 'rgba(17,24,39,0.96)', maxWidth: 300 }}
                   >
-                    <div className="text-white font-semibold mb-1">{row.name}</div>
+                    <div className="text-white font-semibold mb-1">#{row.number} {row.name}</div>
                     <div className="text-gray-300 mb-2">
                       {metricLabel}: <span className="text-amber-300">{metricValue(row).toFixed(1)}%</span> · {list.length} partite
                     </div>
@@ -1045,7 +1050,7 @@ function CPlayerTrendChart({ playerList, playerTrends, sortedMA }) {
                 }`}
               >
                 <span className="font-mono opacity-70">#{p.number}</span>
-                <span>{p.name}</span>
+                <span>{p.nickname || p.name}</span>
                 <span className={tDir === 'improving' ? 'text-green-400' : tDir === 'declining' ? 'text-red-400' : 'text-gray-500'}>
                   {tDir === 'improving' ? '↑' : tDir === 'declining' ? '↓' : '~'}
                 </span>
@@ -1065,7 +1070,7 @@ function CPlayerTrendChart({ playerList, playerTrends, sortedMA }) {
       ) : (
         <div>
           <div className="flex items-center gap-3 mb-2 text-[10px]">
-            <span className="text-white font-semibold">#{effectiveNum} {selectedPlayerData?.name}</span>
+            <span className="text-white font-semibold">#{effectiveNum} {selectedPlayerData?.nickname || selectedPlayerData?.name}</span>
             <span className="text-gray-500">
               Media: <span style={{ color: FUND_COLORS[selectedFund] }}>{(playerAvg * 100).toFixed(1)}%</span>
             </span>
@@ -1086,7 +1091,7 @@ function CPlayerTrendChart({ playerList, playerTrends, sortedMA }) {
               <Tooltip contentStyle={CHART_TOOLTIP_STYLE}
                 formatter={(val, name) => [`${val?.toFixed(1) ?? '—'}%`, name]} />
               <Line type="monotone" dataKey="player"
-                name={selectedPlayerData?.name || 'Giocatrice'}
+                name={selectedPlayerData?.nickname || selectedPlayerData?.name || 'Giocatrice'}
                 stroke={FUND_COLORS[selectedFund]} strokeWidth={2.5}
                 dot={{ r: 4, fill: FUND_COLORS[selectedFund] }} activeDot={{ r: 6 }} connectNulls />
               <Line type="monotone" dataKey="team" name="Media squadra"

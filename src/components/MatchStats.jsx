@@ -4,6 +4,7 @@
 import { useState, useMemo } from 'react';
 import { BarChart3, ClipboardList, Home, Plane, User, Users } from 'lucide-react';
 import { areTeamNamesLikelySame } from '../utils/teamNameMatcher';
+import { buildRosterDisplayMap } from '../utils/playerUtils';
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 function fPct(v)  { if (v == null || !Number.isFinite(v) || v === 0) return '—'; return (v * 100).toFixed(1) + '%'; }
@@ -427,6 +428,8 @@ export default function MatchStats({ matches, analytics, standings }) {
   // ── Derived ──────────────────────────────────────────────────────────────────
   const matchWeightMap = useMemo(() => buildMatchWeightMap(analytics), [analytics]);
   const rows = useMemo(() => matches.map(buildMatchRow), [matches]);
+  // Mappa numero → soprannome per lookup nelle tabelle player
+  const rosterDisplayMap = useMemo(() => buildRosterDisplayMap(matches), [matches]);
 
   const sorted = useMemo(() => [...rows].sort((a, b) => {
     let va = a[sortKey], vb = b[sortKey];
@@ -702,7 +705,7 @@ export default function MatchStats({ matches, analytics, standings }) {
             Nessun dato disponibile per questo fondamentale
           </div>
         ):(
-          <PlayerFundTable rows={playerRows} totals={playerTotals} fund={activeFund} cfg={cfg} hasWeightedEff={!!analytics} />
+          <PlayerFundTable rows={playerRows} totals={playerTotals} fund={activeFund} cfg={cfg} hasWeightedEff={!!analytics} rosterDisplayMap={rosterDisplayMap} />
         )}
       </div>
 
@@ -815,7 +818,7 @@ export default function MatchStats({ matches, analytics, standings }) {
               Nessun dato disponibile
             </div>
           ):(
-            <PlayerFullTable rows={tablePlayerRows} fund={tableFund} />
+            <PlayerFullTable rows={tablePlayerRows} fund={tableFund} rosterDisplayMap={rosterDisplayMap} />
           )}
         </div>
 
@@ -832,7 +835,7 @@ export default function MatchStats({ matches, analytics, standings }) {
 }
 
 // ─── Section 2: Per-player fundamental table ──────────────────────────────────
-function PlayerFundTable({ rows, totals, fund, cfg, hasWeightedEff }) {
+function PlayerFundTable({ rows, totals, fund, cfg, hasWeightedEff, rosterDisplayMap = {} }) {
   const [sortKey, setSortKey] = useState('number');
   const [sortAsc, setSortAsc] = useState(true);
   const sorted = useMemo(() => [...rows].sort((a,b) => {
@@ -882,7 +885,7 @@ function PlayerFundTable({ rows, totals, fund, cfg, hasWeightedEff }) {
           {sorted.map((row,idx) => (
             <tr key={row.number||row.name} className={`transition-colors hover:bg-white/[0.03] ${idx%2===0?'':'bg-white/[0.015]'}`}>
               <td className={tdCls+' pl-3 text-left font-mono text-gray-400 text-[11px]'}>{row.number||'—'}</td>
-              <td className={tdCls+' text-left text-gray-200 font-medium min-w-[120px]'}>{row.name||'—'}</td>
+              <td className={tdCls+' text-left text-gray-200 font-medium min-w-[120px]'}>{rosterDisplayMap[String(row.number||'').padStart(2,'0')] || row.name || '—'}</td>
               {cols.map((col,ci) => {
                 const val=row[col.key];
                 return (
@@ -1073,7 +1076,7 @@ function OpponentFullTable({ rows, fund }) {
 }
 
 // ─── Section 4b: Full player table with frequencies + valore medio ────────────
-function PlayerFullTable({ rows, fund }) {
+function PlayerFullTable({ rows, fund, rosterDisplayMap = {} }) {
   const cfg = FUND_CFG[fund];
   const [sortKey, setSortKey] = useState('number');
   const [sortAsc, setSortAsc] = useState(true);
@@ -1120,7 +1123,7 @@ function PlayerFullTable({ rows, fund }) {
           {sorted.map((row,idx) => (
             <tr key={row.number||row.name} className={`transition-colors hover:bg-white/[0.03] ${idx%2===0?'':'bg-white/[0.015]'}`}>
               <td className={tdCls+' pl-3 text-left font-mono text-gray-400 text-[11px]'}>{row.number||'—'}</td>
-              <td className={tdCls+' text-left text-gray-200 font-medium min-w-[110px]'}>{row.name||'—'}</td>
+              <td className={tdCls+' text-left text-gray-200 font-medium min-w-[110px]'}>{rosterDisplayMap[String(row.number||'').padStart(2,'0')] || row.name || '—'}</td>
               <td className={tdCls+' text-gray-400 font-mono text-[11px]'}>{row.tot}</td>
               {[['kill','killPct'],['pos','posPct'],['exc','excPct'],['neg','negPct'],['err','errPct']].map(([k,pk],ci)=>(
                 <>
