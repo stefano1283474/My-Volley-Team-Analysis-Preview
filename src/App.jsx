@@ -5,6 +5,40 @@
 // ============================================================================
 
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import {
+  Activity,
+  BarChart3,
+  BookOpenText,
+  CalendarDays,
+  Circle,
+  CircleHelp,
+  ClipboardList,
+  Crosshair,
+  Crown,
+  Database,
+  Package,
+  Dumbbell,
+  GitBranch,
+  Home,
+  LayoutList,
+  Lightbulb,
+  LineChart,
+  Link2,
+  Mail,
+  Lock,
+  Menu,
+  RefreshCw,
+  Search,
+  Settings,
+  Shield,
+  ShieldCheck,
+  SlidersHorizontal,
+  Tag,
+  Target,
+  TrendingUp,
+  Users,
+  X,
+} from 'lucide-react';
 import { parseMatchFile, parseCalendarCSV, computeStandings } from './utils/dataParser';
 import {
   reconstructOpponent, computeMatchWeight, computeFundamentalWeights,
@@ -22,6 +56,7 @@ import {
   deleteMatchFromFirestore,
   clearArchiveData,
   loadAllMatches,
+  loadOwnerTeams,
   saveCalendar,
   loadCalendar,
   getOrCreateShareLink,
@@ -37,6 +72,7 @@ import {
   loadMyProfileUpgradeRequest,
   loadAllProfileUpgradeRequests,
   resolveProfileUpgradeRequest,
+  migrateAdminsToProMax,
   recordUserLoginUsage,
   recordUserSectionUsage,
   loadAllUserUsageStats,
@@ -48,6 +84,8 @@ import {
   saveAdminPosts,
   saveAdminOffers,
   isAdminContentVisibleToUser,
+  loadPackageConfig,
+  savePackageConfig,
 } from './utils/firestoreService';
 import { useAuth } from './context/AuthContext';
 import { PinProvider } from './context/PinContext';
@@ -76,6 +114,8 @@ import AdminRequestsPanel from './components/AdminRequestsPanel';
 import AdminContentPanel from './components/AdminContentPanel';
 import AdminUsageStatsPanel from './components/AdminUsageStatsPanel';
 import MatchStats from './components/MatchStats';
+import CoachProMax from './components/CoachProMax';
+import AdminPackagePanel from './components/AdminPackagePanel';
 
 // ─── Profile system ───────────────────────────────────────────────────────────
 const PROFILE_ORDER = { base: 0, pro: 1, promax: 2 };
@@ -84,49 +124,101 @@ const PROFILE_META = {
   pro:    { label: 'Pro',     color: '#7C3AED', bg: 'rgba(124,58,237,0.15)', border: 'rgba(124,58,237,0.4)' },
   promax: { label: 'Pro Max', color: '#DC2626', bg: 'rgba(220,38,38,0.15)',  border: 'rgba(220,38,38,0.4)'  },
 };
+function IconGlyph({ name, className = '' }) {
+  const ICON_COMPONENTS = {
+    House: Home,
+    Search,
+    ClipboardList,
+    LineChart,
+    Dumbbell,
+    Settings,
+    ShieldCheck,
+    Mail,
+    Lock,
+    Menu,
+    LayoutList,
+    BarChart3,
+    CalendarDays,
+    Users,
+    Shield,
+    Target,
+    Activity,
+    Lightbulb,
+    TrendingUp,
+    RefreshCw,
+    Crosshair,
+    Crown,
+    GitBranch,
+    Package,
+    Link2,
+    Tag,
+    Database,
+    CircleHelp,
+    BookOpenText,
+    SlidersHorizontal,
+    Volleyball: Target,
+    X,
+  };
+  const Comp = ICON_COMPONENTS[name] || Circle;
+  return <Comp className={className} size={16} strokeWidth={2} aria-hidden="true" />;
+}
+function clampProfileToAssigned(selectedProfile, assignedProfile) {
+  const assigned = PROFILE_ORDER[assignedProfile] !== undefined ? assignedProfile : 'base';
+  const selected = PROFILE_ORDER[selectedProfile] !== undefined ? selectedProfile : assigned;
+  return PROFILE_ORDER[selected] <= PROFILE_ORDER[assigned] ? selected : assigned;
+}
 
 // ─── Navigation structure ─────────────────────────────────────────────────────
 const SECTIONS = [
-  { id: 'home',        label: 'Home',        icon: '🏠', minProfile: 'base' },
-  { id: 'analisi',     label: 'Analisi',     icon: '🔬', minProfile: 'base' },
-  { id: 'matchstats',  label: 'Match-stats', icon: '📋', minProfile: 'base' },
-  { id: 'evidenze',    label: 'Evidenze',    icon: '📈', minProfile: 'pro'  },
-  { id: 'training',    label: 'Training',    icon: '🏋️', minProfile: 'base' },
-  { id: 'sistema',     label: 'Sistema',     icon: '⚙️', minProfile: 'base' },
-  { id: 'admin_users',    label: 'Gestione Utenti',    icon: '🛡️', minProfile: 'base' },
-  { id: 'admin_requests', label: 'Richieste Upgrade',  icon: '📨', minProfile: 'base' },
-  { id: 'admin_content',  label: 'Bacheca & Offerte',  icon: '📋', minProfile: 'base' },
-  { id: 'admin_stats',    label: 'Statistiche Utilizzo', icon: '📊', minProfile: 'base' },
+  { id: 'home',        label: 'Home',        icon: 'House',       minProfile: 'base' },
+  { id: 'analisi',     label: 'Analisi',     icon: 'Search',      minProfile: 'base' },
+  { id: 'matchstats',  label: 'Match-stats', icon: 'ClipboardList', minProfile: 'base' },
+  { id: 'evidenze',    label: 'Evidenze',    icon: 'LineChart',   minProfile: 'pro'  },
+  { id: 'training',    label: 'Training',    icon: 'Dumbbell',    minProfile: 'base' },
+  { id: 'sistema',     label: 'Sistema',     icon: 'Settings',    minProfile: 'base' },
+  { id: 'coach_promax',   label: 'Coach ProMax',        icon: 'Crown',        minProfile: 'promax' },
+  { id: 'admin_users',    label: 'Gestione Utenti',    icon: 'ShieldCheck',  minProfile: 'base' },
+  { id: 'admin_requests', label: 'Richieste Upgrade',  icon: 'Mail',         minProfile: 'base' },
+  { id: 'admin_content',  label: 'Bacheca & Offerte',  icon: 'LayoutList',   minProfile: 'base' },
+  { id: 'admin_stats',    label: 'Statistiche Utilizzo', icon: 'BarChart3',  minProfile: 'base' },
+  { id: 'admin_packages', label: 'Gestione Pacchetti',  icon: 'Package',    minProfile: 'base' },
 ];
-const ADMIN_SECTION_IDS = ['admin', 'admin_users', 'admin_requests', 'admin_content', 'admin_stats'];
+const ADMIN_SECTION_IDS = ['admin', 'admin_users', 'admin_requests', 'admin_content', 'admin_stats', 'admin_packages'];
 
 const SECTION_TABS = {
   analisi: [
-    { id: 'partite',    label: 'Partite',    icon: '⚡', minProfile: 'base'   },
-    { id: 'giocatrici', label: 'Giocatrici', icon: '★',  minProfile: 'base'   },
-    { id: 'squadra',    label: 'Squadra',    icon: '🛡', minProfile: 'pro'    },
-    { id: 'avversari',  label: 'Avversari',  icon: '🎯', minProfile: 'pro'    },
-    { id: 'gioco',      label: 'Gioco',      icon: '🏐', minProfile: 'promax' },
+    { id: 'partite',    label: 'Partite',    icon: 'CalendarDays', minProfile: 'base'   },
+    { id: 'giocatrici', label: 'Giocatrici', icon: 'Users',        minProfile: 'base'   },
+    { id: 'squadra',    label: 'Squadra',    icon: 'Shield',       minProfile: 'pro'    },
+    { id: 'avversari',  label: 'Avversari',  icon: 'Target',       minProfile: 'pro'    },
+    { id: 'gioco',      label: 'Gioco',      icon: 'Activity',     minProfile: 'promax' },
   ],
   evidenze: [
-    { id: 'suggerimenti', label: 'Suggerimenti', icon: '💡', minProfile: 'pro'    },
-    { id: 'trend',        label: 'Trend',        icon: '↗',  minProfile: 'pro'    },
-    { id: 'rotazioni',    label: 'Rotazioni',    icon: '⟳',  minProfile: 'pro'    },
-    { id: 'attacco',      label: 'Attacco',      icon: '⚔', minProfile: 'pro'    },
-    { id: 'catene',       label: 'Catene',       icon: '🧠', minProfile: 'promax' },
+    { id: 'suggerimenti', label: 'Suggerimenti', icon: 'Lightbulb', minProfile: 'pro'    },
+    { id: 'trend',        label: 'Trend',        icon: 'TrendingUp', minProfile: 'pro'    },
+    { id: 'rotazioni',    label: 'Rotazioni',    icon: 'RefreshCw',  minProfile: 'pro'    },
+    { id: 'attacco',      label: 'Attacco',      icon: 'Crosshair',  minProfile: 'pro'    },
+    { id: 'catene',       label: 'Catene',       icon: 'GitBranch',  minProfile: 'promax' },
   ],
   training: [
-    { id: 'suggerimenti', label: 'Suggerimenti', icon: '💡', minProfile: 'base'   },
-    { id: 'settimana',    label: 'Settimana',    icon: '📅', minProfile: 'pro'    },
-    { id: 'piano',        label: 'Piano',        icon: '🔗', minProfile: 'promax' },
+    { id: 'suggerimenti', label: 'Suggerimenti', icon: 'Lightbulb',   minProfile: 'base'   },
+    { id: 'settimana',    label: 'Settimana',    icon: 'CalendarDays', minProfile: 'pro'    },
+    { id: 'piano',        label: 'Piano',        icon: 'Link2',        minProfile: 'promax' },
+  ],
+  coach_promax: [
+    { id: 'profilo',       label: 'Profilo Partita',   icon: 'Target',      minProfile: 'promax' },
+    { id: 'coefficienti',  label: 'Coefficienti',      icon: 'TrendingUp',  minProfile: 'promax' },
+    { id: 'palleggiatore', label: 'Palleggiatore',     icon: 'Crosshair',   minProfile: 'promax' },
+    { id: 'ruoli',         label: 'Ruoli',             icon: 'Users',       minProfile: 'promax' },
+    { id: 'ritorno',       label: 'Prep. Ritorno',     icon: 'RefreshCw',   minProfile: 'promax' },
   ],
   sistema: [
-    { id: 'tipologia', label: 'Tipologia Gare', icon: '🏷', minProfile: 'base'   },
-    { id: 'dati',      label: 'Dati',           icon: '☰',  minProfile: 'base'   },
-    { id: 'guida',     label: 'Guida',          icon: '❓', minProfile: 'base'   },
-    { id: 'glossario', label: 'Glossario',      icon: '📖', minProfile: 'base'   },
-    { id: 'config',    label: 'Config',         icon: '🔧', minProfile: 'pro'    },
-    { id: 'grafici',   label: 'Grafici',        icon: '📊', minProfile: 'promax' },
+    { id: 'tipologia', label: 'Tipologia Gare', icon: 'Tag',          minProfile: 'base'   },
+    { id: 'dati',      label: 'Dati',           icon: 'Database',     minProfile: 'base'   },
+    { id: 'guida',     label: 'Guida',          icon: 'CircleHelp',   minProfile: 'base'   },
+    { id: 'glossario', label: 'Glossario',      icon: 'BookOpenText', minProfile: 'base'   },
+    { id: 'config',    label: 'Config',         icon: 'SlidersHorizontal', minProfile: 'pro'    },
+    { id: 'grafici',   label: 'Grafici',        icon: 'BarChart3',    minProfile: 'promax' },
   ],
 };
 
@@ -156,8 +248,17 @@ function normalizeSeenCategoryMap(value) {
   if (!value || typeof value !== 'object') return {};
   const out = {};
   Object.entries(value).forEach(([k, v]) => {
-    if (!v || typeof v !== 'object') return;
-    out[String(k)] = !!v;
+    if (typeof v === 'boolean') {
+      out[String(k)] = v;
+      return;
+    }
+    if (typeof v === 'number') {
+      out[String(k)] = v > 0;
+      return;
+    }
+    if (v && typeof v === 'object') {
+      out[String(k)] = true;
+    }
   });
   return out;
 }
@@ -250,9 +351,7 @@ export default function App() {
   });
 
   // ─── State ────────────────────────────────────────────────────────────────
-  const [activeSection, setActiveSection] = useState(() => {
-    try { return localStorage.getItem('vpa_active_section') || 'home'; } catch { return 'home'; }
-  });
+  const [activeSection, setActiveSection] = useState('home');
   const [activeSubTabs, setActiveSubTabs] = useState(() => {
     try {
       const saved = localStorage.getItem('vpa_active_subtabs');
@@ -403,6 +502,7 @@ export default function App() {
     }
   });
   const [myProfileRequest, setMyProfileRequest] = useState(null);
+  const [packageConfig, setPackageConfig] = useState({ sections: {}, tabs: {} });
   const [requestTargetProfile, setRequestTargetProfile] = useState('pro');
   const [requestMessage, setRequestMessage] = useState('');
   const [isAccessReady, setIsAccessReady] = useState(false);
@@ -431,10 +531,20 @@ export default function App() {
   const swipeStartRef = useRef(null);
   const sidebarResizeStartRef = useRef(null);
   const lastTrackedSectionRef = useRef('');
+  const adminMigrationRunRef = useRef('');
   const [profileReveal, setProfileReveal] = useState({ sections: [], tabs: [] });
+  const [ownerTeamId, setOwnerTeamId] = useState(() => {
+    try {
+      return localStorage.getItem('vpa_owner_team_id') || localStorage.getItem('vpa_owner_team') || '';
+    } catch {
+      return '';
+    }
+  });
   const [ownerTeamName, setOwnerTeamName] = useState(() => {
     try { return localStorage.getItem('vpa_owner_team') || ''; } catch { return ''; }
   });
+  const [firestoreTeams, setFirestoreTeams] = useState([]);
+  const [teamSelectionPrompt, setTeamSelectionPrompt] = useState({ open: false, options: [], selected: '' });
 
   // ─── Dashboard personalizzata — config persistita in localStorage ─────────
   const [dashboardConfig, setDashboardConfig] = useState(() => {
@@ -454,6 +564,9 @@ export default function App() {
   const canEditDataset = !!user && (!isSharedMode || !!sharedAccess?.canWrite || !!sharedAccess?.isOwner);
   const canManageShare = !!user && (!isSharedMode || !!sharedAccess?.isOwner);
   const dataOwnerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
+  const dataOwnerId = isSharedMode
+    ? (sharedAccess?.ownerEmail || '').trim().toLowerCase()
+    : (user?.email || '').trim().toLowerCase();
   const shareUrl = shareInfo?.token
     ? `${window.location.origin}${window.location.pathname}?share=${shareInfo.token}`
     : '';
@@ -464,7 +577,6 @@ export default function App() {
     () => Object.keys(PROFILE_META).filter(p => PROFILE_ORDER[p] > PROFILE_ORDER[assignedProfile]),
     [assignedProfile]
   );
-
   useEffect(() => {
     if (availableUpgradeTargets.length === 0) return;
     if (availableUpgradeTargets.includes(requestTargetProfile)) return;
@@ -487,6 +599,29 @@ export default function App() {
       return '';
     }
   }, [toMs]);
+  const accountRequestTrace = useMemo(() => {
+    if (!myProfileRequest) return null;
+    const status = String(myProfileRequest.status || 'pending').toLowerCase();
+    const target = myProfileRequest.targetProfile || '';
+    const targetLabel = PROFILE_META[target]?.label || (target || '—');
+    const requestedAt = formatItDateTime(myProfileRequest.requestedAt);
+    const resolvedAt = formatItDateTime(myProfileRequest.resolvedAt || myProfileRequest.updatedAt);
+    const statusLabel = status === 'approved' ? 'approvata' : status === 'rejected' ? 'rifiutata' : 'in attesa';
+    const statusClass = status === 'approved'
+      ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'
+      : status === 'rejected'
+        ? 'border-red-400/30 bg-red-500/10 text-red-300'
+        : 'border-amber-400/30 bg-amber-500/10 text-amber-300';
+    return {
+      status,
+      statusLabel,
+      statusClass,
+      targetLabel,
+      requestedAt,
+      resolvedAt,
+      message: String(myProfileRequest.message || '').trim(),
+    };
+  }, [myProfileRequest, formatItDateTime]);
   const handleNewsChange = useCallback(async (newPosts) => {
     const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
     if (!ownerUid) return;
@@ -701,12 +836,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isAdmin) return;
-    if (canUseAdminUi) {
-      if (ADMIN_SECTION_IDS.includes(activeSection)) return;
-      setActiveSection('admin_users');
-      try { localStorage.setItem('vpa_active_section', 'admin_users'); } catch {}
-      return;
-    }
+    if (canUseAdminUi) return;
     if (!ADMIN_SECTION_IDS.includes(activeSection)) return;
     setActiveSection('home');
     try { localStorage.setItem('vpa_active_section', 'home'); } catch {}
@@ -728,13 +858,22 @@ export default function App() {
       try {
         setIsAccessReady(false);
         const ensuredAccess = await ensureUserAccessRecord(user);
-        const loadedAccess = await loadCurrentUserAccess(user.uid);
+        const loadedAccess = await loadCurrentUserAccess(user.uid, user.email || '');
         const access = loadedAccess || ensuredAccess;
         if (cancelled) return;
         setUserAccess(access);
-        const forcedProfile = access?.assignedProfile || 'base';
-        setActiveProfile(forcedProfile);
-        try { localStorage.setItem('vpa_active_profile', forcedProfile); } catch {}
+        const assigned = access?.assignedProfile || 'base';
+        setActiveProfile((prev) => {
+          const next = clampProfileToAssigned(prev, assigned);
+          try { localStorage.setItem('vpa_active_profile', next); } catch {}
+          return next;
+        });
+        // Carica packageConfig per tutti (serve per visibilità dinamica)
+        try {
+          const pkgCfg = await loadPackageConfig();
+          if (!cancelled) setPackageConfig(pkgCfg);
+        } catch {}
+
         if (access?.role === 'admin') {
           const [usersList, requestsList, usageRows] = await Promise.all([
             loadAllUsersAccess(),
@@ -750,7 +889,7 @@ export default function App() {
           setAdminUsers([]);
           setAdminUsageStats([]);
           setProfileRequests([]);
-          const myRequest = await loadMyProfileUpgradeRequest(user.uid);
+          const myRequest = await loadMyProfileUpgradeRequest(user.uid, user.email || '');
           if (cancelled) return;
           setMyProfileRequest(myRequest);
           try {
@@ -804,6 +943,24 @@ export default function App() {
   }, [isAdmin]);
 
   useEffect(() => {
+    if (!user?.uid || !isAdmin) return;
+    const runKey = `${user.uid}:${user.email || ''}`;
+    if (adminMigrationRunRef.current === runKey) return;
+    adminMigrationRunRef.current = runKey;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        await migrateAdminsToProMax();
+        if (!cancelled) await refreshAdminUsers();
+      } catch (err) {
+        if (!cancelled) setErrorMsg(`Errore migrazione admin: ${err.message}`);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [user, isAdmin, refreshAdminUsers]);
+
+  useEffect(() => {
     if (!user?.uid || isAdmin) return;
     if (!activeSection) return;
     if (activeSection === lastTrackedSectionRef.current) return;
@@ -813,7 +970,7 @@ export default function App() {
 
   const refreshMyProfileRequest = useCallback(async () => {
     if (!user?.uid || isAdmin) return;
-    const latest = await loadMyProfileUpgradeRequest(user.uid);
+    const latest = await loadMyProfileUpgradeRequest(user.uid, user.email || '');
     setMyProfileRequest(latest);
   }, [user, isAdmin]);
 
@@ -822,7 +979,7 @@ export default function App() {
     setIsAdminSaving(true);
     setErrorMsg('');
     try {
-      await updateUserAssignedProfile(targetUser.uid, profile);
+      await updateUserAssignedProfile(targetUser.uid, profile, targetUser.email || '');
       await refreshAdminUsers();
       if (targetUser.uid === user?.uid) {
         setUserAccess(prev => prev ? { ...prev, assignedProfile: profile } : prev);
@@ -842,7 +999,7 @@ export default function App() {
     setErrorMsg('');
     try {
       const normalizedRole = role;
-      await updateUserRole(targetUser.uid, normalizedRole);
+      await updateUserRole(targetUser.uid, normalizedRole, targetUser.email || '');
       await refreshAdminUsers();
       if (targetUser.uid === user?.uid) {
         setUserAccess(prev => prev ? { ...prev, role: normalizedRole } : prev);
@@ -910,12 +1067,32 @@ export default function App() {
     let cancelled = false;
     const run = async () => {
       try {
-        const latest = await loadMyProfileUpgradeRequest(user.uid);
-        if (!cancelled) setMyProfileRequest(latest);
+        const [latestRequest, latestAccess] = await Promise.all([
+          loadMyProfileUpgradeRequest(user.uid, user.email || ''),
+          loadCurrentUserAccess(user.uid, user.email || ''),
+        ]);
+        if (cancelled) return;
+        setMyProfileRequest(latestRequest);
+        if (latestAccess) {
+          setUserAccess(prev => {
+            const prevProfile = prev?.assignedProfile || 'base';
+            const prevRole = prev?.role || 'user';
+            if (prevProfile === latestAccess.assignedProfile && prevRole === latestAccess.role) return prev;
+            return { ...(prev || {}), ...latestAccess };
+          });
+          const assigned = latestAccess.assignedProfile || 'base';
+          setActiveProfile((prev) => {
+            const next = clampProfileToAssigned(prev, assigned);
+            if (next !== prev) {
+              try { localStorage.setItem('vpa_active_profile', next); } catch {}
+            }
+            return next;
+          });
+        }
       } catch {}
     };
     run();
-    const intervalId = setInterval(run, 20000);
+    const intervalId = setInterval(run, 8000);
     const onVisible = () => {
       if (document.visibilityState === 'visible') run();
     };
@@ -1048,6 +1225,21 @@ export default function App() {
   }, [isMobilePortrait, isSidebarOpen]);
 
   // ─── Profile & navigation helpers ────────────────────────────────────────
+  // Risolve il minProfile effettivo per una sezione o un tab, considerando
+  // gli override dinamici salvati dall'admin in packageConfig
+  const resolveMinProfile = useCallback((sectionId, tabId) => {
+    if (tabId) {
+      const key = `${sectionId}__${tabId}`;
+      if (packageConfig?.tabs?.[key]) return packageConfig.tabs[key];
+      const tabs = SECTION_TABS[sectionId] || [];
+      const tab = tabs.find(t => t.id === tabId);
+      return tab?.minProfile || 'base';
+    }
+    if (packageConfig?.sections?.[sectionId]) return packageConfig.sections[sectionId];
+    const sec = SECTIONS.find(s => s.id === sectionId);
+    return sec?.minProfile || 'base';
+  }, [packageConfig]);
+
   const profileAllows = useCallback((minProfile) => {
     return PROFILE_ORDER[activeProfile] >= PROFILE_ORDER[minProfile];
   }, [activeProfile]);
@@ -1070,20 +1262,29 @@ export default function App() {
       setErrorMsg('Profilo non abilitato. Invia una richiesta all’amministratore.');
       return;
     }
-    const prevSections = new Set(getVisibleSectionIdsByProfile(activeProfile));
-    const nextSections = getVisibleSectionIdsByProfile(profile);
+    // Usa resolveMinProfile per visibilità dinamica
+    const dynVisibleSections = (p) => SECTIONS
+      .filter(s => !ADMIN_SECTION_IDS.includes(s.id))
+      .filter(s => PROFILE_ORDER[p] >= PROFILE_ORDER[resolveMinProfile(s.id)])
+      .map(s => s.id);
+    const dynVisibleTabs = (secId, p) => (SECTION_TABS[secId] || [])
+      .filter(t => PROFILE_ORDER[p] >= PROFILE_ORDER[resolveMinProfile(secId, t.id)])
+      .map(t => t.id);
+
+    const prevSections = new Set(dynVisibleSections(activeProfile));
+    const nextSections = dynVisibleSections(profile);
     const revealedSections = nextSections.filter(sectionId => !prevSections.has(sectionId));
 
-    const prevTabs = new Set(getVisibleTabIdsByProfile(activeSection, activeProfile));
-    const nextTabs = getVisibleTabIdsByProfile(activeSection, profile);
+    const prevTabs = new Set(dynVisibleTabs(activeSection, activeProfile));
+    const nextTabs = dynVisibleTabs(activeSection, profile);
     const revealedTabs = nextTabs.filter(tabId => !prevTabs.has(tabId));
 
     setProfileReveal({ sections: revealedSections, tabs: revealedTabs });
     setActiveProfile(profile);
     try { localStorage.setItem('vpa_active_profile', profile); } catch {}
     // If current section is not visible in new profile, redirect to home
-    const sectionMeta = SECTIONS.find(s => s.id === activeSection);
-    if (sectionMeta && PROFILE_ORDER[profile] < PROFILE_ORDER[sectionMeta.minProfile]) {
+    const sectionEffective = resolveMinProfile(activeSection);
+    if (PROFILE_ORDER[profile] < PROFILE_ORDER[sectionEffective]) {
       setActiveSection('home');
       try { localStorage.setItem('vpa_active_section', 'home'); } catch {}
     }
@@ -1091,9 +1292,9 @@ export default function App() {
     const tabs = SECTION_TABS[activeSection] || [];
     const curSub = activeSubTabs[activeSection];
     if (curSub) {
-      const tabMeta = tabs.find(t => t.id === curSub);
-      if (tabMeta && PROFILE_ORDER[profile] < PROFILE_ORDER[tabMeta.minProfile]) {
-        const firstAllowed = tabs.find(t => PROFILE_ORDER[profile] >= PROFILE_ORDER[t.minProfile]);
+      const tabEffective = resolveMinProfile(activeSection, curSub);
+      if (PROFILE_ORDER[profile] < PROFILE_ORDER[tabEffective]) {
+        const firstAllowed = tabs.find(t => PROFILE_ORDER[profile] >= PROFILE_ORDER[resolveMinProfile(activeSection, t.id)]);
         if (firstAllowed) {
           setActiveSubTabs(prev => {
             const next = { ...prev, [activeSection]: firstAllowed.id };
@@ -1103,7 +1304,7 @@ export default function App() {
         }
       }
     }
-  }, [activeProfile, activeSection, activeSubTabs, canUseAdminUi, assignedProfile]);
+  }, [activeProfile, activeSection, activeSubTabs, canUseAdminUi, assignedProfile, resolveMinProfile]);
 
   useEffect(() => {
     if (profileReveal.sections.length === 0 && profileReveal.tabs.length === 0) return;
@@ -1118,6 +1319,24 @@ export default function App() {
     setOwnerTeamName(resolved);
     try { localStorage.setItem('vpa_owner_team', resolved); } catch {}
   }, [standings]);
+
+  const handleOwnerTeamIdChange = useCallback((teamId) => {
+    const resolved = String(teamId || '').trim();
+    setOwnerTeamId(resolved);
+    try { localStorage.setItem('vpa_owner_team_id', resolved); } catch {}
+  }, []);
+
+  const buildSelectableTeams = useCallback((cal = [], st = []) => {
+    const teams = new Set();
+    (st || []).forEach((row) => {
+      if (row?.name) teams.add(String(row.name).trim());
+    });
+    (cal || []).forEach((row) => {
+      if (row?.home) teams.add(String(row.home).trim());
+      if (row?.away) teams.add(String(row.away).trim());
+    });
+    return Array.from(teams).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }, []);
 
   const handleOpenOpponentCommentFromTrainingPlan = useCallback((opponentName) => {
     if (!opponentName) return;
@@ -1177,12 +1396,14 @@ export default function App() {
       setLoadingMsg('Caricamento dati da Database in Cloud…');
       try {
         let ownerUid = user.uid;
+        let ownerEmail = (user.email || '').trim().toLowerCase();
         if (isSharedMode) {
           const access = await resolveSharedAccess(shareToken, user);
           if (!access.granted) {
             throw new Error('Non autorizzato ad accedere a questo dataset condiviso');
           }
           ownerUid = access.ownerUid;
+          ownerEmail = String(access.ownerEmail || '').trim().toLowerCase();
           setSharedAccess(access);
           setShareInfo({
             token: access.token,
@@ -1208,21 +1429,38 @@ export default function App() {
           }
         }
 
+        const loadedTeams = await loadOwnerTeams(ownerEmail);
+        const selectedTeamId = String(ownerTeamId || '').trim();
+        const activeTeamId = loadedTeams.some(t => t.id === selectedTeamId)
+          ? selectedTeamId
+          : (loadedTeams[0]?.id || '');
+
+        if (activeTeamId !== selectedTeamId) {
+          setOwnerTeamId(activeTeamId);
+          try { localStorage.setItem('vpa_owner_team_id', activeTeamId); } catch {}
+        }
+
         const [loadedMatches, calData, loadedNews, loadedOffers] = await Promise.all([
-          loadAllMatches(ownerUid),
-          loadCalendar(ownerUid),
+          activeTeamId ? loadAllMatches(ownerEmail, activeTeamId) : Promise.resolve([]),
+          activeTeamId ? loadCalendar(ownerEmail, activeTeamId) : Promise.resolve(null),
           loadTeamNews(ownerUid),
           loadTeamOffers(ownerUid),
         ]);
 
         if (cancelled) return;
 
+        setFirestoreTeams(loadedTeams);
         if (loadedMatches.length > 0) {
           setMatches(loadedMatches);
+        } else {
+          setMatches([]);
         }
         if (calData) {
           setCalendar(calData.calendar || []);
           setStandings(calData.standings || []);
+        } else {
+          setCalendar([]);
+          setStandings([]);
         }
         if (loadedNews)   setTeamNews(loadedNews);
         if (loadedOffers) setTeamOffers(loadedOffers);
@@ -1252,7 +1490,7 @@ export default function App() {
 
     loadData();
     return () => { cancelled = true; };
-  }, [user, isSharedMode, shareToken]);
+  }, [user, isSharedMode, shareToken, ownerTeamId]);
 
   const handleCreateShareLink = useCallback(async () => {
     if (!user) return;
@@ -1287,7 +1525,7 @@ export default function App() {
 
   // ─── File upload handler — parse + salva su Firestore ────────────────────
   const handleFileUpload = useCallback(async (files) => {
-    if (!user || !dataOwnerUid || !canEditDataset) return;
+    if (!user || !dataOwnerId || !ownerTeamId || !canEditDataset) return;
     setIsLoading(true);
     setErrorMsg('');
     const queuedFiles = files.map((file, index) => ({
@@ -1346,10 +1584,17 @@ export default function App() {
             progress: 85,
             detail: `Scrittura calendario e ${st.length} squadre`,
           });
-          await saveCalendar(dataOwnerUid, cal, st);
+          await saveCalendar(dataOwnerId, cal, st, ownerTeamId);
 
           setCalendar(cal);
           setStandings(st);
+          const selectableTeams = buildSelectableTeams(cal, st);
+          const preselectedTeam = findStandingTeamName(st, ownerTeamName) || '';
+          setTeamSelectionPrompt({
+            open: selectableTeams.length > 0,
+            options: selectableTeams,
+            selected: selectableTeams.includes(preselectedTeam) ? preselectedTeam : '',
+          });
           updateProgress(i, {
             status: 'done',
             phase: 'Completato',
@@ -1373,7 +1618,7 @@ export default function App() {
             progress: 80,
             detail: `vs ${match.metadata.opponent || 'N/D'} · ${match.metadata.date || 'Data N/D'}`,
           });
-          await saveMatch(dataOwnerUid, match);
+          await saveMatch(dataOwnerId, match, ownerTeamId);
 
           setMatches(prev => {
             const exists = prev.find(m =>
@@ -1412,27 +1657,27 @@ export default function App() {
     setIsLoading(false);
     setLoadingMsg(`Upload completato: ${completedCount}/${files.length} file salvati`);
     setTimeout(() => setLoadingMsg(''), 5000);
-  }, [user, dataOwnerUid, canEditDataset]);
+  }, [user, dataOwnerId, canEditDataset, ownerTeamId, ownerTeamName, buildSelectableTeams]);
 
   // ─── Delete match — rimuove da Firestore e dallo stato locale ─────────────
   const handleDeleteMatch = useCallback(async (matchId) => {
-    if (!user || !dataOwnerUid || !canEditDataset) return;
+    if (!user || !dataOwnerId || !ownerTeamId || !canEditDataset) return;
     try {
-      await deleteMatchFromFirestore(dataOwnerUid, matchId);
+      await deleteMatchFromFirestore(dataOwnerId, matchId, ownerTeamId);
       setMatches(prev => prev.filter(m => m.id !== matchId));
       if (selectedMatch?.id === matchId) setSelectedMatch(null);
     } catch (err) {
       console.error('[App] deleteMatch error:', err);
       setErrorMsg(`Errore eliminazione: ${err.message}`);
     }
-  }, [user, selectedMatch, dataOwnerUid, canEditDataset]);
+  }, [user, selectedMatch, dataOwnerId, ownerTeamId, canEditDataset]);
 
   const handleClearArchive = useCallback(async () => {
-    if (!user || !dataOwnerUid || !canEditDataset) return;
+    if (!user || !dataOwnerId || !ownerTeamId || !canEditDataset) return;
     try {
       setIsLoading(true);
       setLoadingMsg('Pulizia totale archivio in corso…');
-      await clearArchiveData(dataOwnerUid);
+      await clearArchiveData(dataOwnerId, ownerTeamId);
       setMatches([]);
       setCalendar([]);
       setStandings([]);
@@ -1447,14 +1692,21 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [user, dataOwnerUid, canEditDataset]);
+  }, [user, dataOwnerId, ownerTeamId, canEditDataset, buildSelectableTeams]);
+
+  const normalizeMatchTypeLabel = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const lower = text.toLowerCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  };
 
   // ─── Available match types (derived from raw matches list) ──────────────
   const availableMatchTypes = useMemo(() => {
     const types = new Set();
     for (const m of matches) {
-      const t = m.metadata?.matchType;
-      if (t && String(t).trim()) types.add(String(t).trim());
+      const t = normalizeMatchTypeLabel(m.metadata?.matchType);
+      if (t) types.add(t);
     }
     return Array.from(types).sort();
   }, [matches]);
@@ -1463,7 +1715,7 @@ export default function App() {
   const filteredMatches = useMemo(() => {
     let result = matches;
     if (filterMatchType !== 'all') {
-      result = result.filter(m => (m.metadata?.matchType || '') === filterMatchType);
+      result = result.filter(m => normalizeMatchTypeLabel(m.metadata?.matchType) === normalizeMatchTypeLabel(filterMatchType));
     }
     if (filterHomeAway !== 'all') {
       result = result.filter(m => (m.metadata?.homeAway || '') === filterHomeAway);
@@ -1493,7 +1745,7 @@ export default function App() {
       const matchWeight = computeMatchWeight(match, standings, filteredMatches, weights);
       const fundWeights = computeFundamentalWeights(match, filteredMatches, standings);
       const playerStats = computeWeightedPlayerStats(match, matchWeight, fundWeights);
-      const chains      = analyzeRallyChains(match.rallies);
+      const chains      = analyzeRallyChains(Array.isArray(match.rallies) ? match.rallies : []);
       const report      = generateMatchReport(match, matchWeight, standings);
       const oppStats    = reconstructOpponent(match);
 
@@ -1560,7 +1812,7 @@ export default function App() {
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl"
             style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
-            🏐
+            <IconGlyph name="Volleyball" className="w-6 h-6 text-white" />
           </div>
           <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
           <p className="text-xs text-gray-500">Inizializzazione…</p>
@@ -1581,7 +1833,7 @@ export default function App() {
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl"
             style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
-            🏐
+            <IconGlyph name="Volleyball" className="w-6 h-6 text-white" />
           </div>
           <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
           <p className="text-xs text-gray-500">Verifica accesso utente…</p>
@@ -1594,9 +1846,13 @@ export default function App() {
     ? SECTIONS.filter(s => ADMIN_SECTION_IDS.includes(s.id))
     : SECTIONS.filter((s) => {
       if (ADMIN_SECTION_IDS.includes(s.id)) return false;
-      return profileAllows(s.minProfile);
+      const effectiveMin = resolveMinProfile(s.id);
+      return profileAllows(effectiveMin);
     });
-  const curSubTabs = (SECTION_TABS[activeSection] || []).filter(t => profileAllows(t.minProfile));
+  const curSubTabs = (SECTION_TABS[activeSection] || []).filter(t => {
+    const effectiveMin = resolveMinProfile(activeSection, t.id);
+    return profileAllows(effectiveMin);
+  });
   const curSubTab  = activeSubTabs[activeSection] || curSubTabs[0]?.id || '';
   const isMatchesView = activeSection === 'analisi' && curSubTab === 'partite';
 
@@ -1654,7 +1910,7 @@ export default function App() {
               className="w-8 h-8 rounded-lg border border-white/10 bg-white/[0.04] text-gray-200 flex items-center justify-center"
               title={isSidebarOpen ? 'Chiudi menu' : 'Apri menu'}
             >
-              {isSidebarOpen ? '✕' : '☰'}
+              <IconGlyph name={isSidebarOpen ? 'X' : 'Menu'} className="w-4 h-4" />
             </button>
           )}
           <div className="min-w-0">
@@ -1689,7 +1945,10 @@ export default function App() {
                       : { color: locked ? '#4b5563' : '#6b7280' }
                     }
                   >
-                    {meta.label}{locked ? ' 🔒' : ''}
+                    <span className="inline-flex items-center gap-1">
+                      {meta.label}
+                      {locked && <IconGlyph name="Lock" className="w-3 h-3" />}
+                    </span>
                   </button>
                 );
               })}
@@ -1760,6 +2019,32 @@ export default function App() {
                 {!isAdmin && (
                   <div className="border-t border-white/5 px-3 py-2 space-y-2 bg-white/[0.02]">
                     <p className="text-[11px] text-gray-300">Richiedi abilitazione profilo</p>
+                    {accountRequestTrace && (
+                      <div className="rounded-md border border-white/10 bg-slate-900/60 p-2 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-gray-400">Ultima richiesta</span>
+                          <span className={`px-1.5 py-0.5 rounded border text-[10px] ${accountRequestTrace.statusClass}`}>
+                            {accountRequestTrace.statusLabel}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-gray-300">
+                          Target: <span className="text-gray-100">{accountRequestTrace.targetLabel}</span>
+                        </p>
+                        <p className="text-[10px] text-gray-500">
+                          Inviata: {accountRequestTrace.requestedAt || '—'}
+                        </p>
+                        {accountRequestTrace.status !== 'pending' && (
+                          <p className="text-[10px] text-gray-500">
+                            Esito: {accountRequestTrace.resolvedAt || '—'}
+                          </p>
+                        )}
+                        {accountRequestTrace.message && (
+                          <p className="text-[10px] text-gray-500 truncate" title={accountRequestTrace.message}>
+                            Msg: {accountRequestTrace.message}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     {availableUpgradeTargets.length > 0 ? (
                       <>
                         <select
@@ -1779,11 +2064,6 @@ export default function App() {
                           placeholder="Messaggio per admin (opzionale)"
                           className="w-full px-2.5 py-1.5 rounded-md bg-slate-800 border border-white/10 text-xs text-gray-100 placeholder:text-gray-500"
                         />
-                        {myProfileRequest && (
-                          <p className="text-[10px] text-gray-400">
-                            Stato richiesta: {myProfileRequest.status === 'approved' ? 'approvata' : myProfileRequest.status === 'rejected' ? 'rifiutata' : 'in attesa'}
-                          </p>
-                        )}
                         <button
                           onClick={handleSubmitProfileRequest}
                           disabled={isRequestSaving}
@@ -1819,9 +2099,10 @@ export default function App() {
         )}
 
         {/* ── Sidebar — 5 sezioni macro ── */}
+        {(!isMobilePortrait || isSidebarOpen) && (
         <nav
           className={`${isMobilePortrait
-            ? `absolute left-0 top-0 h-full w-52 z-30 transform transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
+            ? 'absolute left-0 top-0 h-full w-52 z-30'
             : 'flex-shrink-0'} border-r border-white/5 py-3 px-2 flex flex-col gap-0.5 relative overflow-y-auto overflow-x-hidden`}
           style={{ background: isMobilePortrait ? 'rgba(2,6,23,0.97)' : 'rgba(17,24,39,0.5)', width: isMobilePortrait ? undefined : `${sidebarWidth}px`, userSelect: isSidebarResizing ? 'none' : undefined }}
         >
@@ -1861,7 +2142,9 @@ export default function App() {
                   '--profile-reveal-border': PROFILE_META[activeProfile].border,
                 } : undefined}
               >
-                <span className="text-base w-5 text-center leading-none">{section.icon}</span>
+                <span className="w-5 h-5 inline-flex items-center justify-center text-current">
+                  <IconGlyph name={section.icon} className="w-4 h-4" />
+                </span>
                 {canUseAdminUi ? (
                   <span className={`vpa-admin-sidebar-marquee-wrap ${shouldMarquee ? 'is-moving' : ''}`} data-sidebar-label-wrap={section.id}>
                     <span className={`vpa-admin-sidebar-marquee-track ${shouldMarquee ? 'is-moving' : ''}`}>
@@ -1903,6 +2186,7 @@ export default function App() {
             />
           )}
         </nav>
+        )}
 
         {/* ── Main Content ── */}
         <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
@@ -1930,7 +2214,9 @@ export default function App() {
                       '--profile-reveal-border': PROFILE_META[activeProfile].border,
                     } : undefined}
                   >
-                    <span>{tab.icon}</span>
+                    <span className="inline-flex items-center justify-center text-current">
+                      <IconGlyph name={tab.icon} className="w-3.5 h-3.5" />
+                    </span>
                     {tab.label}
                   </button>
                 );
@@ -1961,6 +2247,9 @@ export default function App() {
                 onOpenGrafici={() => navigateTo('sistema', 'grafici')}
                 ownerTeamName={ownerTeamName}
                 onOwnerTeamChange={handleOwnerTeamChange}
+                ownerTeamId={ownerTeamId}
+                firestoreTeams={firestoreTeams}
+                onOwnerTeamIdChange={handleOwnerTeamIdChange}
                 onOpenOpponentReport={handleOpenOpponentReportFromDashboard}
                 teamNews={newsBachecaPosts}
                 onNewsChange={handleNewsChange}
@@ -2013,7 +2302,7 @@ export default function App() {
 
             {activeSection === 'analisi' && curSubTab === 'avversari' && (
               <div className="flex flex-col items-center justify-center h-64 gap-3 text-center select-none">
-                <p className="text-4xl opacity-20">🎯</p>
+                <p className="opacity-20 text-gray-500"><IconGlyph name="Target" className="w-10 h-10" /></p>
                 <p className="text-sm font-medium text-gray-400">Analisi Avversari</p>
                 <p className="text-xs text-gray-600 max-w-xs">
                   Scout dedotto per ogni avversario, benchmark campionato e analisi storica.
@@ -2044,7 +2333,7 @@ export default function App() {
                 matches={filteredMatches}
                 dataMode={dataMode}
                 readOnly={!canEditDataset}
-                datasetOwnerUid={dataOwnerUid}
+                datasetOwnerUid={dataOwnerId}
                 capFilterEnabled={capFilterEnabled}
                 onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
                 capMinPriority={capMinPriority}
@@ -2119,7 +2408,7 @@ export default function App() {
                 matches={filteredMatches}
                 dataMode={dataMode}
                 readOnly={!canEditDataset}
-                datasetOwnerUid={dataOwnerUid}
+                datasetOwnerUid={dataOwnerId}
                 capFilterEnabled={capFilterEnabled}
                 onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
                 capMinPriority={capMinPriority}
@@ -2195,7 +2484,7 @@ export default function App() {
                               ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                               : 'text-gray-400 hover:text-gray-200 hover:bg-white/5 border border-white/10'}`}
                         >
-                          {type === 'all' ? '🏐 Tutte le tipologie' : type}
+                          {type === 'all' ? 'Tutte le tipologie' : type}
                         </button>
                       );
                     })}
@@ -2213,9 +2502,9 @@ export default function App() {
                   <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Casa / Trasferta</p>
                   <div className="flex flex-wrap gap-2">
                     {[
-                      { value: 'all',        label: '🏐 Tutte',        desc: 'Casa e trasferta' },
-                      { value: 'Casa',       label: '🏠 Casa',          desc: 'Solo gare in casa' },
-                      { value: 'Trasferta',  label: '✈️ Trasferta',     desc: 'Solo gare in trasferta' },
+                      { value: 'all',        label: 'Tutte',        desc: 'Casa e trasferta' },
+                      { value: 'Casa',       label: 'Casa',         desc: 'Solo gare in casa' },
+                      { value: 'Trasferta',  label: 'Trasferta',    desc: 'Solo gare in trasferta' },
                     ].map(({ value, label, desc }) => {
                       const active = filterHomeAway === value;
                       return (
@@ -2241,7 +2530,7 @@ export default function App() {
                 {/* Active filter summary */}
                 <div className="rounded-xl border border-amber-500/20 p-4 flex items-center gap-4"
                   style={{ background: 'rgba(245,158,11,0.05)' }}>
-                  <span className="text-2xl">📊</span>
+                  <span className="text-sky-300"><IconGlyph name="BarChart3" className="w-6 h-6" /></span>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-amber-200">
                       {filteredMatches.length === matches.length
@@ -2261,6 +2550,46 @@ export default function App() {
             {/* SISTEMA — Dati */}
             {activeSection === 'sistema' && curSubTab === 'dati' && (
               <div className="space-y-8">
+                <div className="rounded-xl border border-sky-500/20 p-4 space-y-3"
+                  style={{ background: 'rgba(14,165,233,0.06)' }}>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="text-sky-300"><IconGlyph name="Volleyball" className="w-5 h-5" /></span>
+                    <div className="min-w-0">
+                      <p className="text-xs text-sky-300/80">Matching team origine dati ↔ team calendario</p>
+                      <p className="text-sm font-semibold text-sky-200 truncate">Seleziona entrambe le sorgenti per allineare Analisi</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] uppercase tracking-wide text-sky-300/80">Team Firestore (users/{'{mail}'}/teams)</p>
+                      <select
+                        value={ownerTeamId || ''}
+                        onChange={(e) => handleOwnerTeamIdChange(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-sky-500/25 text-sm text-sky-100 outline-none focus:border-sky-400/60"
+                      >
+                        <option value="">Seleziona Team Firestore</option>
+                        {(firestoreTeams || []).map((team) => (
+                          <option key={team.id} value={team.id}>
+                            {team.name || team.id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] uppercase tracking-wide text-sky-300/80">Team Classifica/Calendario</p>
+                      <select
+                        value={ownerTeamName || ''}
+                        onChange={(e) => handleOwnerTeamChange(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-sky-500/25 text-sm text-sky-100 outline-none focus:border-sky-400/60"
+                      >
+                        <option value="">Seleziona Team calendario</option>
+                        {buildSelectableTeams(calendar, standings).map((team) => (
+                          <option key={team} value={team}>{team}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
                 <DatasetManager
                   matches={matches}
                   calendar={calendar}
@@ -2323,6 +2652,16 @@ export default function App() {
 
             {activeSection === 'sistema' && curSubTab === 'guida' && <GuidePage />}
 
+            {/* COACH PROMAX */}
+            {activeSection === 'coach_promax' && (
+              <CoachProMax
+                matches={filteredMatches}
+                standings={standings}
+                analytics={analytics}
+                activeSubTab={curSubTab}
+              />
+            )}
+
             {activeSection === 'admin_users' && canUseAdminUi && (
               <AdminUsersPanel
                 users={adminUsers}
@@ -2363,11 +2702,60 @@ export default function App() {
               />
             )}
 
+            {activeSection === 'admin_packages' && canUseAdminUi && (
+              <AdminPackagePanel
+                sections={SECTIONS}
+                sectionTabs={SECTION_TABS}
+                adminSectionIds={ADMIN_SECTION_IDS}
+                packageConfig={packageConfig}
+                onSave={async (config) => {
+                  await savePackageConfig(config);
+                  setPackageConfig(config);
+                }}
+              />
+            )}
+
           </PinProvider>
           </div>{/* end content area */}
         </main>
       </div>
     </div>
+    {teamSelectionPrompt.open && (
+      <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-[1px] flex items-center justify-center p-4">
+        <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 shadow-2xl p-5 space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold text-white">Seleziona il tuo Team</h3>
+            <p className="text-xs text-gray-400 mt-1">
+              Import completato. Seleziona la tua squadra per applicare correttamente analisi, classifica e filtri.
+            </p>
+          </div>
+          <select
+            value={teamSelectionPrompt.selected}
+            onChange={(e) => setTeamSelectionPrompt((prev) => ({ ...prev, selected: e.target.value }))}
+            className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-white/10 text-sm text-gray-100 outline-none focus:border-amber-500/50"
+          >
+            <option value="">Seleziona il tuo Team</option>
+            {teamSelectionPrompt.options.map((team) => (
+              <option key={team} value={team}>{team}</option>
+            ))}
+          </select>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                if (!teamSelectionPrompt.selected) return;
+                handleOwnerTeamChange(teamSelectionPrompt.selected);
+                setTeamSelectionPrompt({ open: false, options: [], selected: '' });
+              }}
+              disabled={!teamSelectionPrompt.selected}
+              className="px-4 py-2 rounded-lg text-sm bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              Conferma Team
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </ProfileProvider>
   );
 }

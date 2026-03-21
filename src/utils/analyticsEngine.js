@@ -4,6 +4,7 @@
 // ============================================================================
 
 import { INVERSE_MAP, DEFAULT_WEIGHTS, RESULT_FACTORS, TEAM_MAP, ROLE_CORE_FUNDAMENTALS, DEFAULT_FNC_CONFIG } from './constants';
+import { areTeamNamesLikelySame, normalizeTeamNameForMatch } from './teamNameMatcher';
 
 // ─── Date normalisation helper (DD/MM/YYYY or YYYY-MM-DD → YYYY-MM-DD) ───────
 function _normDate(d) {
@@ -300,22 +301,57 @@ export function computeWeightedPlayerStats(match, matchWeight, fundWeights) {
   if (!match.riepilogo) return [];
 
   const { playerStats, playerReception, playerDefense } = match.riepilogo;
+  const numOrZero = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+  const normalizeRate = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (Math.abs(numeric) <= 1) return numeric;
+    return numeric / 100;
+  };
+  const deriveRateFromCounts = (data = {}, metric = 'efficacy') => {
+    const tot = numOrZero(data?.tot);
+    if (tot <= 0) return 0;
+    const kill = numOrZero(data?.kill);
+    const err = numOrZero(data?.err);
+    const neg = numOrZero(data?.neg);
+    if (metric === 'efficiency') return (kill - err - neg) / tot;
+    return kill / tot;
+  };
 
   return playerStats.map(p => {
     const recData = playerReception.find(r => r.number === p.number);
     const defData = playerDefense.find(d => d.number === p.number);
+    const attackTot = numOrZero(p.attack?.tot);
+    const serveTot = numOrZero(p.serve?.tot);
+    const blockTot = numOrZero(p.block?.tot) || (
+      numOrZero(p.block?.kill) + numOrZero(p.block?.pos) + numOrZero(p.block?.exc) + numOrZero(p.block?.neg) + numOrZero(p.block?.err)
+    );
+    const receptionTot = numOrZero(recData?.tot);
+    const defenseTot = numOrZero(defData?.tot);
+    const attackEfficacy = attackTot > 0 ? deriveRateFromCounts(p.attack, 'efficacy') : normalizeRate(p.attack?.efficacy);
+    const attackEfficiency = attackTot > 0 ? deriveRateFromCounts(p.attack, 'efficiency') : normalizeRate(p.attack?.efficiency);
+    const serveEfficacy = serveTot > 0 ? deriveRateFromCounts(p.serve, 'efficacy') : normalizeRate(p.serve?.efficacy);
+    const serveEfficiency = serveTot > 0 ? deriveRateFromCounts(p.serve, 'efficiency') : normalizeRate(p.serve?.efficiency);
+    const blockEfficacy = blockTot > 0 ? deriveRateFromCounts({ ...p.block, tot: blockTot }, 'efficacy') : normalizeRate(p.block?.efficacy);
+    const blockEfficiency = blockTot > 0 ? deriveRateFromCounts({ ...p.block, tot: blockTot }, 'efficiency') : normalizeRate(p.block?.efficiency);
+    const receptionEfficacy = receptionTot > 0 ? deriveRateFromCounts(recData, 'efficacy') : normalizeRate(recData?.efficacy);
+    const receptionEfficiency = receptionTot > 0 ? deriveRateFromCounts(recData, 'efficiency') : normalizeRate(recData?.efficiency);
+    const defenseEfficacy = defenseTot > 0 ? deriveRateFromCounts(defData, 'efficacy') : normalizeRate(defData?.efficacy);
+    const defenseEfficiency = defenseTot > 0 ? deriveRateFromCounts(defData, 'efficiency') : normalizeRate(defData?.efficiency);
 
     const raw = {
-      attack: { efficacy: p.attack.efficacy, efficiency: p.attack.efficiency, tot: p.attack.tot },
-      serve: { efficacy: p.serve.efficacy, efficiency: p.serve.efficiency, tot: p.serve.tot },
+      attack: { efficacy: attackEfficacy, efficiency: attackEfficiency, tot: attackTot },
+      serve: { efficacy: serveEfficacy, efficiency: serveEfficiency, tot: serveTot },
       block: {
-        efficacy: p.block.efficacy,
-        efficiency: p.block.efficiency,
-        // tot = somma di tutte le azioni di muro: determina se la giocatrice ha giocato il fondamentale
-        tot: (p.block.kill || 0) + (p.block.pos || 0) + (p.block.exc || 0) + (p.block.neg || 0) + (p.block.err || 0),
+        efficacy: blockEfficacy,
+        efficiency: blockEfficiency,
+        tot: blockTot,
       },
-      reception: { efficacy: recData?.efficacy || 0, efficiency: recData?.efficiency || 0, tot: recData?.tot || 0 },
-      defense: { efficacy: defData?.efficacy || 0, efficiency: defData?.efficiency || 0, tot: defData?.tot || 0 },
+      reception: { efficacy: receptionEfficacy, efficiency: receptionEfficiency, tot: receptionTot },
+      defense: { efficacy: defenseEfficacy, efficiency: defenseEfficiency, tot: defenseTot },
     };
 
     const weighted = {
@@ -627,6 +663,7 @@ export function generateTrainingSuggestions(playerTrends, teamStats, roster = []
 
 // ─── Analyze rally chains ──────────────────────────────────────────────────
 export function analyzeRallyChains(rallies) {
+  const safeRallies = Array.isArray(rallies) ? rallies : [];
   const chains = {
     sideOut: { total: 0, won: 0, lost: 0, byReceptionQuality: {} },
     breakPoint: { total: 0, won: 0, lost: 0 },
@@ -635,8 +672,11 @@ export function analyzeRallyChains(rallies) {
     playerInChains: {},
   };
 
-  for (const rally of rallies) {
-    const { quartine, phase, isPoint, isError } = rally;
+  for (const rally of safeRallies) {
+    const quartine = Array.isArray(rally?.quartine) ? rally.quartine : [];
+    const phase = rally?.phase;
+    const isPoint = rally?.isPoint === true;
+    const isError = rally?.isError === true;
     if (quartine.length === 0) continue;
 
     // Side-out analysis (phase = 'r')
@@ -832,6 +872,21 @@ export function generateMatchReport(match, matchWeight, standings) {
  * @returns {Object} baselines: { attack, serve, reception, defense, block, _global }
  */
 export function computeFundamentalBaselines(allMatches) {
+  const normalizeRate = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (Math.abs(numeric) <= 1) return numeric;
+    return numeric / 100;
+  };
+  const deriveRateFromCounts = (data = {}, metric = 'efficacy') => {
+    const tot = Number(data?.tot || 0);
+    if (!Number.isFinite(tot) || tot <= 0) return 0;
+    const kill = Number(data?.kill || 0) || 0;
+    const err = Number(data?.err || 0) || 0;
+    const neg = Number(data?.neg || 0) || 0;
+    if (metric === 'efficiency') return (kill - err - neg) / tot;
+    return kill / tot;
+  };
   const collections = {
     attack: [], serve: [], reception: [], defense: [], block: [],
   };
@@ -841,17 +896,17 @@ export function computeFundamentalBaselines(allMatches) {
     if (!playerStats) continue;
 
     for (const p of playerStats) {
-      if ((p.attack?.tot || 0) > 0) collections.attack.push(p.attack.efficacy || 0);
-      if ((p.serve?.tot || 0) > 0) collections.serve.push(p.serve.efficacy || 0);
+      if ((p.attack?.tot || 0) > 0) collections.attack.push(deriveRateFromCounts(p.attack, 'efficacy'));
+      if ((p.serve?.tot || 0) > 0) collections.serve.push(deriveRateFromCounts(p.serve, 'efficacy'));
       const blockTot = (p.block?.kill || 0) + (p.block?.pos || 0) + (p.block?.exc || 0) +
                        (p.block?.neg || 0) + (p.block?.err || 0);
-      if (blockTot > 0) collections.block.push(p.block?.efficacy || 0);
+      if (blockTot > 0) collections.block.push(deriveRateFromCounts({ ...(p.block || {}), tot: blockTot }, 'efficacy'));
     }
     for (const p of playerReception || []) {
-      if ((p.tot || 0) > 0) collections.reception.push(p.efficacy || 0);
+      if ((p.tot || 0) > 0) collections.reception.push(deriveRateFromCounts(p, 'efficacy'));
     }
     for (const p of playerDefense || []) {
-      if ((p.tot || 0) > 0) collections.defense.push(p.efficacy || 0);
+      if ((p.tot || 0) > 0) collections.defense.push(deriveRateFromCounts(p, 'efficacy'));
     }
   }
 
@@ -1021,26 +1076,21 @@ function findOpponentInStandings(opponentName, standings) {
 // Fixed version that doesn't use require
 export function findOpponentStanding(opponentName, standings, teamMap) {
   if (!opponentName || !standings) return null;
-  const clean = opponentName.trim().toUpperCase();
+  const clean = normalizeTeamNameForMatch(opponentName);
 
-  // Direct match
-  let found = standings.find(t => t.name.toUpperCase() === clean);
+  let found = standings.find(t => normalizeTeamNameForMatch(t.name) === clean);
   if (found) return found;
 
-  // Partial match
-  found = standings.find(t =>
-    t.name.toUpperCase().includes(clean) || clean.includes(t.name.toUpperCase())
-  );
+  found = standings.find(t => areTeamNamesLikelySame(t.name, opponentName));
   if (found) return found;
 
-  // Via team map
   if (teamMap) {
     for (const [shortName, fullName] of Object.entries(teamMap)) {
-      if (shortName.toUpperCase() === clean || fullName.toUpperCase() === clean) {
-        found = standings.find(t =>
-          t.name.toUpperCase().includes(fullName.toUpperCase()) ||
-          t.name.toUpperCase().includes(shortName.toUpperCase())
-        );
+      if (areTeamNamesLikelySame(shortName, opponentName) || areTeamNamesLikelySame(fullName, opponentName)) {
+        found = standings.find(t => (
+          areTeamNamesLikelySame(t.name, fullName) ||
+          areTeamNamesLikelySame(t.name, shortName)
+        ));
         if (found) return found;
       }
     }

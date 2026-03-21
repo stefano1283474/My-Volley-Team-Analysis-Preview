@@ -3,42 +3,114 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, LineChart, Line, ReferenceLine } from 'recharts';
 import { COLORS } from '../utils/constants';
 import { analyzeRotationalChains } from '../utils/analyticsEngine';
+import { areTeamNamesLikelySame, pickCanonicalTeamLabel } from '../utils/teamNameMatcher';
 
 const ALL_OPPONENTS_ID = '__all_opponents__';
 const ALL_PLAYERS_ID = '__all_players__';
 
+function groupOpponentNames(matchAnalytics = []) {
+  const groups = [];
+  (matchAnalytics || []).forEach((ma) => {
+    const opp = String(ma?.match?.metadata?.opponent || '').trim();
+    if (!opp) return;
+    const group = groups.find((item) => areTeamNamesLikelySame(item.label, opp));
+    if (!group) {
+      groups.push({ label: opp });
+      return;
+    }
+    group.label = pickCanonicalTeamLabel(group.label, opp);
+  });
+  return groups.map((item) => item.label).sort((a, b) => a.localeCompare(b));
+}
+
+function filterByOpponent(matchAnalytics = [], opponentName = '') {
+  if (!opponentName) return [];
+  return (matchAnalytics || []).filter((ma) =>
+    areTeamNamesLikelySame(ma?.match?.metadata?.opponent || '', opponentName)
+  );
+}
+
+function parseMatchDateToTs(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const day = Number(slash[1]);
+    const month = Number(slash[2]);
+    const year = Number(slash[3]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900) {
+      return new Date(year, month - 1, day).getTime();
+    }
+  }
+  const dash = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (dash) {
+    const year = Number(dash[1]);
+    const month = Number(dash[2]);
+    const day = Number(dash[3]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900) {
+      return new Date(year, month - 1, day).getTime();
+    }
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareMatchDateDesc(a, b) {
+  return parseMatchDateToTs(b?.match?.metadata?.date) - parseMatchDateToTs(a?.match?.metadata?.date);
+}
+
+function compareMatchDateAsc(a, b) {
+  return parseMatchDateToTs(a?.match?.metadata?.date) - parseMatchDateToTs(b?.match?.metadata?.date);
+}
+
 export default function MatchReport({ analytics, matches, standings, selectedMatch, onSelectMatch, weights, dataMode = 'raw', externalScoutOpponent = '', externalOpenCommentTick = 0 }) {
   const [activeSet, setActiveSet] = useState(null);
   const matchAnalytics = (analytics?.matchAnalytics || []).filter(ma => ma?.match);
-  const opponents = useMemo(() => (
-    [...new Set(
-      (matchAnalytics || [])
-        .map(ma => ma?.match?.metadata?.opponent || '')
-        .filter(Boolean)
-    )].sort((a, b) => a.localeCompare(b))
-  ), [matchAnalytics]);
+  const opponents = useMemo(() => groupOpponentNames(matchAnalytics), [matchAnalytics]);
   const [selectedScoutOpponent, setSelectedScoutOpponent] = useState(ALL_OPPONENTS_ID);
   const [selectedScoutMatchId, setSelectedScoutMatchId] = useState('');
   useEffect(() => {
     if (!externalScoutOpponent) return;
     setSelectedScoutOpponent(externalScoutOpponent);
   }, [externalScoutOpponent]);
-  const activeScoutOpponent = (
-    selectedScoutOpponent === ALL_OPPONENTS_ID || opponents.includes(selectedScoutOpponent)
-  ) ? selectedScoutOpponent : (opponents[0] || ALL_OPPONENTS_ID);
+  const activeScoutOpponent = selectedScoutOpponent === ALL_OPPONENTS_ID
+    ? selectedScoutOpponent
+    : (opponents.find((opp) => areTeamNamesLikelySame(opp, selectedScoutOpponent)) || opponents[0] || ALL_OPPONENTS_ID);
   const selectedOpponentMatches = useMemo(() => (
     (matchAnalytics || [])
       .filter(ma => (
         activeScoutOpponent === ALL_OPPONENTS_ID
           ? true
-          : (ma?.match?.metadata?.opponent || '') === activeScoutOpponent
+          : areTeamNamesLikelySame(ma?.match?.metadata?.opponent || '', activeScoutOpponent)
       ))
-      .sort((a, b) => (b?.match?.metadata?.date || '').localeCompare(a?.match?.metadata?.date || ''))
+      .sort(compareMatchDateDesc)
   ), [matchAnalytics, activeScoutOpponent]);
   const activeScoutMatchId = selectedOpponentMatches.some(ma => ma?.match?.id === selectedScoutMatchId)
     ? selectedScoutMatchId
     : (selectedOpponentMatches[0]?.match?.id || '');
   const selectedOpponentMA = selectedOpponentMatches.find(ma => ma?.match?.id === activeScoutMatchId) || null;
+  const dataHealth = useMemo(() => {
+    const total = matchAnalytics.length;
+    const countBy = (predicate) => matchAnalytics.reduce((sum, ma) => sum + (predicate(ma) ? 1 : 0), 0);
+    const withOpponent = countBy((ma) => Boolean(String(ma?.match?.metadata?.opponent || '').trim()));
+    const withRiepilogo = countBy((ma) => {
+      const team = ma?.match?.riepilogo?.team;
+      if (!team || typeof team !== 'object') return false;
+      const fundamentals = ['attack', 'serve', 'reception', 'defense', 'block'];
+      const totalActions = fundamentals.reduce((sum, key) => sum + (Number(team?.[key]?.tot || 0) || 0), 0);
+      return totalActions > 0;
+    });
+    const withRallies = countBy((ma) => Array.isArray(ma?.match?.rallies) && ma.match.rallies.length > 0);
+    const withOppStats = countBy((ma) => {
+      const deduced = ma?.oppStats?.deduced;
+      if (!deduced) return false;
+      const totals = ['serve', 'attack', 'defense', 'reception']
+        .map((key) => Number(deduced?.[key]?.total || 0))
+        .filter((value) => Number.isFinite(value));
+      return totals.some((value) => value > 0);
+    });
+    return { total, withOpponent, withRiepilogo, withRallies, withOppStats };
+  }, [matchAnalytics]);
 
   if (!analytics || !Array.isArray(matches) || matches.length === 0) {
     return <EmptyState message="Carica almeno una partita per vedere il report." />;
@@ -50,6 +122,26 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
       <div className="max-w-5xl mx-auto space-y-4">
         <h2 className="text-xl font-bold text-white">Report Partite</h2>
         <p className="text-sm text-gray-400">Seleziona una partita per il report dettagliato.</p>
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Stato alimentazione dati</div>
+          <div className="flex flex-wrap gap-2 text-[11px]">
+            <span className="px-2 py-0.5 rounded-full border border-white/10 bg-white/[0.03] text-gray-300">
+              Partite: {dataHealth.total}
+            </span>
+            <span className={`px-2 py-0.5 rounded-full border ${dataHealth.withOpponent > 0 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
+              Opponent: {dataHealth.withOpponent}/{dataHealth.total}
+            </span>
+            <span className={`px-2 py-0.5 rounded-full border ${dataHealth.withRiepilogo > 0 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
+              Riepilogo: {dataHealth.withRiepilogo}/{dataHealth.total}
+            </span>
+            <span className={`px-2 py-0.5 rounded-full border ${dataHealth.withRallies > 0 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
+              Rallies: {dataHealth.withRallies}/{dataHealth.total}
+            </span>
+            <span className={`px-2 py-0.5 rounded-full border ${dataHealth.withOppStats > 0 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>
+              Scout avv.: {dataHealth.withOppStats}/{dataHealth.total}
+            </span>
+          </div>
+        </div>
         <AggregatedScoutPanel
           matchAnalytics={matchAnalytics}
           selectedOpponent={activeScoutOpponent}
@@ -818,14 +910,12 @@ function computeExpectedMP(standings, matchAnalytics) {
     return {};
   }
   const funds = ['serve', 'attack', 'defense', 'reception'];
-  const opponentNames = [...new Set(
-    matchAnalytics.map(ma => ma?.match?.metadata?.opponent || '').filter(Boolean)
-  )];
+  const opponentNames = groupOpponentNames(matchAnalytics);
 
   // Compute actual average mediaPond per opponent (deduced opponent stats)
   const opponentMPs = {};
   for (const opp of opponentNames) {
-    const oppMatches = matchAnalytics.filter(ma => (ma?.match?.metadata?.opponent || '') === opp);
+    const oppMatches = filterByOpponent(matchAnalytics, opp);
     const agg = computeAggregatedScout(oppMatches);
     opponentMPs[opp] = {
       serve:     Number.isFinite(agg.serve?.mediaPond)     ? agg.serve.mediaPond     : null,
@@ -855,15 +945,9 @@ function computeExpectedMP(standings, matchAnalytics) {
 
   // Normalize: uppercase + underscores→spaces + collapse whitespace
   // Handles mismatches like "Numia_VeroVolley" vs "Numia VeroVolley"
-  const normName = (s) => (s || '').toUpperCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-
   const result = {};
   for (const opp of opponentNames) {
-    const oppNorm = normName(opp);
-    const entry = standings.find(t => {
-      const tNorm = normName(t.name);
-      return tNorm === oppNorm || tNorm.includes(oppNorm) || oppNorm.includes(tNorm);
-    });
+    const entry = standings.find(t => areTeamNamesLikelySame(t.name, opp));
     if (!entry) continue;
 
     const rank    = entry.rank || 1;
@@ -909,7 +993,7 @@ function buildPlayerSeries(matchAnalytics, selectedMatchMA, playerNumber) {
     { key: 'reception', label: 'Ricezione' },
     { key: 'block', label: 'Muro' },
   ];
-  const byDateDesc = [...(matchAnalytics || [])].sort((a, b) => (b?.match?.metadata?.date || '').localeCompare(a?.match?.metadata?.date || ''));
+  const byDateDesc = [...(matchAnalytics || [])].sort(compareMatchDateDesc);
   const selectedPlayerStats = (selectedMatchMA?.playerStats || []).find(p => p.number === playerNumber) || null;
   return fundRows.map(({ key, label }) => {
     const matchEfficacy = hasFundData(selectedPlayerStats, key, 'efficacy')
@@ -971,33 +1055,25 @@ function AggregatedScoutPanel({
   // I dati avversari sono sempre dati grezzi dedotti dallo scout; la scelta Efficacia/Efficienza/
   // Valori medi è indipendente e controllata dai pulsanti manuali.
   const agg = useMemo(() => computeAggregatedScout(matchAnalytics), [matchAnalytics]);
-  const opponents = useMemo(() => (
-    [...new Set(
-      (matchAnalytics || [])
-        .map(ma => ma?.match?.metadata?.opponent || '')
-        .filter(Boolean)
-    )].sort((a, b) => a.localeCompare(b))
-  ), [matchAnalytics]);
-  const activeOpponent = (
-    selectedOpponent === ALL_OPPONENTS_ID || opponents.includes(selectedOpponent)
-  ) ? selectedOpponent : (opponents[0] || ALL_OPPONENTS_ID);
+  const opponents = useMemo(() => groupOpponentNames(matchAnalytics), [matchAnalytics]);
+  const activeOpponent = selectedOpponent === ALL_OPPONENTS_ID
+    ? selectedOpponent
+    : (opponents.find((opp) => areTeamNamesLikelySame(opp, selectedOpponent)) || opponents[0] || ALL_OPPONENTS_ID);
   const selectedOppAgg = useMemo(() => {
     if (!activeOpponent) return null;
     if (activeOpponent === ALL_OPPONENTS_ID) return agg;
-    const filtered = (matchAnalytics || []).filter(
-      ma => (ma?.match?.metadata?.opponent || '') === activeOpponent
-    );
+    const filtered = filterByOpponent(matchAnalytics, activeOpponent);
     return computeAggregatedScout(filtered);
   }, [matchAnalytics, activeOpponent, agg]);
   const seasonTeamAvg = useMemo(() => computeTeamFundAverages(matchAnalytics), [matchAnalytics]);
   const latestMatchMA = useMemo(() => (
     [...(matchAnalytics || [])]
-      .sort((a, b) => (b?.match?.metadata?.date || '').localeCompare(a?.match?.metadata?.date || ''))[0] || null
+      .sort(compareMatchDateDesc)[0] || null
   ), [matchAnalytics]);
   // Oldest match (earliest date) — used as "Noi" anchor when ALL_OPPONENTS_ID is active
   const earliestMatchMA = useMemo(() => (
     [...(matchAnalytics || [])]
-      .sort((a, b) => (a?.match?.metadata?.date || '').localeCompare(b?.match?.metadata?.date || ''))[0] || null
+      .sort(compareMatchDateAsc)[0] || null
   ), [matchAnalytics]);
   const cardsAgg = selectedOppAgg || agg;
   const opponentHeaderLabel = activeOpponent === ALL_OPPONENTS_ID ? 'All Opponent' : (activeOpponent || 'Avversario');
@@ -1258,17 +1334,13 @@ function AllTeamsComparisonPanel({ matchAnalytics = [], standings = [] }) {
   ];
   const [selectedFunds, setSelectedFunds] = useState(['serve', 'attack', 'defense', 'reception']);
 
-  const opponents = useMemo(() => (
-    [...new Set(
-      matchAnalytics.map(ma => ma?.match?.metadata?.opponent || '').filter(Boolean)
-    )].sort((a, b) => a.localeCompare(b))
-  ), [matchAnalytics]);
+  const opponents = useMemo(() => groupOpponentNames(matchAnalytics), [matchAnalytics]);
 
   // Compute deduced (rilevato) mediaPond per opponent
   const opponentAggs = useMemo(() => {
     const result = {};
     for (const opp of opponents) {
-      const oppMatches = matchAnalytics.filter(ma => (ma?.match?.metadata?.opponent || '') === opp);
+      const oppMatches = filterByOpponent(matchAnalytics, opp);
       result[opp] = computeAggregatedScout(oppMatches);
     }
     return result;
@@ -1633,9 +1705,7 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
   const seasonOppAgg = useMemo(() => computeAggregatedScout(matchAnalytics), [matchAnalytics]);
   const selectedOppAgg = useMemo(() => {
     if (!selectedOpponent || selectedOpponent === ALL_OPPONENTS_ID) return seasonOppAgg;
-    return computeAggregatedScout((matchAnalytics || []).filter(
-      item => (item?.match?.metadata?.opponent || '') === selectedOpponent
-    ));
+    return computeAggregatedScout(filterByOpponent(matchAnalytics, selectedOpponent));
   }, [matchAnalytics, selectedOpponent, seasonOppAgg]);
   const selectedOppName = selectedOpponent === ALL_OPPONENTS_ID || !selectedOpponent
     ? 'Tutte le squadre'
@@ -1888,6 +1958,23 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, ac
   if (!team) return null;
 
   const safeN = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const toPct = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
+  };
+  const teamMetricPct = (data, metric = 'efficiency') => {
+    if (!data || typeof data !== 'object') return null;
+    const total = Number(data.tot || 0);
+    const kill = Number(data.kill || 0);
+    const err = Number(data.err || 0);
+    const neg = Number(data.neg || 0);
+    if (Number.isFinite(total) && total > 0) {
+      if (metric === 'efficacy') return (kill / total) * 100;
+      return ((kill - err - neg) / total) * 100;
+    }
+    return toPct(data?.[metric]);
+  };
   const sections = [];
 
   // ─── SECTION 1: RISULTATO ─────────────────────────────────────────────────
@@ -1933,10 +2020,10 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, ac
     const oppData = selectedOppAgg?.[fd.key];
     if (!ourData || !oppData) continue;
 
-    const ourEff = Number.isFinite(ourData.efficiency) ? ourData.efficiency * 100 : null;
-    const oppEff = Number.isFinite(oppData.efficiency) ? oppData.efficiency * 100 : null;
-    const ourEfficacy = Number.isFinite(ourData.efficacy) ? ourData.efficacy * 100 : null;
-    const oppEfficacy = Number.isFinite(oppData.efficacy) ? oppData.efficacy * 100 : null;
+    const ourEff = teamMetricPct(ourData, 'efficiency');
+    const oppEff = toPct(oppData.efficiency);
+    const ourEfficacy = teamMetricPct(ourData, 'efficacy');
+    const oppEfficacy = toPct(oppData.efficacy);
     const seasonAvg = seasonTeamAvg?.[fd.key];
 
     if (ourEff !== null && oppEff !== null) {

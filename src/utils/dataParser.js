@@ -731,9 +731,9 @@ function _addEval(stat, e) {
 function _finalizeStat(s) {
   if (!s || !s.tot) return Object.assign({}, s || _mkStat(), { pct: 0, efficacy: 0, efficiency: 0 });
   return Object.assign({}, s, {
-    pct:        +(( s.kill                        / s.tot) * 100).toFixed(1),
-    efficacy:   +(( s.kill                        / s.tot) * 100).toFixed(1),   // Efficacia = Azioni Vincenti / Totale × 100
-    efficiency: +(((s.kill - s.err - s.neg)       / s.tot) * 100).toFixed(1),   // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale × 100
+    pct:        +(( s.kill                  / s.tot) * 100).toFixed(1),
+    efficacy:   +(( s.kill                  / s.tot) * 100).toFixed(1),   // Efficacia DataVolley = # / Tot × 100
+    efficiency: +(((s.kill - s.err)         / s.tot) * 100).toFixed(1),   // Efficienza DataVolley = (# - =) / Tot × 100
   });
 }
 function _parseRot(raw) {
@@ -741,15 +741,36 @@ function _parseRot(raw) {
   const v = parseInt(String(raw).replace(/^[Pp]/i, ''), 10);
   return (v >= 1 && v <= 6) ? v : 0;
 }
+function _extractQuartineTokens(entry) {
+  if (Array.isArray(entry?.quartine) && entry.quartine.length > 0) return entry.quartine;
+  if (typeof entry === 'string') return parseQuartine(entry);
+  const raw = String(entry?.actionString || entry?.action || '').trim();
+  if (!raw) return [];
+  return parseQuartine(raw);
+}
 function _extractActions(entry) {
   if (Array.isArray(entry?.result?.actions)) return entry.result.actions;
   if (Array.isArray(entry?.actions))         return entry.actions;
+  const quartine = _extractQuartineTokens(entry);
+  if (quartine.length > 0) {
+    return quartine
+      .filter((item) => item?.type === 'action')
+      .map((item) => ({
+        player: item?.player,
+        fundamental: item?.fundamental,
+        evaluation: item?.evaluation ?? item?.value,
+      }));
+  }
   return [];
 }
 function _extractOutcome(entry) {
   const r = String(entry?.result?.result || entry?.outcome || entry?.result || '').toLowerCase();
   if (r === 'home_point' || r === 'point') return 'home_point';
   if (r === 'away_point' || r === 'error') return 'away_point';
+  if (entry?.isPoint === true) return 'home_point';
+  if (entry?.isError === true) return 'away_point';
+  const quartine = _extractQuartineTokens(entry);
+  if (quartine.length > 0) return determineOutcomeFromQuartine(quartine);
   return 'continue';
 }
 
@@ -829,17 +850,67 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
       if (outcome === 'home_point') totalPointsMade++;
       if (outcome === 'away_point') totalErrors++;
 
-      acts.forEach(act => {
+      // ── Ricostruzione avversario contestuale ─────────────────────────────
+      // La logica segue le regole specifiche della pallavolo:
+      //   R1→oppB5, R2→oppB4, R3→oppB3, R4→oppB2, R5→oppB2 (R4/R5 entrambi B2)
+      //   D1→oppA5, D2→oppA4, D3→oppA3, D4→oppA2, D5→oppA2 (D4/D5 entrambi A2)
+      //   A dipende dalla fase (se preceduto da R → oppD, se preceduto da D → oppA)
+      //   B2/B3 e M2/M3 dipendono da cosa segue (la difesa/ricezione successiva)
+      const _oppMapRtoB = { 1: 5, 2: 4, 3: 3, 4: 2, 5: 2 };
+      const _oppMapDtoA = { 1: 5, 2: 4, 3: 3, 4: 2, 5: 2 };
+      // Per B e M seguiti da difesa, la ricostruzione dipende dal follow-up
+      // B2 + D5/D4 → oppR4/R5 + oppA2; B2 + D3 → oppR4 + oppA3; B2 + D2 → oppR4 + oppA4; B2 + D1 → oppR4 + oppA5
+      // B3 + D5/D4 → oppR3 + oppA2; B3 + D3 → oppR3 + oppA3; B3 + D2 → oppR3 + oppA4; B3 + D1 → oppR3 + oppA5
+      // B4 → oppR2 (freeball); B5 → oppR1
+      // M2/M3 analogo ma con oppD invece di oppR
+      function _oppServeFollowUp(bEval, nextDefEval) {
+        const rcvEval = bEval === 2 ? 4 : 3; // B2→oppR4, B3→oppR3
+        if (nextDefEval >= 4) return { rcv: rcvEval >= 4 ? 5 : rcvEval, atk: 2 };
+        if (nextDefEval === 3) return { rcv: rcvEval, atk: 3 };
+        if (nextDefEval === 2) return { rcv: rcvEval, atk: 4 };
+        if (nextDefEval === 1) return { rcv: rcvEval, atk: 5 };
+        return { rcv: rcvEval, atk: 2 }; // default
+      }
+      function _oppBlockFollowUp(mEval, nextDefEval) {
+        const defEval = mEval === 2 ? 4 : 3; // M2→oppD4, M3→oppD3
+        if (nextDefEval >= 4) return { def: defEval >= 4 ? 5 : defEval, atk: 2 };
+        if (nextDefEval === 3) return { def: defEval, atk: 3 };
+        if (nextDefEval === 2) return { def: defEval, atk: 4 };
+        if (nextDefEval === 1) return { def: defEval, atk: 5 };
+        return { def: defEval, atk: 2 };
+      }
+
+      // Prima passo: accumula statistiche Team (sempre corretto)
+      // Secondo passo: ricostruzione avversario contestuale (usa look-ahead)
+      let rallyPhaseCtx = null; // 'r' se ultimo fondamentale era ricezione, 'd' se difesa
+      acts.forEach((act, ai) => {
         const f = String(act?.fundamental || '').toLowerCase();
         const e = Number(act?.evaluation !== undefined ? act.evaluation : (act?.value || 0));
         const p = getP(act?.player);
+        // Look-ahead: prossimo token di difesa dopo B2/B3/M2/M3
+        const nextAct = acts[ai + 1];
+        const nextF = String(nextAct?.fundamental || '').toLowerCase();
+        const nextE = Number(nextAct?.evaluation !== undefined ? nextAct.evaluation : (nextAct?.value || 0));
 
         switch (f) {
           case 'a':
             _addEval(p.attack,  e); _addEval(team.attack,  e);
-            if (e === 5)      { p.pointsMade++; _addEval(opp.defense,   1); }
-            else if (e === 1) { p.errors++;     _addEval(opp.defense,   5); }
-            else              {                 _addEval(opp.defense,   Math.max(1, Math.min(5, 5 - e + 1))); }
+            if (e === 5) p.pointsMade++;
+            if (e === 1) p.errors++;
+            // Opp reconstruction per attacco dipende dalla fase
+            // Se preceduto da ricezione → opp defense (inversione specifica)
+            // Se preceduto da difesa → opp attack (inversione specifica, ma questo
+            //   copre "avversario difende il nostro attacco")
+            // Mapping: A1→oppD5/oppA5, A2→oppD4/oppA4, A3→oppD3/oppA3, A4→oppD2/oppA2, A5→oppD1/oppA1
+            // Ma con capping: A4 e A5 → oppD2 / oppA2 (come R4/R5→B2)
+            {
+              const oppE = e <= 1 ? 5 : e <= 2 ? 4 : e <= 3 ? 3 : 2; // A1→5, A2→4, A3→3, A4/A5→2
+              if (rallyPhaseCtx === 'r') {
+                _addEval(opp.defense, oppE);
+              } else {
+                _addEval(opp.defense, oppE);
+              }
+            }
             _addEval(giocoOverview.attack, e);
             if (rot) _addEval(getGRS(rot).attack, e);
             if (lastRcvEval !== null) {
@@ -853,22 +924,48 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
             break;
           case 'b':
             _addEval(p.serve,   e); _addEval(team.serve,   e);
-            if (e === 5)      { p.pointsMade++; _addEval(opp.reception, 1); }
-            else if (e === 1) { p.errors++;     _addEval(opp.reception, 5); }
-            else              {                 _addEval(opp.reception, Math.max(1, Math.min(5, 5 - e + 1))); }
+            if (e === 5) { p.pointsMade++; _addEval(opp.reception, 1); }  // B5 → oppR1 (ace)
+            else if (e === 1) { p.errors++; }  // B1 = errore, punto regalato, no opp token
+            else if (e === 4) { _addEval(opp.reception, 2); }  // B4 → oppR2 (freeball)
+            else if (e === 2 || e === 3) {
+              // B2/B3: ricostruzione contestuale basata sulla difesa successiva
+              // Ricezione avversaria: B2→oppR4, B3→oppR3
+              const oppRcv = e === 2 ? 4 : 3;
+              _addEval(opp.reception, oppRcv);
+              // L'attacco avversario successivo viene dedotto dal follow-up
+              // ma solo se il prossimo token è 'd' (nostra difesa)
+              if (nextF === 'd' && nextE > 0) {
+                const fu = _oppServeFollowUp(e, nextE);
+                _addEval(opp.attack, fu.atk);
+              }
+            }
             _addEval(giocoOverview.serve, e);
             if (rot) _addEval(getGRS(rot).serve, e);
+            rallyPhaseCtx = null;
             break;
           case 'm':
             _addEval(p.block,   e); _addEval(team.block,   e);
-            if (e === 5)      { p.pointsMade++; _addEval(opp.attack, 1); }
-            else if (e === 1) { p.errors++;     _addEval(opp.attack, 4); }
+            if (e === 5) { p.pointsMade++; _addEval(opp.attack, 1); }  // M5 → stuffblock → oppA1
+            else if (e === 1) { p.errors++; _addEval(opp.attack, 5); }  // M1 → errore muro → oppA5
+            else if (e === 4) { _addEval(opp.attack, 2); }  // M4 → oppA2 (freeball per noi)
+            else if (e === 2 || e === 3) {
+              // M2/M3: contestuale basato sulla difesa successiva
+              if (nextF === 'd' && nextE > 0) {
+                const fu = _oppBlockFollowUp(e, nextE);
+                _addEval(opp.defense, fu.def);
+                _addEval(opp.attack, fu.atk);
+              } else {
+                // Senza follow-up, stima conservativa
+                const oppAtk = e === 2 ? 4 : 3;
+                _addEval(opp.attack, oppAtk);
+              }
+            }
             break;
           case 'r':
             _addEval(p.reception, e); _addEval(team.reception, e);
-            if      (e === 1) _addEval(opp.serve, 5);
-            else if (e >= 4)  _addEval(opp.serve, 2);
-            else              _addEval(opp.serve, 3);
+            if (e === 1) p.errors++;
+            // R→oppB: R1→B5, R2→B4, R3→B3, R4→B2, R5→B2
+            _addEval(opp.serve, _oppMapRtoB[e] || 2);
             _addEval(giocoOverview.reception, e);
             if (rot) {
               _addEval(getGRS(rot).reception, e);
@@ -876,15 +973,16 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
               _addEval(recByRot[rot], e);
             }
             lastRcvEval = e; lastDefEval = null;
+            rallyPhaseCtx = 'r';
             break;
           case 'd':
             _addEval(p.defense, e); _addEval(team.defense, e);
-            if      (e === 1) _addEval(opp.attack, 5);
-            else if (e >= 4)  _addEval(opp.attack, 2);
-            else              _addEval(opp.attack, 3);
+            // D→oppA: D1→A5, D2→A4, D3→A3, D4→A2, D5→A2
+            _addEval(opp.attack, _oppMapDtoA[e] || 2);
             _addEval(giocoOverview.defense, e);
             if (rot) _addEval(getGRS(rot).defense, e);
             lastDefEval = e; lastRcvEval = null;
+            rallyPhaseCtx = 'd';
             break;
         }
       });
@@ -900,6 +998,10 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
         if (phase === null) phase = 'r';
         grCurrentPhase = (outcome !== 'continue') ? (phase === 'b' ? 'r' : 'b') : phase;
 
+        // Detect "avv" (punto regalato dall'avversario) — no action with eval 5 made the point
+        const hasAvv = _extractQuartineTokens(entry).some(t => t?.type === 'avv') ||
+          String(entry?.action || entry?.actionString || '').toLowerCase().includes('avv');
+
         if (phase === 'b') {
           const sr = getSR(rot); sr.total++;
           if (outcome === 'home_point') {
@@ -907,24 +1009,29 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
             for (let j = acts.length - 1; j >= 0; j--) {
               const fa = String(acts[j]?.fundamental || '').toLowerCase();
               const ea = Number(acts[j]?.evaluation !== undefined ? acts[j].evaluation : (acts[j]?.value || 0));
-              if (fa === 'a' && ea >= 4) { sr.attackPts++; scored = true; break; }
-              if (fa === 'm' && ea === 5) { sr.blockPts++;  scored = true; break; }
               if (fa === 'b' && ea === 5) { sr.breakPts++;  scored = true; break; }
+              if (fa === 'a' && ea === 5) { sr.attackPts++; scored = true; break; }
+              if (fa === 'm' && ea === 5) { sr.blockPts++;  scored = true; break; }
             }
-            if (!scored) sr.breakPts++;
+            if (!scored) sr.breakPts++;  // punto non attribuibile → break point generico
           } else if (outcome === 'away_point') {
-            if (acts.some(a => String(a?.fundamental || '').toLowerCase() === 'b' &&
-                Number(a?.evaluation !== undefined ? a.evaluation : (a?.value || 0)) === 1)) sr.errors++;
+            sr.errors++;
           }
         } else {
           const rr = getRR(rot); rr.total++;
           if (outcome === 'home_point') {
-            if (acts.some(a => String(a?.fundamental || '').toLowerCase() === 'm' &&
-                Number(a?.evaluation !== undefined ? a.evaluation : (a?.value || 0)) === 5)) rr.blockPts++;
-            else rr.attackPts++;
+            let scored = false;
+            for (let j = acts.length - 1; j >= 0; j--) {
+              const fa = String(acts[j]?.fundamental || '').toLowerCase();
+              const ea = Number(acts[j]?.evaluation !== undefined ? acts[j].evaluation : (acts[j]?.value || 0));
+              if (fa === 'a' && ea === 5) { rr.attackPts++; scored = true; break; }
+              if (fa === 'm' && ea === 5) { rr.blockPts++;  scored = true; break; }
+            }
+            if (!scored && hasAvv) rr.oppServeErrors++;  // avv in ricezione = errore battuta avversario
+            else if (!scored) rr.attackPts++;  // punto generico in ricezione → attacco
           } else if (outcome === 'away_point') {
-            if (acts.some(a => String(a?.fundamental || '').toLowerCase() === 'r' &&
-                Number(a?.evaluation !== undefined ? a.evaluation : (a?.value || 0)) === 1)) rr.oppServeErrors++;
+            // In ricezione perdiamo il rally — errore nostro
+            if (hasAvv) rr.oppGiftPts = (rr.oppGiftPts || 0);  // non incrementare, avv non ha senso qui
           }
         }
       }
@@ -963,19 +1070,35 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
 
   // ── Build riepilogo ─────────────────────────────────────────────────────────
   const playerStats = Object.values(pMap).map(p => {
-    const tot = p.attack.tot + p.serve.tot + p.block.tot;
+    // Punti: att_kill + bat_kill + muro_kill (azioni vincenti dirette)
+    const pointsMade = p.attack.kill + p.serve.kill + p.block.kill;
+    // Errori: att_err + bat_err + muro_err + rice_err (come da Riepilogo Excel)
+    const errorsTotal = p.attack.err + p.serve.err + p.block.err + p.reception.err;
+    const totActions = p.attack.tot + p.serve.tot + p.block.tot;
+    const blockStat = _finalizeStat(p.block);
     return {
       number: p.number,
       name:   (p.surname + (p.name ? ' ' + p.name : '')).trim() || p.number,
       attack: _finalizeStat(p.attack),
       serve:  _finalizeStat(p.serve),
-      block:  { kill: p.block.kill, pos: p.block.pos, exc: p.block.exc, neg: p.block.neg, err: p.block.err },
+      block: {
+        kill: blockStat.kill,
+        pos: blockStat.pos,
+        exc: blockStat.exc,
+        neg: blockStat.neg,
+        err: blockStat.err,
+        tot: blockStat.tot,
+        efficacy: blockStat.efficacy,
+        efficiency: blockStat.efficiency,
+      },
+      reception: _finalizeStat(p.reception),
+      defense:   _finalizeStat(p.defense),
       points: {
-        made:      p.pointsMade,
-        madePct:   tot ? +((p.pointsMade / tot) * 100).toFixed(1) : 0,
-        errors:    p.errors,
-        errorsPct: tot ? +((p.errors / tot) * 100).toFixed(1) : 0,
-        balance:   p.pointsMade - p.errors,
+        made:      pointsMade,
+        madePct:   totActions ? +((pointsMade / totActions) * 100).toFixed(1) : 0,
+        errors:    errorsTotal,
+        errorsPct: totActions ? +((errorsTotal / totActions) * 100).toFixed(1) : 0,
+        balance:   pointsMade - errorsTotal,
       },
     };
   });
@@ -1045,6 +1168,10 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
   );
 
   return { riepilogo, gioco, giriDiRice, rallies };
+}
+
+export function computeStatsFromMVSMatch(actionsBySet = {}, roster = []) {
+  return computeStatsFromActionsBySet(actionsBySet, roster);
 }
 
 // ─── Parse Riepilogo_ALL.xlsx (aggregated stats) ───────────────────────────

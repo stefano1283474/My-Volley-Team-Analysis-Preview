@@ -88,6 +88,9 @@ export default function Dashboard({
   dashboardConfig, onConfigChange,
   onOpenGrafici,
   ownerTeamName, onOwnerTeamChange,
+  ownerTeamId = '',
+  firestoreTeams = [],
+  onOwnerTeamIdChange,
   onOpenOpponentReport,
   dataMode = 'raw',
   teamNews = [],
@@ -275,6 +278,24 @@ export default function Dashboard({
   }, [inferredOwnerTeam, ownerTeamName, onOwnerTeamChange]);
 
   const ourStanding = inferredOwnerTeam;
+  const selectableStandingsTeams = useMemo(() => {
+    const set = new Set();
+    (standings || []).forEach((row) => {
+      const name = String(row?.name || '').trim();
+      if (name) set.add(name);
+    });
+    (calendar || []).forEach((row) => {
+      const home = String(row?.home || '').trim();
+      const away = String(row?.away || '').trim();
+      if (home) set.add(home);
+      if (away) set.add(away);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [standings, calendar]);
+  const selectedFirestoreTeam = useMemo(
+    () => (firestoreTeams || []).find(t => t.id === ownerTeamId) || null,
+    [firestoreTeams, ownerTeamId]
+  );
 
   if (!hasData) {
     return (
@@ -292,14 +313,98 @@ export default function Dashboard({
           onOffersChange={onOffersChange}
           unreadByTab={newsUnreadByTab}
           onTabViewed={onNewsTabViewed}
-          onScrollToStandings={scrollToStandings}
+          onScrollToStandings={standings.length > 0 ? scrollToStandings : undefined}
           onOpenDataImport={onOpenDataImport}
           onSelectMatch={onSelectMatch}
           onSelectPlayer={onSelectPlayer}
         />
-        <div className="flex flex-col items-center justify-center h-72 text-gray-500 text-sm">
-          <div className="text-5xl mb-4">🏐</div>
-          <p>Carica partite e calendario nella sezione <strong>Dati</strong> per vedere la dashboard.</p>
+        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.05] p-5 sm:p-6 space-y-5">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🧭</span>
+            <div>
+              <p className="text-sm font-semibold text-amber-200">Nessun dato analitico disponibile</p>
+              <p className="text-xs text-amber-100/70">
+                Per attivare Analisi/Match-stats/Training devi prima collegare Team Firestore e Team classifica.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-white/10 bg-slate-900/40 p-4 space-y-3">
+              <p className="text-xs uppercase tracking-wide text-gray-400">1) Team presente in Firestore</p>
+              {(firestoreTeams || []).length > 0 ? (
+                <>
+                  <select
+                    value={ownerTeamId || ''}
+                    onChange={(e) => onOwnerTeamIdChange?.(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-white/10 text-sm text-gray-100 outline-none focus:border-sky-500/50"
+                  >
+                    <option value="">Seleziona Team Firestore</option>
+                    {(firestoreTeams || []).map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name || team.id}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-500">
+                    Team selezionato: <span className="text-gray-300">{selectedFirestoreTeam?.name || 'Nessuno'}</span>
+                  </p>
+                </>
+              ) : (
+                <div className="text-xs text-gray-400 space-y-1">
+                  <p>Non risultano team su Firestore per questo account.</p>
+                  <p>Usa My Volley Scout per scoutizzare una partita o importarla da lì.</p>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-900/40 p-4 space-y-3">
+              <p className="text-xs uppercase tracking-wide text-gray-400">2) Squadra in Classifica/Calendario</p>
+              {selectableStandingsTeams.length > 0 ? (
+                <>
+                  <select
+                    value={ownerTeamName || ''}
+                    onChange={(e) => onOwnerTeamChange?.(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-white/10 text-sm text-gray-100 outline-none focus:border-amber-500/50"
+                  >
+                    <option value="">Seleziona squadra classifica</option>
+                    {selectableStandingsTeams.map((teamName) => (
+                      <option key={teamName} value={teamName}>
+                        {teamName}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-500">
+                    Serve per il matching tra Team Firestore e Team del campionato.
+                  </p>
+                </>
+              ) : (
+                <div className="text-xs text-gray-400 space-y-1">
+                  <p>Calendario non disponibile.</p>
+                  <p>Completa prima l’import del CSV nel riquadro Campionato qui sopra.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenDataImport?.()}
+              className="px-3.5 py-2 rounded-lg text-xs font-medium border border-amber-500/30 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25"
+            >
+              Apri Sistema → Dati
+            </button>
+            {standings.length > 0 && (
+              <button
+                type="button"
+                onClick={() => scrollToStandings()}
+                className="px-3.5 py-2 rounded-lg text-xs font-medium border border-sky-500/30 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25"
+              >
+                Vai alla classifica
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -482,7 +587,7 @@ export default function Dashboard({
         onOffersChange={onOffersChange}
         unreadByTab={newsUnreadByTab}
         onTabViewed={onNewsTabViewed}
-        onScrollToStandings={scrollToStandings}
+        onScrollToStandings={standings.length > 0 ? scrollToStandings : undefined}
         onOpenDataImport={onOpenDataImport}
         onSelectMatch={onSelectMatch}
         onSelectPlayer={onSelectPlayer}

@@ -201,29 +201,28 @@ export default function DatasetManager({
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-white mb-1">Gestione Archivio</h2>
-        <p className="text-sm text-gray-400">
-          Carica i file scout (.xlsm/.xlsx) e il calendario (.csv). I dati vengono
-          salvati automaticamente su <span className="text-amber-400 font-medium">Database in Cloud</span> e
-          sono disponibili da qualsiasi dispositivo.
-        </p>
+    <div className="max-w-6xl mx-auto space-y-5">
+      <div className="glass-card p-5 sm:p-6 space-y-4">
+        <div>
+          <h2 className="text-2xl font-bold text-white mb-2">Gestione Archivio</h2>
+          <p className="text-sm text-gray-400 leading-relaxed">
+            Carica i file scout (.xlsm/.xlsx) e il calendario (.csv). I dati vengono
+            salvati automaticamente su <span className="text-amber-400 font-medium">Database in Cloud</span> e
+            sono disponibili da qualsiasi dispositivo.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs border border-green-500/20 bg-green-500/[0.06]">
+          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+          <span className="text-green-300 font-semibold">Database in Cloud sincronizzato</span>
+          <span className="text-gray-500">• nessun dato viene salvato in locale</span>
+        </div>
       </div>
 
-      {/* Cloud database status badge */}
-      <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-[11px]"
-        style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.15)' }}>
-        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-        <span className="text-green-400 font-medium">Database in Cloud sincronizzato</span>
-        <span className="text-gray-500 ml-1">— nessun dato viene salvato in locale</span>
-      </div>
-
-      <div className="glass-card p-4 space-y-3">
+      <div className="glass-card p-5 sm:p-6 space-y-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <p className="text-sm text-gray-200 font-medium">Condivisione dataset e ruoli utenti</p>
-            <p className="text-[11px] text-gray-500">
+            <p className="text-sm text-gray-100 font-semibold">Condivisione dataset e ruoli utenti</p>
+            <p className="text-xs text-gray-500 mt-1">
               {isSharedMode
                 ? 'Dataset condiviso: il proprietario gestisce accessi, stato e permessi.'
                 : 'Genera un link e gestisci utenti con ruoli Proprietario/Osservatore.'}
@@ -233,7 +232,7 @@ export default function DatasetManager({
             <button
               onClick={handleCreateShare}
               disabled={shareBusy}
-              className="px-3 py-1.5 rounded-lg text-xs bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 transition-colors disabled:opacity-60"
+              className="px-3.5 py-2 rounded-lg text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30 hover:bg-sky-500/25 transition-colors disabled:opacity-60"
             >
               {shareInfo?.token ? 'Rigenera/Recupera Link' : 'Crea Link'}
             </button>
@@ -251,7 +250,7 @@ export default function DatasetManager({
               />
               <button
                 onClick={handleCopyShareUrl}
-                className="px-3 py-2 rounded-lg text-xs bg-white/5 text-gray-300 hover:bg-white/10"
+                className="px-3.5 py-2 rounded-lg text-xs font-medium bg-white/5 text-gray-300 border border-white/10 hover:bg-white/10"
               >
                 Copia
               </button>
@@ -282,7 +281,7 @@ export default function DatasetManager({
                   <button
                     onClick={addMember}
                     disabled={shareBusy || !memberEmail.trim()}
-                    className="px-3 py-2 rounded-lg text-xs bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 disabled:opacity-60"
+                    className="px-3.5 py-2 rounded-lg text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 disabled:opacity-60"
                   >
                     Aggiungi
                   </button>
@@ -339,17 +338,21 @@ export default function DatasetManager({
 
       {/* ── Due sezioni di upload separate ─────────────────────────────── */}
       {!readOnly ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="glass-card p-5 sm:p-6 space-y-4">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h3 className="text-sm font-semibold text-gray-100">Caricamento file</h3>
+            <p className="text-xs text-gray-500">Stessa struttura visiva per scout e calendario</p>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
 
-          {/* Carica Scout Partite */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-amber-400">⚡</span>
-              <p className="text-sm font-semibold text-gray-200">Scout Partite</p>
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-amber-400 text-base">⚡</span>
+              <p className="text-sm font-semibold text-gray-100">Scout Partite</p>
             </div>
-            <p className="text-[11px] text-gray-500 mb-2">File di analisi partita esportati da DataVolley. Formati accettati: <span className="text-amber-300 font-mono">.xlsm</span> / <span className="text-amber-300 font-mono">.xlsx</span></p>
+            <p className="text-xs text-gray-500">File di analisi partita esportati da DataVolley. Formati accettati: <span className="text-amber-300 font-mono">.xlsm</span> / <span className="text-amber-300 font-mono">.xlsx</span></p>
             <div
-              className={`drop-zone p-6 flex flex-col items-center gap-2 cursor-pointer transition-all ${
+              className={`drop-zone min-h-[180px] p-6 flex flex-col justify-center items-center gap-2 cursor-pointer transition-all ${
                 dragOverScout ? 'drag-over' : ''
               } ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}
               onClick={() => fileRefScout.current?.click()}
@@ -361,7 +364,7 @@ export default function DatasetManager({
               <p className="text-sm text-gray-300 text-center">
                 <span className="text-amber-400 font-medium">Clicca o trascina</span> lo scout
               </p>
-              <p className="text-[11px] text-gray-500">.xlsm / .xlsx</p>
+              <p className="text-xs text-gray-500">.xlsm / .xlsx</p>
               <input
                 ref={fileRefScout}
                 type="file"
@@ -373,24 +376,23 @@ export default function DatasetManager({
             </div>
           </div>
 
-          {/* Carica Calendario */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2 mb-1">
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+            <div className="flex items-start justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
-                <span className="text-sky-400">📅</span>
-                <p className="text-sm font-semibold text-gray-200">Calendario Campionato</p>
+                <span className="text-sky-400 text-base">📅</span>
+                <p className="text-sm font-semibold text-gray-100">Calendario Campionato</p>
               </div>
               <button
                 type="button"
                 onClick={handleExportCalendarTemplate}
-                className="px-2.5 py-1 rounded-lg text-[11px] bg-sky-500/15 text-sky-300 border border-sky-500/25 hover:bg-sky-500/25 transition-colors"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/25 hover:bg-sky-500/25 transition-colors"
               >
                 Esporta template Calendario
               </button>
             </div>
-            <p className="text-[11px] text-gray-500 mb-2">Calendario esportato dalla federazione o preparato manualmente. Formato accettato: <span className="text-sky-300 font-mono">.csv</span></p>
+            <p className="text-xs text-gray-500">Calendario esportato dalla federazione o preparato manualmente. Formato accettato: <span className="text-sky-300 font-mono">.csv</span></p>
             <div
-              className={`drop-zone p-6 flex flex-col items-center gap-2 cursor-pointer transition-all ${
+              className={`drop-zone min-h-[180px] p-6 flex flex-col justify-center items-center gap-2 cursor-pointer transition-all ${
                 dragOverCal ? 'drag-over' : ''
               } ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}
               onClick={() => fileRefCal.current?.click()}
@@ -402,7 +404,7 @@ export default function DatasetManager({
               <p className="text-sm text-gray-300 text-center">
                 <span className="text-sky-300 font-medium">Clicca o trascina</span> il calendario
               </p>
-              <p className="text-[11px] text-gray-500">.csv</p>
+              <p className="text-xs text-gray-500">.csv</p>
               <input
                 ref={fileRefCal}
                 type="file"
@@ -411,6 +413,7 @@ export default function DatasetManager({
                 onChange={handleChangeCal}
               />
             </div>
+          </div>
           </div>
         </div>
       ) : (

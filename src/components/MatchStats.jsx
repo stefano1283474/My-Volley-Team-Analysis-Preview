@@ -2,6 +2,8 @@
 // MATCH-STATS — Riepilogo statistiche + tabelle per avversario e per player
 // ============================================================================
 import { useState, useMemo } from 'react';
+import { BarChart3, ClipboardList, Home, Plane, User, Users } from 'lucide-react';
+import { areTeamNamesLikelySame } from '../utils/teamNameMatcher';
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 function fPct(v)  { if (v == null || !Number.isFinite(v) || v === 0) return '—'; return (v * 100).toFixed(1) + '%'; }
@@ -123,11 +125,8 @@ function forecastCoeff(rank, N) {
 // ─── Find opponent rank in standings (fuzzy name match) ───────────────────────
 function findOpponentRank(standings, opponentName) {
   if (!standings?.length || !opponentName) return null;
-  const norm = (s) => String(s || '').trim().toUpperCase();
-  const oppNorm = norm(opponentName);
   const found = standings.find(s => {
-    const sn = norm(s.name);
-    return sn === oppNorm || sn.includes(oppNorm) || oppNorm.includes(sn);
+    return areTeamNamesLikelySame(s.name, opponentName);
   });
   return found ? { rank: found.rank, pts: found.pts } : null;
 }
@@ -520,7 +519,7 @@ export default function MatchStats({ matches, analytics, standings }) {
   if (matches.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3 text-center select-none">
-        <p className="text-4xl opacity-20">📊</p>
+        <BarChart3 className="w-10 h-10 opacity-20 text-gray-500" />
         <p className="text-sm font-medium text-gray-400">Nessuna partita nel filtro corrente</p>
         <p className="text-xs text-gray-600">Modifica il filtro in Sistema › Tipologia Gare</p>
       </div>
@@ -594,7 +593,11 @@ export default function MatchStats({ matches, analytics, standings }) {
                       {row.matchType!=='—'?<span className="px-1.5 py-0.5 rounded bg-white/5 text-gray-400">{row.matchType}</span>:'—'}
                     </td>
                     <td className={tdBase+' text-[11px]'}>
-                      {row.homeAway==='Casa'?<span className="text-sky-400">🏠</span>:row.homeAway==='Trasferta'?<span className="text-amber-400">✈</span>:<span className="text-gray-600">—</span>}
+                      {row.homeAway==='Casa'
+                        ? <Home className="w-3.5 h-3.5 text-sky-400 inline" />
+                        : row.homeAway==='Trasferta'
+                          ? <Plane className="w-3.5 h-3.5 text-amber-400 inline" />
+                          : <span className="text-gray-600">—</span>}
                     </td>
                     <td className={tdBase+' font-mono text-[11px] text-gray-300'}>
                       <button className="hover:text-white transition-colors" title={row.setDetail||'—'}
@@ -655,7 +658,7 @@ export default function MatchStats({ matches, analytics, standings }) {
       {/* ══ Section 2: Per-player fundamental tables ══════════════════════════ */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
-          <span className="text-lg">👤</span>
+          <User className="w-4 h-4 text-gray-400" />
           <h2 className="text-base font-semibold text-white">Statistiche per Giocatrice</h2>
         </div>
         <div className="space-y-1">
@@ -706,7 +709,7 @@ export default function MatchStats({ matches, analytics, standings }) {
       {/* ══ Section 3: Opponent comparison (valore medio) ════════════════════ */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
-          <span className="text-lg">🆚</span>
+          <Users className="w-4 h-4 text-gray-400" />
           <div>
             <h2 className="text-base font-semibold text-white">Confronto per Avversario</h2>
             <p className="text-xs text-gray-500 mt-0.5">Valore medio · Media campionato · Coefficiente di previsione</p>
@@ -740,7 +743,7 @@ export default function MatchStats({ matches, analytics, standings }) {
       {/* ══ Section 4: Tabelle ════════════════════════════════════════════════ */}
       <div className="space-y-5">
         <div className="flex items-center gap-2">
-          <span className="text-lg">📋</span>
+          <ClipboardList className="w-4 h-4 text-gray-400" />
           <div>
             <h2 className="text-base font-semibold text-white">Tabelle</h2>
             <p className="text-xs text-gray-500 mt-0.5">Frequenze · Valore medio ponderato · Proiezione</p>

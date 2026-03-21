@@ -6,14 +6,20 @@ rules_version = '2';
 // Strutture dati gestite:
 //   [MVS]  users/{email}/teams/{teamId}/matches/{matchId}
 //   [MVS]  users/{email}/... (tutte le subcollection MVS)
-//   [MVTA] volley_team_analysis_6_0/{uid}/datasets/{docId}
-//   [MVTA] volley_team_analysis_6_0_users/{uid}
-//   [MVTA] volley_team_analysis_6_0_shared_access/{ownerUid}
-//   [MVTA] volley_team_analysis_6_0_share_tokens/{token}
-//   [MVTA] volley_team_analysis_6_0_profile_requests/{uid}
-//   [MVTA] volley_team_analysis_6_0_user_usage/{uid}
-//   [MVTA] volley_team_analysis_6_0_news/{ownerUid}
-//   [MVTA] volley_team_analysis_6_0_offers/{ownerUid}
+//   [MVTA] users/{uid}/shared_access/config        (NEW)
+//   [MVTA] users/{uid}/news/posts                   (NEW)
+//   [MVTA] users/{uid}/offers/list                  (NEW)
+//   [MVTA] users/{uid}/usage/log                    (NEW)
+//   [MVTA] users/_global_tokens/share_tokens/{tok}  (NEW)
+//   [MVTA] users/_admin/content/{docId}             (NEW)
+//   [MVTA legacy] volley_team_analysis_6_0/{uid}/datasets/{docId}
+//   [MVTA legacy] volley_team_analysis_6_0_users/{uid}
+//   [MVTA legacy] volley_team_analysis_6_0_shared_access/{ownerUid}
+//   [MVTA legacy] volley_team_analysis_6_0_share_tokens/{token}
+//   [MVTA legacy] volley_team_analysis_6_0_profile_requests/{uid}
+//   [MVTA legacy] volley_team_analysis_6_0_user_usage/{uid}
+//   [MVTA legacy] volley_team_analysis_6_0_news/{ownerUid}
+//   [MVTA legacy] volley_team_analysis_6_0_offers/{ownerUid}
 // ============================================================================
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -33,8 +39,8 @@ service cloud.firestore {
     function isUser(userId) {
       return isSignedIn() && (
         request.auth.uid == userId ||
-        request.auth.token.email == userId ||
-        request.auth.token.email.replace('.', '_') == userId
+        (request.auth.token.email != null && request.auth.token.email.lower() == userId) ||
+        (request.auth.token.email != null && request.auth.token.email.lower().replace('.', '_') == userId)
       );
     }
 
@@ -49,10 +55,12 @@ service cloud.firestore {
     }
 
     function isAdminUser() {
-      let userRef = /databases/$(database)/documents/volley_team_analysis_6_0_users/$(request.auth.uid);
+      let legacyUserRef = /databases/$(database)/documents/volley_team_analysis_6_0_users/$(request.auth.uid);
+      let unifiedUserRef = /databases/$(database)/documents/users/$(requesterEmail());
       return isSignedIn()
         && (isBootstrapAdminEmail()
-            || (exists(userRef) && get(userRef).data.role == 'admin'));
+            || (exists(unifiedUserRef) && get(unifiedUserRef).data.role == 'admin')
+            || (exists(legacyUserRef) && get(legacyUserRef).data.role == 'admin'));
     }
 
     function isOwnUserDoc(uid) {
@@ -124,7 +132,10 @@ service cloud.firestore {
 
     // Documento utente MVS
     match /users/{userId} {
-      allow read, write: if isUser(userId);
+      allow get: if isUser(userId) || isAdminUser();
+      allow list: if isAdminUser();
+      allow create, update: if isUser(userId);
+      allow delete: if isUser(userId) || isAdminUser();
     }
 
     // Tutte le subcollection MVS sotto /users/{userId}/
@@ -192,9 +203,61 @@ service cloud.firestore {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // REGOLE MY VOLLEY TEAM ANALYSIS (MVTA)
+    // REGOLE UNIFICATE MVTA (nuove sub-collection sotto users/)
+    // Questi path sostituiscono le root collection legacy. Le regole legacy
+    // rimangono attive per backward compatibility durante la migrazione.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Shared access config (nuovo path: users/{uid}/shared_access/config)
+    match /users/{ownerUid}/shared_access/{docId} {
+      allow read: if isUser(ownerUid)
+        || (isSignedIn()
+            && isShareEnabled(resource.data)
+            && (hasPublicAccess(resource.data) || hasRestrictedAccess(resource.data)));
+      allow create, update, delete: if isUser(ownerUid);
+    }
+
+    // News (nuovo path: users/{uid}/news/{docId})
+    match /users/{ownerUid}/news/{docId} {
+      allow read: if isUser(ownerUid) || isAllowedReader(ownerUid);
+      allow create, update, delete: if isUser(ownerUid) || isAllowedWriter(ownerUid);
+    }
+
+    // Offers (nuovo path: users/{uid}/offers/{docId})
+    match /users/{ownerUid}/offers/{docId} {
+      allow read: if isUser(ownerUid) || isAllowedReader(ownerUid);
+      allow create, update, delete: if isUser(ownerUid) || isAllowedWriter(ownerUid);
+    }
+
+    // Usage log (nuovo path: users/{uid}/usage/{docId})
+    match /users/{ownerUid}/usage/{docId} {
+      allow get: if isUser(ownerUid) || isAdminUser();
+      allow list: if isAdminUser();
+      allow create, update: if isUser(ownerUid);
+      allow delete: if isAdminUser();
+    }
+
+    // Global share tokens (nuovo path: users/_global_tokens/share_tokens/{token})
+    match /users/_global_tokens/share_tokens/{token} {
+      allow read: if isSignedIn()
+        && isShareEnabled(resource.data)
+        && (resource.data.ownerUid == request.auth.uid
+            || isAllowedReader(resource.data.ownerUid));
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // Admin content (nuovo path: users/_admin/content/{docId})
+    match /users/_admin/content/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminUser();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // REGOLE MY VOLLEY TEAM ANALYSIS (MVTA) — LEGACY
     // Struttura: volley_team_analysis_6_0/{uid}/datasets/{docId}
     // Identificazione utente: Firebase Auth UID
+    // Queste regole restano attive per backward compatibility.
     // ══════════════════════════════════════════════════════════════════════════
 
     // Dataset match e calendario

@@ -5,26 +5,59 @@
 // ============================================================================
 
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  Award,
+  BarChart3,
+  Bell,
+  BookOpen,
+  CalendarDays,
+  Check,
+  Circle,
+  CircleCheck,
+  CircleX,
+  Cog,
+  Gift,
+  GraduationCap,
+  Info,
+  Megaphone,
+  Medal,
+  Minus,
+  Newspaper,
+  Pin,
+  RefreshCw,
+  Shield,
+  Swords,
+  Tag,
+  Target,
+  Ticket,
+  Trophy,
+  Users,
+  Wrench,
+  X,
+} from 'lucide-react';
 
 // ─── Costanti ─────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'campionato', label: 'Campionato', icon: '🏆' },
-  { id: 'squadra',    label: 'Squadra',    icon: '🏐' },
-  { id: 'player',     label: 'Player',     icon: '★'  },
-  { id: 'sistema',    label: 'Sistema',    icon: '📋' },
-  { id: 'offerte',    label: 'Offerte',    icon: '🏷️' },
+  { id: 'campionato', label: 'Campionato', icon: 'Trophy' },
+  { id: 'squadra',    label: 'Squadra',    icon: 'Volleyball' },
+  { id: 'player',     label: 'Player',     icon: 'Award'  },
+  { id: 'sistema',    label: 'Sistema',    icon: 'BarChart3' },
+  { id: 'offerte',    label: 'Offerte',    icon: 'Tag' },
 ];
 
 // ─── Costanti Offerte ─────────────────────────────────────────────────────────
 
 const OFFER_CATEGORIES = {
-  abbonamento: { label: 'Abbonamento', icon: '🔄', color: 'text-sky-400',     bg: 'bg-sky-500/10',     border: 'border-sky-500/25'    },
-  corso:       { label: 'Corso',       icon: '📚', color: 'text-violet-400',  bg: 'bg-violet-500/10',  border: 'border-violet-500/25' },
-  evento:      { label: 'Evento',      icon: '🎟️', color: 'text-purple-400',  bg: 'bg-purple-500/10',  border: 'border-purple-500/25' },
-  servizio:    { label: 'Servizio',    icon: '⚙️', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25' },
-  promozione:  { label: 'Promozione',  icon: '🎁', color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-500/25'  },
-  altro:       { label: 'Altro',       icon: '📌', color: 'text-gray-300',    bg: 'bg-white/[0.04]',   border: 'border-white/10'      },
+  abbonamento: { label: 'Abbonamento', icon: 'RefreshCw', color: 'text-sky-400',     bg: 'bg-sky-500/10',     border: 'border-sky-500/25'    },
+  corso:       { label: 'Corso',       icon: 'BookOpen',  color: 'text-violet-400',  bg: 'bg-violet-500/10',  border: 'border-violet-500/25' },
+  evento:      { label: 'Evento',      icon: 'Ticket',    color: 'text-purple-400',  bg: 'bg-purple-500/10',  border: 'border-purple-500/25' },
+  servizio:    { label: 'Servizio',    icon: 'Cog',       color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25' },
+  promozione:  { label: 'Promozione',  icon: 'Gift',      color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-500/25'  },
+  altro:       { label: 'Altro',       icon: 'Pin',       color: 'text-gray-300',    bg: 'bg-white/[0.04]',   border: 'border-white/10'      },
 };
 
 const MAX_OFFER_DESC = 600;
@@ -36,7 +69,7 @@ const FUND_LABELS = {
   defense: 'Difesa', block: 'Muro',
 };
 const FUND_ICONS = {
-  attack: '⚔️', serve: '🎯', reception: '🤲', defense: '🛡️', block: '🧱',
+  attack: 'Swords', serve: 'Target', reception: 'Shield', defense: 'Shield', block: 'Wrench',
 };
 
 const NEWS_STYLES = {
@@ -49,12 +82,50 @@ const NEWS_STYLES = {
 };
 
 const SISTEMA_TYPES = {
-  avviso:        { label: 'Avviso',        icon: '⚠️', color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-500/25'  },
-  info:          { label: 'Info',          icon: 'ℹ️', color: 'text-sky-400',     bg: 'bg-sky-500/10',     border: 'border-sky-500/25'    },
-  risultato:     { label: 'Risultato',     icon: '🏐', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25' },
-  evento:        { label: 'Evento',        icon: '📅', color: 'text-purple-400',  bg: 'bg-purple-500/10',  border: 'border-purple-500/25' },
-  comunicazione: { label: 'Comunicazione', icon: '📢', color: 'text-gray-300',    bg: 'bg-white/[0.04]',   border: 'border-white/10'      },
+  avviso:        { label: 'Avviso',        icon: 'AlertTriangle', color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-500/25'  },
+  info:          { label: 'Info',          icon: 'Info',          color: 'text-sky-400',     bg: 'bg-sky-500/10',     border: 'border-sky-500/25'    },
+  risultato:     { label: 'Risultato',     icon: 'Volleyball',    color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25' },
+  evento:        { label: 'Evento',        icon: 'CalendarDays',  color: 'text-purple-400',  bg: 'bg-purple-500/10',  border: 'border-purple-500/25' },
+  comunicazione: { label: 'Comunicazione', icon: 'Megaphone',     color: 'text-gray-300',    bg: 'bg-white/[0.04]',   border: 'border-white/10'      },
 };
+
+const ICON_COMPONENTS = {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  Award,
+  BarChart3,
+  Bell,
+  BookOpen,
+  CalendarDays,
+  Check,
+  Cog,
+  CircleCheck,
+  CircleX,
+  Gift,
+  GraduationCap,
+  Info,
+  Megaphone,
+  Medal,
+  Minus,
+  Newspaper,
+  Pin,
+  RefreshCw,
+  Shield,
+  Swords,
+  Tag,
+  Target,
+  Ticket,
+  Trophy,
+  Users,
+  Volleyball: Target,
+  Wrench,
+  X,
+};
+function IconGlyph({ name, className = '', size = 14 }) {
+  const Comp = ICON_COMPONENTS[name] || Circle;
+  return <Comp className={className} size={size} strokeWidth={2} aria-hidden="true" />;
+}
 
 const MAX_TEXT = 500;
 
@@ -108,7 +179,7 @@ function genCampionatoNews(standings, calendar, teamName) {
   news.push({
     id: 'pos',
     type: gap === 0 ? 'success' : gap <= 3 ? 'warning' : 'info',
-    icon: pos === 1 ? '🥇' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : '📊',
+    icon: pos === 1 ? 'Trophy' : pos === 2 ? 'Award' : pos === 3 ? 'Medal' : 'BarChart3',
     title: `${pos}° posto in classifica · ${team.pts} pt`,
     summary: gap === 0
       ? `In testa alla classifica con ${team.pts} punti (${team.w}V–${team.l}P).`
@@ -116,7 +187,7 @@ function genCampionatoNews(standings, calendar, teamName) {
     detail: [
       `Bilancio: ${team.w} vinte / ${team.l} perse`,
       `Set: ${team.sw}–${team.sl}  (ratio ${team.sl > 0 ? (team.sw / team.sl).toFixed(2) : '∞'})`,
-      gap > 0 ? `Distanza da ${leader.name}: ${gap} pt` : '🏆 Prima posizione!',
+      gap > 0 ? `Distanza da ${leader.name}: ${gap} pt` : 'Prima posizione',
       `Partite giocate: ${(team.w || 0) + (team.l || 0)}`,
     ],
     action: null,
@@ -130,7 +201,7 @@ function genCampionatoNews(standings, calendar, teamName) {
     news.push({
       id: 'rivals',
       type: 'info',
-      icon: '🎯',
+      icon: 'Target',
       title: `${rivals.length} rivali diretti in classifica`,
       summary: rivals
         .map(r => `${r.rank}° ${r.name.substring(0, 15)} (${team.pts - r.pts >= 0 ? '+' : ''}${team.pts - r.pts} pt)`)
@@ -163,10 +234,10 @@ function genCampionatoNews(standings, calendar, teamName) {
     news.push({
       id: 'form',
       type: ratio >= 0.6 ? 'success' : ratio <= 0.3 ? 'danger' : 'neutral',
-      icon: '📈',
+      icon: 'ArrowUp',
       title: `Forma recente: ${wins}/${results.length} vittorie  ${icons}`,
       summary: `Ultime ${results.length} gare disputate in campionato.`,
-      detail: results.map(r => `${r.won ? '✅' : '❌'}  ${pad(r.score, 6)}  vs  ${r.opp}  ${r.home ? '(casa)' : '(trasf.)'}`),
+      detail: results.map(r => `${r.won ? 'V' : 'P'}  ${pad(r.score, 6)}  vs  ${r.opp}  ${r.home ? '(casa)' : '(trasf.)'}`),
       action: null,
     });
   }
@@ -182,7 +253,7 @@ function genCampionatoNews(standings, calendar, teamName) {
     news.push({
       id: 'last_cal',
       type: won ? 'success' : 'warning',
-      icon: won ? '✅' : '❌',
+      icon: won ? 'CircleCheck' : 'CircleX',
       title: `Ultimo risultato: ${won ? 'Vittoria' : 'Sconfitta'} ${oS}–${aS} vs ${opp}`,
       summary: `Giornata ${last.giornata}${last.data ? '  ·  ' + formatDate(last.data) : ''}`,
       detail: [
@@ -203,8 +274,8 @@ function genCampionatoNews(standings, calendar, teamName) {
     news.push({
       id: 'next',
       type: 'event',
-      icon: '📅',
-      title: `Prossima gara: ${isH ? '🏠 Casa' : '✈️ Trasferta'}  vs  ${opp}`,
+      icon: 'CalendarDays',
+      title: `Prossima gara: ${isH ? 'Casa' : 'Trasferta'}  vs  ${opp}`,
       summary: `Giornata ${next.giornata}${next.data ? '  ·  ' + formatDate(next.data) : ''}${next.ora ? '  ore ' + next.ora : ''}`,
       detail: [
         `Avversario: ${opp}`,
@@ -238,7 +309,7 @@ function genSquadraNews(sortedMA) {
   news.push({
     id: 'last_match',
     type: won ? 'success' : 'warning',
-    icon: won ? '🏆' : '⚠️',
+    icon: won ? 'Trophy' : 'AlertTriangle',
     title: `Ultima gara: ${won ? 'Vittoria' : 'Sconfitta'} ${sW}–${sL} vs ${last.match.metadata.opponent}`,
     summary: `Side-Out ${so}%  ·  Break-Point ${bp}%${last.match.metadata.date ? '  ·  ' + last.match.metadata.date : ''}`,
     detail: [
@@ -264,7 +335,7 @@ function genSquadraNews(sortedMA) {
     news.push({
       id: 'trend',
       type: delta >= 0.015 ? 'success' : delta <= -0.015 ? 'danger' : 'neutral',
-      icon: delta >= 0.015 ? '📈' : delta <= -0.015 ? '📉' : '➡️',
+      icon: delta >= 0.015 ? 'ArrowUp' : delta <= -0.015 ? 'ArrowDown' : 'Minus',
       title: `Trend di forma: ${delta >= 0.015 ? '↑ In crescita' : delta <= -0.015 ? '↓ In calo' : '→ Stabile'} (${dStr})`,
       summary: `Media ultimi 3 match: ${(recent3 * 100).toFixed(1)}%  vs  stagionale ${(season * 100).toFixed(1)}%.`,
       detail: [
@@ -289,11 +360,11 @@ function genSquadraNews(sortedMA) {
     news.push({
       id: 'funds',
       type: 'info',
-      icon: '📊',
-      title: `Fondamentali: 💪 ${FUND_LABELS[best.f]}  /  ⚠️ ${FUND_LABELS[worst.f]}`,
+      icon: 'BarChart3',
+      title: `Fondamentali: forte ${FUND_LABELS[best.f]}  /  critica ${FUND_LABELS[worst.f]}`,
       summary: `Punto di forza: ${FUND_LABELS[best.f]} ${(best.avg * 100).toFixed(1)}%  ·  Critico: ${FUND_LABELS[worst.f]} ${(worst.avg * 100).toFixed(1)}%`,
       detail: fundAvgs.map((fa, i) =>
-        `${i === 0 ? '💪' : i === fundAvgs.length - 1 ? '⚠️' : '  '}  ${FUND_ICONS[fa.f]}  ${pad(FUND_LABELS[fa.f], 12)}  ${(fa.avg * 100).toFixed(1)}%`
+        `${i === 0 ? 'TOP' : i === fundAvgs.length - 1 ? 'LOW' : '   '}  ${pad(FUND_LABELS[fa.f], 12)}  ${(fa.avg * 100).toFixed(1)}%`
       ),
       action: null,
     });
@@ -327,12 +398,12 @@ function genPlayerNews(playerTrends) {
     news.push({
       id: `top_${p.number}`,
       type: 'success',
-      icon: '⬆️',
+      icon: 'ArrowUp',
       title: `#${p.number} ${p.name}  +${(p.avgDelta * 100).toFixed(1)}% tendenza recente`,
       summary: `Media recente: ${(p.avgRecent * 100).toFixed(1)}%  ·  In miglioramento rispetto alla media stagionale.`,
       detail: Object.entries(p.trends || {}).map(([f, t]) => {
         const d = (t.rawRecentAvg || 0) - (t.rawOlderAvg || 0);
-        return `${FUND_ICONS[f] || '·'}  ${pad(FUND_LABELS[f] || f, 12)}  ${(t.rawRecentAvg * 100).toFixed(1)}%  (${d >= 0 ? '+' : ''}${(d * 100).toFixed(1)}%)`;
+        return `${pad(FUND_LABELS[f] || f, 12)}  ${(t.rawRecentAvg * 100).toFixed(1)}%  (${d >= 0 ? '+' : ''}${(d * 100).toFixed(1)}%)`;
       }),
       action: { label: `Apri scheda ${p.name}`, type: 'selectPlayer', payload: p },
     });
@@ -344,7 +415,7 @@ function genPlayerNews(playerTrends) {
     news.push({
       id: `bot_${p.number}`,
       type: 'warning',
-      icon: '⬇️',
+      icon: 'ArrowDown',
       title: `#${p.number} ${p.name}  ${(p.avgDelta * 100).toFixed(1)}% tendenza recente`,
       summary: `Media recente: ${(p.avgRecent * 100).toFixed(1)}%  ·  In calo rispetto alla media stagionale.`,
       detail: Object.entries(p.trends || {}).map(([f, t]) => {
@@ -370,7 +441,9 @@ function AutoNewsCard({ item, onAction }) {
       onClick={() => setOpen(v => !v)}
     >
       <div className="flex items-start gap-2.5">
-        <span className="text-sm mt-0.5 flex-shrink-0">{item.icon}</span>
+        <span className="mt-0.5 flex-shrink-0 text-gray-300">
+          <IconGlyph name={item.icon} className="w-3.5 h-3.5" />
+        </span>
         <div className="flex-1 min-w-0">
           <p className={`text-[12px] font-semibold ${s.color} leading-snug`}>{item.title}</p>
           <p className="text-[11px] text-gray-400 mt-0.5 leading-relaxed">{item.summary}</p>
@@ -390,7 +463,9 @@ function AutoNewsCard({ item, onAction }) {
             </div>
           )}
         </div>
-        <span className={`text-[9px] ${s.color} opacity-40 flex-shrink-0 mt-1`}>{open ? '▲' : '▼'}</span>
+        <span className={`opacity-40 flex-shrink-0 mt-1 ${s.color}`}>
+          <IconGlyph name={open ? 'ArrowUp' : 'ArrowDown'} className="w-3 h-3" />
+        </span>
       </div>
     </button>
   );
@@ -401,7 +476,9 @@ function AutoNewsCard({ item, onAction }) {
 function EmptyState({ icon, text }) {
   return (
     <div className="flex flex-col items-center justify-center py-8 text-center gap-2">
-      <span className="text-3xl opacity-50">{icon}</span>
+      <span className="opacity-50 text-gray-400">
+        <IconGlyph name={icon} className="w-8 h-8" size={30} />
+      </span>
       <p className="text-xs text-gray-500 max-w-xs">{text}</p>
     </div>
   );
@@ -410,7 +487,7 @@ function EmptyState({ icon, text }) {
 function NoTeamPrompt({ onScrollToStandings }) {
   return (
     <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.02] p-5 flex flex-col items-center text-center gap-3">
-      <div className="text-3xl">🏐</div>
+      <div className="text-gray-400"><IconGlyph name="Volleyball" className="w-8 h-8" size={30} /></div>
       <div>
         <p className="text-sm font-semibold text-white mb-1">Nessuna squadra selezionata</p>
         <p className="text-xs text-gray-500 max-w-xs">
@@ -432,7 +509,7 @@ function NoTeamPrompt({ onScrollToStandings }) {
 function NoCalendarPrompt({ onOpenDataImport, onScrollToStandings }) {
   return (
     <div className="rounded-2xl border border-dashed border-amber-400/30 bg-amber-500/5 p-5 flex flex-col items-center text-center gap-3">
-      <div className="text-3xl">🗓️</div>
+      <div className="text-gray-400"><IconGlyph name="CalendarDays" className="w-8 h-8" size={30} /></div>
       <div>
         <p className="text-sm font-semibold text-amber-200 mb-1">Calendario campionato non importato</p>
         <p className="text-xs text-gray-400 max-w-md">
@@ -465,9 +542,9 @@ function NoCalendarPrompt({ onOpenDataImport, onScrollToStandings }) {
 // ─── Visibilità (Sistema + Offerte) ──────────────────────────────────────────
 
 const VIS_MODES = [
-  { id: 'all',      label: '🌐 Tutti',             desc: 'Visibile a tutti gli utenti' },
-  { id: 'profiles', label: '🎫 Per profilo',        desc: 'Solo utenti con profilo selezionato' },
-  { id: 'users',    label: '👤 Utenti specifici',   desc: 'Solo utenti selezionati manualmente' },
+  { id: 'all',      label: 'Tutti',             desc: 'Visibile a tutti gli utenti' },
+  { id: 'profiles', label: 'Per profilo',       desc: 'Solo utenti con profilo selezionato' },
+  { id: 'users',    label: 'Utenti specifici',  desc: 'Solo utenti selezionati manualmente' },
 ];
 
 const PROFILE_LABELS = { base: 'Base', pro: 'Pro', promax: 'Pro Max' };
@@ -519,7 +596,7 @@ function VisibilitySelector({ visMode, setVisMode, visProfiles, setVisProfiles, 
             </button>
           ))}
           {visProfiles.length === 0 && (
-            <span className="text-[10px] text-amber-400/80">⚠ Seleziona almeno un profilo</span>
+            <span className="text-[10px] text-amber-400/80">Seleziona almeno un profilo</span>
           )}
         </div>
       )}
@@ -547,7 +624,7 @@ function VisibilitySelector({ visMode, setVisMode, visProfiles, setVisProfiles, 
             </label>
           ))}
           {visUserIds.length === 0 && allUsers.length > 0 && (
-            <div className="text-[10px] text-amber-400/80">⚠ Seleziona almeno un utente</div>
+            <div className="text-[10px] text-amber-400/80">Seleziona almeno un utente</div>
           )}
         </div>
       )}
@@ -566,16 +643,18 @@ function VisibilityBadge({ visibility }) {
   if (visibility.mode === 'profiles') {
     const labels = (visibility.profiles || []).map(p => PROFILE_LABELS[p] || p).join(', ');
     return (
-      <span className="text-[9px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 shrink-0">
-        🎫 {labels || '–'}
+      <span className="text-[9px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 shrink-0 inline-flex items-center gap-1">
+        <IconGlyph name="Ticket" className="w-3 h-3" />
+        {labels || '–'}
       </span>
     );
   }
   if (visibility.mode === 'users') {
     const count = (visibility.userIds || []).length;
     return (
-      <span className="text-[9px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shrink-0">
-        👤 {count} {count === 1 ? 'utente' : 'utenti'}
+      <span className="text-[9px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shrink-0 inline-flex items-center gap-1">
+        <IconGlyph name="Users" className="w-3 h-3" />
+        {count} {count === 1 ? 'utente' : 'utenti'}
       </span>
     );
   }
@@ -624,7 +703,10 @@ export function PostForm({ onSave, onCancel, authorEmail, allUsers = [] }) {
                 : 'border-white/8 text-gray-500 hover:text-gray-300'
             }`}
           >
-            {meta.icon} {meta.label}
+            <span className="inline-flex items-center gap-1">
+              <IconGlyph name={meta.icon} className="w-3 h-3" />
+              {meta.label}
+            </span>
           </button>
         ))}
       </div>
@@ -639,7 +721,10 @@ export function PostForm({ onSave, onCancel, authorEmail, allUsers = [] }) {
         <div className="text-right text-[9px] text-gray-600 mt-0.5">{text.length}/{MAX_TEXT}</div>
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-[10px] text-gray-500 whitespace-nowrap">📅 Data evento (opz.)</span>
+        <span className="text-[10px] text-gray-500 whitespace-nowrap inline-flex items-center gap-1">
+          <IconGlyph name="CalendarDays" className="w-3 h-3" />
+          Data evento (opz.)
+        </span>
         <input
           type="date"
           value={eventDate}
@@ -647,7 +732,9 @@ export function PostForm({ onSave, onCancel, authorEmail, allUsers = [] }) {
           className="flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-white/20"
         />
         {eventDate && (
-          <button onClick={() => setED('')} className="text-[10px] text-gray-500 hover:text-gray-300">✕</button>
+          <button onClick={() => setED('')} className="text-[10px] text-gray-500 hover:text-gray-300 inline-flex items-center justify-center">
+            <IconGlyph name="X" className="w-3 h-3" />
+          </button>
         )}
       </div>
       <VisibilitySelector
@@ -688,7 +775,10 @@ export function PostCard({ post, canEdit, onDelete }) {
     <div className={`rounded-xl border ${meta.border} ${meta.bg} p-3.5 relative group`}>
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${meta.border} ${meta.bg} ${meta.color}`}>
-          {meta.icon} {meta.label}
+          <span className="inline-flex items-center gap-1">
+            <IconGlyph name={meta.icon} className="w-3 h-3" />
+            {meta.label}
+          </span>
         </span>
         {dateStr && (
           <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
@@ -696,7 +786,10 @@ export function PostCard({ post, canEdit, onDelete }) {
               : isPast  ? 'border-white/10 bg-white/[0.03] text-gray-500 line-through'
               : 'border-white/10 text-gray-400'
           }`}>
-            📅 {dateStr}
+            <span className="inline-flex items-center gap-1">
+              <IconGlyph name="CalendarDays" className="w-3 h-3" />
+              {dateStr}
+            </span>
           </span>
         )}
         {canEdit && <VisibilityBadge visibility={post.visibility} />}
@@ -706,7 +799,7 @@ export function PostCard({ post, canEdit, onDelete }) {
             className="ml-auto opacity-0 group-hover:opacity-100 text-[10px] text-gray-600 hover:text-red-400 transition-all px-1.5 py-0.5 rounded"
             title="Elimina post"
           >
-            ✕
+            <IconGlyph name="X" className="w-3 h-3" />
           </button>
         )}
       </div>
@@ -769,7 +862,10 @@ export function OfferForm({ onSave, onCancel, authorEmail, allUsers = [] }) {
                 : 'border-white/8 text-gray-500 hover:text-gray-300'
             }`}
           >
-            {meta.icon} {meta.label}
+            <span className="inline-flex items-center gap-1">
+              <IconGlyph name={meta.icon} className="w-3 h-3" />
+              {meta.label}
+            </span>
           </button>
         ))}
       </div>
@@ -797,12 +893,15 @@ export function OfferForm({ onSave, onCancel, authorEmail, allUsers = [] }) {
           <input
             value={price}
             onChange={e => setPrice(e.target.value)}
-            placeholder="💰 Prezzo (es. €29/mese) — opz."
+            placeholder="Prezzo (es. €29/mese) — opz."
             className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-white/20"
           />
         </div>
         <div className="flex items-center gap-1.5 flex-1">
-          <span className="text-[10px] text-gray-500 whitespace-nowrap">📅 Scade il</span>
+          <span className="text-[10px] text-gray-500 whitespace-nowrap inline-flex items-center gap-1">
+            <IconGlyph name="CalendarDays" className="w-3 h-3" />
+            Scade il
+          </span>
           <input
             type="date"
             value={validUntil}
@@ -810,7 +909,9 @@ export function OfferForm({ onSave, onCancel, authorEmail, allUsers = [] }) {
             className="flex-1 bg-white/[0.03] border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-white/20"
           />
           {validUntil && (
-            <button onClick={() => setValid('')} className="text-[10px] text-gray-500 hover:text-gray-300">✕</button>
+            <button onClick={() => setValid('')} className="text-[10px] text-gray-500 hover:text-gray-300 inline-flex items-center justify-center">
+              <IconGlyph name="X" className="w-3 h-3" />
+            </button>
           )}
         </div>
       </div>
@@ -853,7 +954,9 @@ export function OfferCard({ offer, canEdit, onDelete }) {
     // ── Admin view: compact list row ─────────────────────────────────────────
     return (
       <div className={`rounded-xl border ${cat.border} ${cat.bg} p-3.5 relative group flex items-start gap-3 ${expired ? 'opacity-50' : ''}`}>
-        <span className="text-xl flex-shrink-0 mt-0.5">{cat.icon}</span>
+        <span className="flex-shrink-0 mt-0.5 text-gray-300">
+          <IconGlyph name={cat.icon} className="w-5 h-5" size={20} />
+        </span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${cat.border} ${cat.bg} ${cat.color}`}>
@@ -891,7 +994,7 @@ export function OfferCard({ offer, canEdit, onDelete }) {
             className="opacity-0 group-hover:opacity-100 text-[10px] text-gray-600 hover:text-red-400 transition-all px-1.5 py-0.5 rounded flex-shrink-0"
             title="Elimina offerta"
           >
-            ✕
+            <IconGlyph name="X" className="w-3 h-3" />
           </button>
         )}
       </div>
@@ -908,11 +1011,11 @@ export function OfferCard({ offer, canEdit, onDelete }) {
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${cat.border} ${cat.bg} ${cat.color} flex items-center gap-1`}>
-              {cat.icon} {cat.label}
+              <IconGlyph name={cat.icon} className="w-3 h-3" /> {cat.label}
             </span>
             {expired && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20">
-                ⏰ Scaduta
+                Scaduta
               </span>
             )}
           </div>
@@ -937,7 +1040,8 @@ export function OfferCard({ offer, canEdit, onDelete }) {
                     ? 'border-amber-500/20 bg-amber-500/5 text-amber-400'
                     : 'border-white/10 bg-white/[0.03] text-gray-400'
               }`}>
-                📅 {expired ? 'Scaduta il' : daysLeft !== null && daysLeft <= 7 ? `Scade tra ${daysLeft}gg ·` : 'Valida fino al'} {formatDate(offer.validUntil)}
+                <IconGlyph name="CalendarDays" className="w-3 h-3" />
+                {expired ? 'Scaduta il' : daysLeft !== null && daysLeft <= 7 ? `Scade tra ${daysLeft}gg ·` : 'Valida fino al'} {formatDate(offer.validUntil)}
               </span>
             )}
             <span className="text-[9px] text-gray-600 ml-auto">Pubblicato da {offer.authorEmail || 'admin'}</span>
@@ -1036,7 +1140,7 @@ export default function NewsBacheca({
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-base">📰</span>
+          <span className="text-gray-300"><IconGlyph name="Newspaper" className="w-4 h-4" /></span>
           <h2 className="text-sm font-black text-white uppercase tracking-tighter">News</h2>
           {ownerTeamName && (
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-500/25 font-medium">
@@ -1054,7 +1158,7 @@ export default function NewsBacheca({
           className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-white/12 text-[13px] text-gray-300 hover:text-white hover:bg-white/8 disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="Segna lette notifiche tab"
         >
-          ✓
+          <IconGlyph name="Check" className="w-3.5 h-3.5" />
         </button>
       </div>
 
@@ -1077,7 +1181,9 @@ export default function NewsBacheca({
                   : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
               }`}
             >
-              <span>{tab.icon}</span>
+              <span className="inline-flex items-center justify-center">
+                <IconGlyph name={tab.icon} className="w-3.5 h-3.5" />
+              </span>
               <span className="hidden sm:inline">{tab.label}</span>
               {unread > 0 ? (
                 <span className="text-[9px] min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white font-bold inline-flex items-center justify-center">
@@ -1103,7 +1209,7 @@ export default function NewsBacheca({
             : !hasTeam
             ? <NoTeamPrompt onScrollToStandings={onScrollToStandings} />
             : campNews.length === 0
-              ? <EmptyState icon="🏆" text="Carica il calendario per visualizzare le news del campionato." />
+              ? <EmptyState icon="Trophy" text="Carica il calendario per visualizzare le news del campionato." />
               : campNews.map(item => <AutoNewsCard key={item.id} item={item} onAction={handleAction} />)
         )}
 
@@ -1112,7 +1218,7 @@ export default function NewsBacheca({
           !hasTeam
             ? <NoTeamPrompt onScrollToStandings={onScrollToStandings} />
             : squadraNews.length === 0
-              ? <EmptyState icon="🏐" text="Analizza almeno una partita per visualizzare le news della squadra." />
+              ? <EmptyState icon="Volleyball" text="Analizza almeno una partita per visualizzare le news della squadra." />
               : squadraNews.map(item => <AutoNewsCard key={item.id} item={item} onAction={handleAction} />)
         )}
 
@@ -1121,7 +1227,7 @@ export default function NewsBacheca({
           !hasTeam
             ? <NoTeamPrompt onScrollToStandings={onScrollToStandings} />
             : playerNews.length === 0
-              ? <EmptyState icon="★" text="Analizza almeno 2 partite per visualizzare i trend dei giocatori." />
+              ? <EmptyState icon="Award" text="Analizza almeno 2 partite per visualizzare i trend dei giocatori." />
               : playerNews.map(item => <AutoNewsCard key={item.id} item={item} onAction={handleAction} />)
         )}
 
@@ -1133,8 +1239,8 @@ export default function NewsBacheca({
                 Nessun post nella bacheca.
               </div>
             )}
-            {sortedPosts.map(post => (
-              <PostCard key={post.id} post={post} canEdit={false} onDelete={null} />
+            {sortedPosts.map((post, idx) => (
+              <PostCard key={post.id || post.metaKey || `${post.title || post.text || 'post'}_${idx}`} post={post} canEdit={false} onDelete={null} />
             ))}
           </>
         )}
@@ -1143,12 +1249,12 @@ export default function NewsBacheca({
         {activeTab === 'offerte' && (
           <>
             {sortedOffers.length === 0 && (
-              <EmptyState icon="🏷️" text="Nessuna offerta disponibile al momento." />
+              <EmptyState icon="Tag" text="Nessuna offerta disponibile al momento." />
             )}
             {sortedOffers.length > 0 && (
               <div className="space-y-3">
-                {sortedOffers.map(offer => (
-                  <OfferCard key={offer.id} offer={offer} canEdit={false} onDelete={null} />
+                {sortedOffers.map((offer, idx) => (
+                  <OfferCard key={offer.id || `${offer.title || offer.name || 'offer'}_${idx}`} offer={offer} canEdit={false} onDelete={null} />
                 ))}
               </div>
             )}
