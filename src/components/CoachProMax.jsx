@@ -277,6 +277,8 @@ function ProfiloPartita({ cpx }) {
   const current = analyses[selected];
   const a = current?.analysis;
   const insights = useMemo(() => buildProfiloInsights(a, current), [a, current]);
+  const rankingScale = cpx?.rankingScale;
+  const hasRankingScale = !!rankingScale;
 
   return (
     <div className="space-y-4">
@@ -293,12 +295,16 @@ function ProfiloPartita({ cpx }) {
             {a.oppRanking && (
               <p className="text-xs text-gray-500 mb-3">
                 {a.oppName} — Posizione classifica: <span className="text-amber-400 font-semibold">{a.oppRanking.position}°</span> / {a.oppRanking.total}
+                {hasRankingScale && a.oppAnalysis?.attack?.rankScalePos != null && (
+                  <span className="ml-2 text-gray-600">· posizione scala: {scaleTag(a.oppAnalysis.attack.rankScalePos)}</span>
+                )}
               </p>
             )}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {FUND_ORDER.map(fund => {
                 const oa = a.oppAnalysis?.[fund];
                 if (!oa) return null;
+                const hasEstimate = oa.estimated !== null && oa.estimated !== undefined;
                 return (
                   <div key={fund} className={S.cardInner}>
                     <div className="flex items-center justify-between mb-2">
@@ -308,7 +314,15 @@ function ProfiloPartita({ cpx }) {
                     <div className="space-y-1">
                       <Row label="Avversario MP" value={fmt(oa.mediaPond, 3)} />
                       <Row label="Media Camp." value={fmt(oa.avgMediaPond, 3)} />
-                      <Row label="Delta" value={deltaTag(oa.delta)} raw />
+                      {hasEstimate && (
+                        <Row label="Valore Stimato" value={
+                          <span className="text-amber-300/90 font-mono text-sm">{fmt(oa.estimated, 3)}</span>
+                        } raw />
+                      )}
+                      <Row label="Delta vs Media" value={deltaTag(oa.delta)} raw />
+                      {hasEstimate && oa.deltaVsEstimated !== null && (
+                        <Row label="Delta vs Stima" value={deltaTag(oa.deltaVsEstimated)} raw />
+                      )}
                       <Row label="Scala (-5/+5)" value={scaleTag(oa.scalePosition)} raw />
                     </div>
                   </div>
@@ -316,6 +330,11 @@ function ProfiloPartita({ cpx }) {
               })}
             </div>
           </div>
+
+          {/* Scala Ranking per fondamentale */}
+          {hasRankingScale && a.oppRanking && (
+            <RankingScaleChart analysis={a} rankingScale={rankingScale} />
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className={S.card}>
@@ -335,23 +354,110 @@ function ProfiloPartita({ cpx }) {
             </div>
           </div>
 
-          <OverUnderChart analysis={a} />
+          <OverUnderChart analysis={a} rankingScale={rankingScale} />
         </>
       )}
     </div>
   );
 }
 
-function OverUnderChart({ analysis }) {
+// Visualizzazione scala ranking per ogni fondamentale:
+// mostra VMUC → VMMC → VMPC come sfondo e piazza il valore reale e stimato
+function RankingScaleChart({ analysis, rankingScale }) {
+  if (!rankingScale || !analysis?.oppAnalysis) return null;
+
+  return (
+    <div className={S.card}>
+      <h3 className={S.header}>Profilo Avversario sulla Scala di Classifica</h3>
+      <p className="text-xs text-gray-500 mb-4">
+        Confronto tra il valore reale nella partita, il valore stimato (basato sul ranking) e i benchmark di campionato (VMUC → VMMC → VMPC).
+      </p>
+      <div className="space-y-4">
+        {FUND_ORDER.map(fund => {
+          const sc = rankingScale[fund];
+          const oa = analysis.oppAnalysis[fund];
+          if (!sc || !oa) return null;
+
+          const { vmuc, vmmc, vmpc } = sc;
+          const actual = oa.mediaPond;
+          const estimated = oa.estimated;
+
+          // Calcola posizioni percentuali su scala vmuc→vmpc
+          const range = vmpc - vmuc;
+          const toPercent = v => range > 0 ? Math.min(100, Math.max(0, ((v - vmuc) / range) * 100)) : 50;
+
+          const pActual    = toPercent(actual);
+          const pEstimated = estimated != null ? toPercent(estimated) : null;
+          const pVmmc      = toPercent(vmmc);
+
+          return (
+            <div key={fund}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold" style={{ color: FUND_COLORS[fund] }}>{FUND_LABELS[fund]}</span>
+                <div className="flex items-center gap-3 text-[10px] text-gray-500">
+                  <span>VMUC <span className="text-red-400 font-mono">{vmuc.toFixed(3)}</span></span>
+                  <span>VMMC <span className="text-gray-300 font-mono">{vmmc.toFixed(3)}</span></span>
+                  <span>VMPC <span className="text-emerald-400 font-mono">{vmpc.toFixed(3)}</span></span>
+                </div>
+              </div>
+              {/* Barra scala */}
+              <div className="relative h-6 rounded-full overflow-visible" style={{ background: 'linear-gradient(to right, #7f1d1d, #374151, #064e3b)' }}>
+                {/* Linea VMMC */}
+                <div className="absolute top-0 bottom-0 w-px bg-gray-400/60" style={{ left: `${pVmmc}%` }} />
+                {/* Marker valore stimato */}
+                {pEstimated != null && (
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 border-amber-300 bg-amber-300/30"
+                    style={{ left: `calc(${pEstimated}% - 6px)` }}
+                    title={`Stimato: ${estimated.toFixed(3)}`}
+                  />
+                )}
+                {/* Marker valore reale */}
+                <div
+                  className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-white bg-white/20 z-10"
+                  style={{ left: `calc(${pActual}% - 8px)` }}
+                  title={`Reale: ${actual.toFixed(3)}`}
+                />
+              </div>
+              {/* Legenda */}
+              <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-3 rounded-full border-2 border-white bg-white/20 inline-block" />
+                  Reale ({actual.toFixed(3)})
+                </span>
+                {pEstimated != null && (
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded-full border-2 border-amber-300 bg-amber-300/30 inline-block" />
+                    Stimato ({estimated.toFixed(3)})
+                    {oa.deltaVsEstimated != null && (
+                      <span className={oa.deltaVsEstimated > 0 ? 'text-emerald-400' : oa.deltaVsEstimated < 0 ? 'text-red-400' : 'text-gray-500'}>
+                        {oa.deltaVsEstimated > 0 ? ' ▲' : oa.deltaVsEstimated < 0 ? ' ▼' : ' ='}
+                        {Math.abs(oa.deltaVsEstimated).toFixed(3)}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OverUnderChart({ analysis, rankingScale }) {
   if (!analysis?.oppAnalysis) return null;
   const data = FUND_ORDER.map(f => ({
     fund: FUND_LABELS[f],
     avversario: analysis.oppAnalysis[f]?.mediaPond || 0,
     media: analysis.oppAnalysis[f]?.avgMediaPond || 0,
+    stimato: analysis.oppAnalysis[f]?.estimated ?? undefined,
   }));
+  const hasEstimated = data.some(d => d.stimato !== undefined);
   return (
     <div className={S.card}>
-      <h3 className={S.header}>Avversario vs Media Campionato</h3>
+      <h3 className={S.header}>Avversario vs Media Campionato{hasEstimated ? ' vs Stimato' : ''}</h3>
       <ResponsiveContainer width="100%" height={260}>
         <BarChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -359,8 +465,9 @@ function OverUnderChart({ analysis }) {
           <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} domain={[0, 5]} />
           <Tooltip contentStyle={{ background: '#111827', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }} />
           <Legend wrapperStyle={{ fontSize: 11 }} />
-          <Bar dataKey="avversario" name="Avversario" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-          <Bar dataKey="media" name="Media Camp." fill="#6b7280" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="avversario" name="Avversario (reale)" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="media" name="Media Camp. (VMMC)" fill="#6b7280" radius={[4, 4, 0, 0]} />
+          {hasEstimated && <Bar dataKey="stimato" name="Valore Stimato (rank)" fill="#d97706" radius={[4, 4, 0, 0]} opacity={0.55} />}
         </BarChart>
       </ResponsiveContainer>
     </div>

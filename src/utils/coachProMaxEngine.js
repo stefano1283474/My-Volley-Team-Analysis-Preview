@@ -157,7 +157,8 @@ export function positionOnScale(value, scale) {
 
 // ─── 3. Over/Under Performance ───────────────────────────────────────────
 // Confronta la performance in una specifica partita con il profilo medio
-export function analyzeOverUnderPerformance(match, avgOppProfile, scales, standings) {
+// e (se disponibile) con il valore stimato basato sulla classifica
+export function analyzeOverUnderPerformance(match, avgOppProfile, scales, standings, rankingScale) {
   const opp = match?.riepilogo?.opponent;
   const team = match?.riepilogo?.team;
   if (!opp || !team) return null;
@@ -167,6 +168,11 @@ export function analyzeOverUnderPerformance(match, avgOppProfile, scales, standi
   // Posizione in classifica dell'avversario (se disponibile)
   const oppRanking = findTeamRanking(oppName, standings);
 
+  // Stima per fondamentale basata sul rank
+  const estimatedByRank = (oppRanking && rankingScale)
+    ? estimateFundamentalByRank(oppRanking.position, oppRanking.total, rankingScale)
+    : null;
+
   const oppAnalysis = {};
   const teamAnalysis = {};
 
@@ -175,6 +181,10 @@ export function analyzeOverUnderPerformance(match, avgOppProfile, scales, standi
     const oppMP = mediaPonderata(opp[fund]);
     const avgMP = avgOppProfile?.profile?.[fund]?.mediaPond || 0;
     const scale = scales?.[fund];
+
+    const estimated    = estimatedByRank?.[fund]?.estimated ?? null;
+    const rankScalePos = estimatedByRank?.[fund]?.scalePos  ?? null;
+
     oppAnalysis[fund] = {
       mediaPond: oppMP,
       avgMediaPond: avgMP,
@@ -182,6 +192,11 @@ export function analyzeOverUnderPerformance(match, avgOppProfile, scales, standi
       scalePosition: positionOnScale(oppMP, scale),
       avgScalePosition: positionOnScale(avgMP, scale),
       isOverPerforming: oppMP > avgMP,
+      // Stima basata su classifica
+      estimated,
+      rankScalePos,
+      deltaVsEstimated: estimated !== null ? +(oppMP - estimated).toFixed(3) : null,
+      isOverVsEstimated: estimated !== null ? oppMP > estimated : null,
     };
 
     // Team: confronto con propria media
@@ -590,10 +605,10 @@ export function compareRoles(matches, roster) {
 
 // ─── 7. Profilo Partita Completo (per Coach ProMax) ──────────────────────
 // Analisi approfondita di una singola partita
-export function analyzeMatch(match, avgOppProfile, scales, standings) {
+export function analyzeMatch(match, avgOppProfile, scales, standings, rankingScale) {
   if (!match?.riepilogo) return null;
 
-  const overUnder = analyzeOverUnderPerformance(match, avgOppProfile, scales, standings);
+  const overUnder = analyzeOverUnderPerformance(match, avgOppProfile, scales, standings, rankingScale);
 
   // Capacità di generare attacco da R/D (esclusi eval 1-2)
   const team = match.riepilogo.team || {};
@@ -702,6 +717,93 @@ export function applyCapFilter(playerStats, minActions = 5, maxActions = Infinit
   });
 }
 
+// ─── 11. Scala basata su Ranking Classifica ──────────────────────────────
+// Calcola VMPC (valore media primo classificato), VMUC (ultimo) e VMMC (medio)
+// partendo dai profili avversari già computati e dalla classifica.
+// Step: 5 step da VMMC→VMPC e 5 step da VMMC→VMUC.
+export function buildRankingScale(oppProfiles, standings) {
+  const FUNDS = ['attack', 'serve', 'reception', 'defense'];
+
+  if (!standings || standings.length < 2 || !oppProfiles || !oppProfiles.length) {
+    return { rankingScale: null, rankedOppProfiles: [] };
+  }
+
+  // Join profili avversari con classifica
+  const rankedProfiles = oppProfiles
+    .map(op => {
+      const standing = standings.find(s =>
+        areTeamNamesLikelySame(String(s.name || ''), String(op.name || ''))
+      );
+      return { ...op, rank: standing?.rank || null, totalTeams: standings.length };
+    })
+    .filter(op => op.rank !== null);
+
+  if (rankedProfiles.length < 2) {
+    return { rankingScale: null, rankedOppProfiles: rankedProfiles };
+  }
+
+  rankedProfiles.sort((a, b) => a.rank - b.rank);
+
+  const bestRanked  = rankedProfiles[0];                           // miglior rank affrontato
+  const worstRanked = rankedProfiles[rankedProfiles.length - 1];   // peggior rank affrontato
+
+  const rankingScale = {};
+  for (const fund of FUNDS) {
+    const vmpc = +(bestRanked.profile[fund]?.mediaPond || 0);
+    const vmuc = +(worstRanked.profile[fund]?.mediaPond || 0);
+
+    // VMMC: media ponderata per numero partite su tutti gli avversari affrontati
+    let totalMatches = 0;
+    let sumMP = 0;
+    for (const op of rankedProfiles) {
+      const mc = op.matchCount || 1;
+      sumMP += (op.profile[fund]?.mediaPond || 0) * mc;
+      totalMatches += mc;
+    }
+    const vmmc = totalMatches ? +(sumMP / totalMatches).toFixed(3) : 0;
+
+    const stepUp   = vmpc > vmmc ? +((vmpc - vmmc) / 5).toFixed(4) : 0;
+    const stepDown = vmmc > vmuc ? +((vmmc - vmuc) / 5).toFixed(4) : 0;
+
+    rankingScale[fund] = {
+      vmpc,                                   // team migliore (tra affrontati)
+      vmuc,                                   // team peggiore (tra affrontati)
+      vmmc,                                   // team medio
+      stepUp,                                 // valore 1 step verso l'alto
+      stepDown,                               // valore 1 step verso il basso
+      bestRankAmongPlayed:  bestRanked.rank,
+      worstRankAmongPlayed: worstRanked.rank,
+    };
+  }
+
+  return { rankingScale, rankedOppProfiles: rankedProfiles };
+}
+
+// Stima il valore per fondamentale di un avversario dato il suo rank
+// rank=1 → scalePos=+5 (VMPC); rank=N → scalePos=-5 (VMUC)
+export function estimateFundamentalByRank(rank, totalTeams, rankingScale) {
+  if (!rank || !totalTeams || !rankingScale) return null;
+
+  const scalePos = totalTeams > 1
+    ? +(5 - (rank - 1) * 10 / (totalTeams - 1)).toFixed(2)
+    : 0;
+
+  const result = {};
+  for (const fund of ['attack', 'serve', 'reception', 'defense']) {
+    const sc = rankingScale[fund];
+    if (!sc) { result[fund] = { estimated: 0, scalePos }; continue; }
+
+    let estimated;
+    if (scalePos >= 0) {
+      estimated = +(sc.vmmc + (scalePos / 5) * (sc.vmpc - sc.vmmc)).toFixed(3);
+    } else {
+      estimated = +(sc.vmmc + (scalePos / 5) * (sc.vmmc - sc.vmuc)).toFixed(3);
+    }
+    result[fund] = { estimated, scalePos };
+  }
+  return result;
+}
+
 // ─── Helper: trova ranking squadra nella classifica ──────────────────────
 function findTeamRanking(teamName, standings) {
   if (!standings || !Array.isArray(standings) || !teamName) return null;
@@ -721,6 +823,7 @@ export function computeCoachProMax(matches, roster, standings) {
 
   const avgOpp = buildAverageOpponentProfile(matches);
   const { scales, oppProfiles } = buildFundamentalScale(matches);
+  const { rankingScale, rankedOppProfiles } = buildRankingScale(oppProfiles, standings);
   const teamAvg = buildTeamAverageProfile(matches);
   const transf = computeTransformationCoefficients(matches, scales, roster);
   const setterAttrib = attributeSetterToAttacks(matches, roster);
@@ -732,7 +835,7 @@ export function computeCoachProMax(matches, roster, standings) {
     opponent: m?.metadata?.opponent || '',
     date: m?.metadata?.date || '',
     result: m?.metadata?.result || '',
-    analysis: analyzeMatch(m, avgOpp, scales, standings),
+    analysis: analyzeMatch(m, avgOpp, scales, standings, rankingScale),
     returnPrediction: predictReturnMatch(m, avgOpp, teamAvg, scales),
   }));
 
@@ -741,6 +844,8 @@ export function computeCoachProMax(matches, roster, standings) {
     teamAverageProfile: teamAvg,
     scales,
     oppProfiles,
+    rankingScale,
+    rankedOppProfiles,
     transformationCoefficients: transf,
     setterAttribution: setterAttrib,
     roleComparisons: roles,
