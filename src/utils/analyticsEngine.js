@@ -6,6 +6,14 @@
 import { INVERSE_MAP, DEFAULT_WEIGHTS, RESULT_FACTORS, TEAM_MAP, ROLE_CORE_FUNDAMENTALS, DEFAULT_FNC_CONFIG } from './constants';
 import { areTeamNamesLikelySame, normalizeTeamNameForMatch } from './teamNameMatcher';
 
+// ─── Helper globale: restituisce soprannome > name per un player ─────────────
+function pDisplay(player) {
+  if (!player) return '—';
+  const nick = String(player.nickname || player.nick || '').trim();
+  if (nick) return nick;
+  return String(player.name || `#${player.number}` || '').trim();
+}
+
 // ─── Date normalisation helper (DD/MM/YYYY or YYYY-MM-DD → YYYY-MM-DD) ───────
 function _normDate(d) {
   if (!d) return '';
@@ -480,9 +488,6 @@ export function computePlayerTrends(allMatchPlayerStats) {
 // ─── Generate training suggestions (role-aware) ───────────────────────────
 export function generateTrainingSuggestions(playerTrends, teamStats, roster = []) {
   const suggestions = [];
-
-  // Helper: display name for a player (nickname > name)
-  const pDisplay = (player) => (player.nickname && player.nickname.trim()) ? player.nickname.trim() : (player.name || `#${player.number}`);
 
   // Build a lookup: playerNumber → role code (e.g., 'M1', 'C2', 'L1')
   const playerRoleMap = {};
