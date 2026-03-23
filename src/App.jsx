@@ -7,10 +7,12 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   Activity,
+  Award,
   BarChart3,
   BookOpenText,
   CalendarDays,
   Circle,
+  CircleCheck,
   CircleHelp,
   ClipboardList,
   Crosshair,
@@ -18,8 +20,11 @@ import {
   Database,
   Package,
   Dumbbell,
+  Filter,
   GitBranch,
+  Heart,
   Home,
+  Layers,
   LayoutList,
   Lightbulb,
   LineChart,
@@ -33,11 +38,14 @@ import {
   Shield,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   Tag,
   Target,
+  Trophy,
   TrendingUp,
   Users,
   X,
+  Zap,
 } from 'lucide-react';
 import { parseMatchFile, parseCalendarCSV, computeStandings } from './utils/dataParser';
 import {
@@ -156,11 +164,38 @@ function IconGlyph({ name, className = '' }) {
     CircleHelp,
     BookOpenText,
     SlidersHorizontal,
-    Volleyball: Target,
+    Trophy,
+    Award,
+    Sparkles,
+    Heart,
+    Zap,
+    Layers,
+    Filter,
+    CircleCheck,
+    Volleyball: Target,   // no native Volleyball icon in this version — use Target as glyph
     X,
   };
   const Comp = ICON_COMPONENTS[name] || Circle;
   return <Comp className={className} size={16} strokeWidth={2} aria-hidden="true" />;
+}
+
+// ─── Event type icon + colour map ────────────────────────────────────────────
+const EVENT_TYPE_META = {
+  all:          { icon: 'Layers',    label: 'Tutte',       color: '#94a3b8', bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.25)' },
+  campionato:   { icon: 'Trophy',    label: 'Campionato',  color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.30)'  },
+  coppa:        { icon: 'Award',     label: 'Coppa',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', border: 'rgba(167,139,250,0.30)' },
+  pgs:          { icon: 'Sparkles',  label: 'PGS',         color: '#34d399', bg: 'rgba(52,211,153,0.12)',  border: 'rgba(52,211,153,0.30)'  },
+  amichevole:   { icon: 'Heart',     label: 'Amichevole',  color: '#fb7185', bg: 'rgba(251,113,133,0.12)', border: 'rgba(251,113,133,0.30)' },
+  playoff:      { icon: 'Zap',       label: 'Playoff',     color: '#f97316', bg: 'rgba(249,115,22,0.12)',  border: 'rgba(249,115,22,0.30)'  },
+  playout:      { icon: 'Zap',       label: 'Playout',     color: '#f97316', bg: 'rgba(249,115,22,0.12)',  border: 'rgba(249,115,22,0.30)'  },
+  torneo:       { icon: 'Activity',  label: 'Torneo',      color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  border: 'rgba(56,189,248,0.30)'  },
+  default:      { icon: 'CalendarDays', label: 'Altro',    color: '#6b7280', bg: 'rgba(107,114,128,0.12)', border: 'rgba(107,114,128,0.25)' },
+};
+
+function getEventTypeMeta(typeStr) {
+  if (!typeStr || typeStr === 'all') return EVENT_TYPE_META.all;
+  const key = String(typeStr).toLowerCase().trim();
+  return EVENT_TYPE_META[key] || EVENT_TYPE_META.default;
 }
 function clampProfileToAssigned(selectedProfile, assignedProfile) {
   const assigned = PROFILE_ORDER[assignedProfile] !== undefined ? assignedProfile : 'base';
@@ -509,6 +544,8 @@ export default function App() {
   const [newsSeenByCategory, setNewsSeenByCategory] = useState(() => normalizeNewsSeenState({}));
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
+  const [eventFilterMenuOpen, setEventFilterMenuOpen] = useState(false);
+  const eventFilterRef = useRef(null);
   const [isMobilePortrait, setIsMobilePortrait] = useState(() => {
     try {
       return window.matchMedia('(max-width: 768px) and (orientation: portrait)').matches;
@@ -965,7 +1002,7 @@ export default function App() {
     if (!activeSection) return;
     if (activeSection === lastTrackedSectionRef.current) return;
     lastTrackedSectionRef.current = activeSection;
-    recordUserSectionUsage(user.uid, activeSection).catch(() => {});
+    recordUserSectionUsage({ uid: user.uid, email: user.email || '' }, activeSection).catch(() => {});
   }, [user, isAdmin, activeSection]);
 
   const refreshMyProfileRequest = useCallback(async () => {
@@ -1113,9 +1150,11 @@ export default function App() {
 
   useEffect(() => {
     const onDocClick = (event) => {
-      if (!userMenuRef.current) return;
-      if (!userMenuRef.current.contains(event.target)) {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
         setUserMenuOpen(false);
+      }
+      if (eventFilterRef.current && !eventFilterRef.current.contains(event.target)) {
+        setEventFilterMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', onDocClick);
@@ -1907,18 +1946,34 @@ export default function App() {
           {isMobilePortrait && (
             <button
               onClick={() => setIsSidebarOpen(v => !v)}
-              className="w-8 h-8 rounded-lg border border-white/10 bg-white/[0.04] text-gray-200 flex items-center justify-center"
+              className="w-8 h-8 rounded-lg border border-white/10 bg-white/[0.04] text-gray-200 flex items-center justify-center flex-shrink-0"
               title={isSidebarOpen ? 'Chiudi menu' : 'Apri menu'}
             >
               <IconGlyph name={isSidebarOpen ? 'X' : 'Menu'} className="w-4 h-4" />
             </button>
           )}
-          <div className="min-w-0">
-            <h1 className="text-[13px] sm:text-sm font-bold tracking-tight whitespace-nowrap truncate leading-none max-w-[140px] sm:max-w-none" style={{ color: '#f59e0b' }}>{APP_NAME}</h1>
-            <p className="text-[9px] text-gray-500 tracking-widest uppercase whitespace-nowrap truncate max-w-[140px] sm:max-w-none">
-              v{APP_VERSION} · {matches.length} partite · {allPlayers.length} atlete
-            </p>
-          </div>
+          {/* Mobile portrait + sidebar closed → compact MVTA + match count */}
+          {isMobilePortrait && !isSidebarOpen && (
+            <div className="min-w-0">
+              <h1 className="text-[13px] font-bold tracking-tight whitespace-nowrap leading-none" style={{ color: '#f59e0b' }}>
+                MVTA
+              </h1>
+              <p className="text-[9px] text-gray-500 tracking-widest uppercase whitespace-nowrap">
+                {filteredMatches.length}/{matches.length} gare
+              </p>
+            </div>
+          )}
+          {/* Desktop / landscape → full name + version + counts */}
+          {!isMobilePortrait && (
+            <div className="min-w-0">
+              <h1 className="text-[13px] sm:text-sm font-bold tracking-tight whitespace-nowrap truncate leading-none max-w-[180px] sm:max-w-none" style={{ color: '#f59e0b' }}>
+                {APP_NAME}
+              </h1>
+              <p className="text-[9px] text-gray-500 tracking-widest uppercase whitespace-nowrap truncate max-w-[180px] sm:max-w-none">
+                v{APP_VERSION} · {filteredMatches.length}/{matches.length} partite · {allPlayers.length} atlete
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Centre: profile selector + status */}
@@ -1980,8 +2035,102 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right: data mode selector + user menu */}
+        {/* Right: event filter + data mode selector + user menu */}
         <div className="flex items-center gap-2">
+          {/* ── Event type filter pill ── */}
+          {!canUseAdminUi && availableMatchTypes.length > 0 && (
+            <div className="relative" ref={eventFilterRef}>
+              {(() => {
+                const meta = getEventTypeMeta(filterMatchType);
+                return (
+                  <button
+                    onClick={() => setEventFilterMenuOpen(v => !v)}
+                    className="w-8 h-8 rounded-lg border flex items-center justify-center transition-all"
+                    style={{
+                      background: eventFilterMenuOpen ? meta.bg : 'rgba(255,255,255,0.04)',
+                      borderColor: eventFilterMenuOpen ? meta.border : 'rgba(255,255,255,0.1)',
+                      color: eventFilterMenuOpen ? meta.color : (filterMatchType !== 'all' ? meta.color : '#9ca3af'),
+                    }}
+                    title={`Filtra per tipo gara: ${meta.label}`}
+                  >
+                    <IconGlyph name={filterMatchType !== 'all' ? meta.icon : 'Filter'} className="w-4 h-4" />
+                  </button>
+                );
+              })()}
+              {eventFilterMenuOpen && (
+                <div className="absolute right-0 top-10 w-52 rounded-xl border border-white/10 bg-slate-900/97 shadow-2xl backdrop-blur-sm overflow-hidden z-50"
+                  style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}
+                >
+                  <div className="px-3 py-2 border-b border-white/5">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Tipo di gara</p>
+                  </div>
+                  <div className="p-1.5 flex flex-col gap-0.5">
+                    {/* "All" option */}
+                    {(() => {
+                      const meta = EVENT_TYPE_META.all;
+                      const active = filterMatchType === 'all';
+                      return (
+                        <button
+                          key="all"
+                          onClick={() => {
+                            setFilterMatchType('all');
+                            try { localStorage.setItem('vpa_filter_match_type', 'all'); } catch {}
+                            setEventFilterMenuOpen(false);
+                          }}
+                          className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left w-full transition-all"
+                          style={active
+                            ? { background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }
+                            : { color: '#9ca3af', border: '1px solid transparent' }
+                          }
+                        >
+                          <span className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                            style={{ background: active ? meta.bg : 'rgba(255,255,255,0.05)', color: active ? meta.color : '#6b7280' }}>
+                            <IconGlyph name={meta.icon} className="w-3.5 h-3.5" />
+                          </span>
+                          <span className="text-[12px] font-medium">{meta.label}</span>
+                          <span className="ml-auto text-[10px] text-gray-600">{matches.length}</span>
+                          {active && <span style={{ color: meta.color }} className="flex-shrink-0"><IconGlyph name="CircleCheck" className="w-3.5 h-3.5" /></span>}
+                        </button>
+                      );
+                    })()}
+                    {/* Per-type options */}
+                    {availableMatchTypes.map(type => {
+                      const meta = getEventTypeMeta(type);
+                      const active = filterMatchType !== 'all' &&
+                        String(filterMatchType).toLowerCase().trim() === String(type).toLowerCase().trim();
+                      const count = matches.filter(m => {
+                        const t = String(m.metadata?.matchType || '').trim().toLowerCase();
+                        return t === String(type).toLowerCase().trim();
+                      }).length;
+                      return (
+                        <button
+                          key={type}
+                          onClick={() => {
+                            setFilterMatchType(type);
+                            try { localStorage.setItem('vpa_filter_match_type', type); } catch {}
+                            setEventFilterMenuOpen(false);
+                          }}
+                          className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left w-full transition-all"
+                          style={active
+                            ? { background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }
+                            : { color: '#9ca3af', border: '1px solid transparent' }
+                          }
+                        >
+                          <span className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+                            style={{ background: active ? meta.bg : 'rgba(255,255,255,0.05)', color: active ? meta.color : '#6b7280' }}>
+                            <IconGlyph name={meta.icon} className="w-3.5 h-3.5" />
+                          </span>
+                          <span className="text-[12px] font-medium capitalize">{type}</span>
+                          <span className="ml-auto text-[10px] text-gray-600">{count}</span>
+                          {active && <span style={{ color: meta.color }} className="flex-shrink-0"><IconGlyph name="CircleCheck" className="w-3.5 h-3.5" /></span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {!isMatchesView && !canUseAdminUi && (
             <DataModeSelector
               mode={dataMode}
@@ -2106,9 +2255,19 @@ export default function App() {
             : 'flex-shrink-0'} border-r border-white/5 py-3 px-2 flex flex-col gap-0.5 relative overflow-y-auto overflow-x-hidden`}
           style={{ background: isMobilePortrait ? 'rgba(2,6,23,0.97)' : 'rgba(17,24,39,0.5)', width: isMobilePortrait ? undefined : `${sidebarWidth}px`, userSelect: isSidebarResizing ? 'none' : undefined }}
         >
-          {/* Profile badge in sidebar (mobile only) */}
+          {/* App name + version + profile badge in sidebar (mobile portrait only) */}
           {isMobilePortrait && (
-            <div className="mb-3 px-1">
+            <div className="mb-3 px-1 space-y-2">
+              {/* App branding */}
+              <div className="pb-2 border-b border-white/[0.06]">
+                <h2 className="text-[13px] font-bold tracking-tight leading-none mb-0.5" style={{ color: '#f59e0b' }}>
+                  {APP_NAME}
+                </h2>
+                <p className="text-[9px] text-gray-500 tracking-widest uppercase">
+                  v{APP_VERSION} · {filteredMatches.length}/{matches.length} gare
+                </p>
+              </div>
+              {/* Active profile badge */}
               <div
                 className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-center"
                 style={{
@@ -2233,7 +2392,7 @@ export default function App() {
             {activeSection === 'home' && (
               <Dashboard
                 analytics={analytics}
-                matches={matches}
+                matches={filteredMatches}
                 standings={standings}
                 calendar={calendar}
                 weights={weights}

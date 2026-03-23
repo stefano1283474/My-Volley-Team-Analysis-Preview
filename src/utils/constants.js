@@ -6,22 +6,9 @@ import pkg from '../../package.json';
 
 // Team name mapping: sheet name → CSV official name
 export const APP_NAME = 'My Volley Team Analysis';
-export const APP_VERSION = '1.1 Preview';
+export const APP_VERSION = '1.1.1 Preview';
 
-export const TEAM_MAP = {
-  'Cagliero': 'G.S. CAGLIERO',
-  'Lovvey': 'LOVVEY TEAM BLACK',
-  'Astra': 'ASTRA PHOENIX',
-  'Volley_Angels': 'VOLLEY ANGELS CUSANO ASD',
-  'Geas': 'GEAS VOLLEY ASD',
-  'Aspes': 'ASPES VOLLEY CUS STATALE',
-  'Limbiate': 'SMARTSERVICE LIMBIATE VOLLEY',
-  'Numia_VeroVolley': 'VERO VOLLEY NUMIA',
-  'OSL Garbagnate': 'OSL VOLLEY GARBAGNATE',
-  'Bresso': 'CALIMAN BRESSO',
-  'Cormano': 'NAPOCOLOR - VOLLEY CORMANO',
-  'GPB_Bollate': 'GPB BOLLATE VOLLEY',
-};
+export const TEAM_MAP = {};
 
 // Reverse map: CSV name → short key
 export const TEAM_MAP_REVERSE = Object.fromEntries(
@@ -29,7 +16,7 @@ export const TEAM_MAP_REVERSE = Object.fromEntries(
 );
 
 // Our team
-export const OUR_TEAM = 'GEAS VOLLEY ASD';
+export const OUR_TEAM = '';
 
 // Fundamental names
 export const FUNDAMENTALS = {
