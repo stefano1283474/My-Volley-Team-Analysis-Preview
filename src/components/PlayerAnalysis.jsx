@@ -106,7 +106,7 @@ function StoricoTab({ playerTrend, roleCode }) {
         const t = playerTrend.trends[fund];
 
         const chartData = t.matchLabels.map((m, i) => ({
-          match: (m.opponent || '').split(' ').slice(-1)[0] || `G${i + 1}`,
+          match: (() => { const _n = m.opponent || ''; const _rm = _n.match(/^\([AR]\) /); return (_rm ? _rm[0] : '') + (_rm ? _n.slice(_rm[0].length) : _n).split(' ').pop() || `G${i + 1}`; })(),
           raw: Number.isFinite(t.raw[i]) ? +(t.raw[i] * 100).toFixed(1) : null,
           weighted: Number.isFinite(t.weighted[i]) ? +(t.weighted[i] * 100).toFixed(1) : null,
           rolling: t.rollingRaw[i] != null ? +(t.rollingRaw[i] * 100).toFixed(1) : null,

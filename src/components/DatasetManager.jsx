@@ -167,7 +167,7 @@ export default function DatasetManager({
       'DENOMINAZIONE',
     ];
     const sample = [
-      '1', '2026-09-20', '18:00', 'BOLLATE TEAM VOLLEY', 'SQUADRA OSPITE', '0', '0',
+      '1', '2026-09-20', '18:00', 'SQUADRA CASA', 'SQUADRA OSPITE', '0', '0',
       '0', '0', '0', '0', '0', '0', '0', '0', '0', '0',
       'PALESTRA COMUNALE',
     ];

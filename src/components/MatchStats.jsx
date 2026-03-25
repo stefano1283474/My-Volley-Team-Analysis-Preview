@@ -299,7 +299,7 @@ function buildPlayerTableData(matches, fund) {
   return Object.values(playerMap).map(p => {
     const tot = p.tot;
     const efficacy   = tot > 0 ? p.kill / tot : null;                                          // Efficacia = Azioni Vincenti / Totale
-    const efficiency = (fund !== 'block' && tot > 0) ? (p.kill - p.err - p.neg) / tot : null; // Efficienza = (Vincenti - Errori - Muri Subiti) / Totale
+    const efficiency = (fund !== 'block' && tot > 0) ? (p.kill - p.err) / tot : null; // Efficienza = (Vincenti - Errori) / Totale (standard DataVolley)
     const valMedio   = valoreMedio(p.kill, p.pos, p.exc, p.neg, p.err);
     const deltaSquadra = (valMedio!=null && valSquadra!=null) ? valMedio - valSquadra : null;
     return {
@@ -329,21 +329,36 @@ function buildMatchRow(match) {
   const oa = opp.attack||{}, os = opp.serve||{};
   return {
     id: match.id, date: meta.date||'', opponent: meta.opponent||'—',
-    matchType: meta.matchType||'—', homeAway: meta.homeAway||'—', hasData: !!r,
+    matchType: meta.matchType||'—',
+    // Normalizza sede: DataVolley può salvare 'C'/'T' oltre a 'Casa'/'Trasferta'
+    homeAway: (() => {
+      const raw = String(meta.homeAway || '').trim().toUpperCase();
+      if (raw === 'C' || raw === 'CASA' || raw === 'H' || raw === 'HOME') return 'Casa';
+      if (raw === 'T' || raw === 'TRASFERTA' || raw === 'A' || raw === 'AWAY') return 'Trasferta';
+      return meta.homeAway || '—';
+    })(),
+    hasData: !!r,
     score, setDetail, won, setsWon, setsLost,
     att_kill: att.kill, att_err: att.err, att_tot: att.tot,
-    att_killPct: att.tot>0?att.kill/att.tot:null, att_eff: att.efficacy,
+    att_killPct: att.tot>0?att.kill/att.tot:null,
+    // efficacy da riepilogo è scala 0-100 (DataVolley): dividiamo /100 → 0-1 per fEff/effColor
+    att_eff: Number.isFinite(att.efficacy) ? att.efficacy / 100 : null,
     ser_kill: ser.kill, ser_err: ser.err, ser_tot: ser.tot,
-    ser_acePct: ser.tot>0?ser.kill/ser.tot:null, ser_eff: ser.efficacy,
+    ser_acePct: ser.tot>0?ser.kill/ser.tot:null,
+    ser_eff: Number.isFinite(ser.efficacy) ? ser.efficacy / 100 : null,
     rec_tot: rec.tot, rec_err: rec.err,
-    rec_posPct: rec.tot>0?(rec.kill+rec.pos+rec.exc)/rec.tot:null, rec_eff: rec.efficacy,
+    rec_posPct: rec.tot>0?(rec.kill+rec.pos+rec.exc)/rec.tot:null,
+    rec_eff: Number.isFinite(rec.efficacy) ? rec.efficacy / 100 : null,
     blk_kill: blk.kill, blk_err: blk.err,
-    def_tot: def.tot, def_eff: def.efficacy,
+    def_tot: def.tot,
+    def_eff: Number.isFinite(def.efficacy) ? def.efficacy / 100 : null,
     pts_made: r?.totalPointsMade, pts_err: r?.totalErrors,
     opp_att_kill: oa.kill, opp_att_tot: oa.tot,
-    opp_att_killPct: oa.tot>0?oa.kill/oa.tot:null, opp_att_eff: oa.efficacy,
+    opp_att_killPct: oa.tot>0?oa.kill/oa.tot:null,
+    opp_att_eff: Number.isFinite(oa.efficacy) ? oa.efficacy / 100 : null,
     opp_ser_kill: os.kill, opp_ser_tot: os.tot,
-    opp_ser_acePct: os.tot>0?os.kill/os.tot:null, opp_ser_eff: os.efficacy,
+    opp_ser_acePct: os.tot>0?os.kill/os.tot:null,
+    opp_ser_eff: Number.isFinite(os.efficacy) ? os.efficacy / 100 : null,
   };
 }
 
@@ -678,7 +693,7 @@ export default function MatchStats({ matches, analytics, standings }) {
                 <button key={m.id} onClick={() => setPlayerMatchId(m.id)}
                   className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all flex items-center gap-1.5 ${isActive?'bg-amber-500/20 text-amber-300 border-amber-500/40':'text-gray-500 hover:text-gray-300 border-white/10 hover:bg-white/5'}`}>
                   <span className="font-mono">{displayDate(m.metadata?.date)}</span>
-                  <span className="text-gray-600 max-w-[70px] truncate" title={m.metadata?.opponent}>{(m.metadata?.opponent||'').split(' ').pop()}</span>
+                  <span className="text-gray-600 max-w-[70px] truncate" title={m.metadata?.opponent}>{(() => { const n = m.metadata?.opponent || ''; const rm = n.match(/^\([AR]\) /); return (rm ? rm[0] : '') + (rm ? n.slice(rm[0].length) : n).split(' ').pop(); })()}</span>
                   <span className={`text-[10px] font-bold ${sw>sl?'text-emerald-400':'text-red-400'}`}>{sw}-{sl}</span>
                 </button>
               );
@@ -805,7 +820,7 @@ export default function MatchStats({ matches, analytics, standings }) {
                   <button key={m.id} onClick={() => setTableMatchId(m.id)}
                     className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all flex items-center gap-1.5 ${isActive?'bg-amber-500/20 text-amber-300 border-amber-500/40':'text-gray-500 hover:text-gray-300 border-white/10 hover:bg-white/5'}`}>
                     <span className="font-mono">{displayDate(m.metadata?.date)}</span>
-                    <span className="text-gray-600 max-w-[70px] truncate" title={m.metadata?.opponent}>{(m.metadata?.opponent||'').split(' ').pop()}</span>
+                    <span className="text-gray-600 max-w-[70px] truncate" title={m.metadata?.opponent}>{(() => { const n = m.metadata?.opponent || ''; const rm = n.match(/^\([AR]\) /); return (rm ? rm[0] : '') + (rm ? n.slice(rm[0].length) : n).split(' ').pop(); })()}</span>
                     <span className={`text-[10px] font-bold ${sw>sl?'text-emerald-400':'text-red-400'}`}>{sw}-{sl}</span>
                   </button>
                 );

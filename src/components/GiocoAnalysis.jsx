@@ -9,6 +9,7 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend,
   LineChart, Line, CartesianGrid, ReferenceLine, ScatterChart, Scatter,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
+  ComposedChart,
   Cell,
 } from 'recharts';
 
@@ -413,7 +414,7 @@ function SquadraView({ transformData, scale, summary }) {
 // =============================================================================
 // PLAYER VIEW
 // =============================================================================
-function PlayerView({ transformData, scale, scalePositions }) {
+function PlayerView({ transformData, scale, scalePositions, roster = [] }) {
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [inputFilter, setInputFilter]       = useState('all');
   const { sortKey, sortDir, toggle, sort }  = useSortable('overall');
@@ -836,7 +837,8 @@ function AvversarioView({ oppDefContext }) {
             Verde = hanno difeso peggio del benchmark (meglio per noi). Rosso = hanno difeso meglio.
           </p>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={defChartData} margin={{ top: 4, right: 12, bottom: 4, left: -10 }}>
+            {/* ComposedChart è necessario per combinare Bar + Line nello stesso grafico */}
+            <ComposedChart data={defChartData} margin={{ top: 4, right: 12, bottom: 4, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" />
               <XAxis dataKey="opp" tick={{ fill: '#9ca3af', fontSize: 10 }} />
               <YAxis domain={[0, 5]} tick={{ fill: '#9ca3af', fontSize: 10 }} />
@@ -849,8 +851,8 @@ function AvversarioView({ oppDefContext }) {
               <Bar dataKey="D eff." radius={[3,3,0,0]}>
                 {defChartData.map((e, i) => <Cell key={i} fill={e.fill} />)}
               </Bar>
-              <Line dataKey="D attesa" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="5 2" />
-            </BarChart>
+              <Line type="monotone" dataKey="D attesa" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="5 2" connectNulls />
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
       )}
@@ -1006,7 +1008,7 @@ export default function GiocoAnalysis({ matches = [], standings = [], roster = [
       <SubTabBar tabs={SUB_TABS} active={subTab} onChange={setSubTab} />
 
       {subTab === 'squadra'    && <SquadraView    transformData={transformData} scale={scale} summary={summary} />}
-      {subTab === 'player'     && <PlayerView     transformData={transformData} scale={scale} scalePositions={scalePositions} />}
+      {subTab === 'player'     && <PlayerView     transformData={transformData} scale={scale} scalePositions={scalePositions} roster={roster} />}
       {subTab === 'partite'    && <PerPartitaView  transformData={transformData} scale={scale} />}
       {subTab === 'avversario' && <AvversarioView  oppDefContext={oppDefContext} />}
     </div>

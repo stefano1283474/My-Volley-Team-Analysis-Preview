@@ -222,12 +222,13 @@ function FNCPreviewRadar({ analytics, baselines, fncConfig }) {
     return funds.map(f => {
       const rawVals = sortedMA.map(ma => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
       const rawAvg = rawVals.length > 0 ? rawVals.reduce((s, v) => s + v, 0) / rawVals.length : 0;
-      const fncAvg = applyFNCToEfficacy(rawAvg, f, baselines, fncConfig);
+      // rawAvg è in scala 0-100; normalizza a 0-1 per l'FNC (baselines in scala 0-1)
+      const fncAvg = applyFNCToEfficacy(rawAvg / 100, f, baselines, fncConfig);
 
       return {
         fund: fundLabels[f],
-        raw: +(rawAvg * 100).toFixed(1),
-        fnc: +(fncAvg * 100).toFixed(1),
+        raw: +rawAvg.toFixed(1),           // già in % (0-100)
+        fnc: +(fncAvg * 100).toFixed(1),   // 0-1 → 0-100%
       };
     });
   }, [analytics, baselines, fncConfig]);

@@ -204,56 +204,63 @@ function clampProfileToAssigned(selectedProfile, assignedProfile) {
 }
 
 // ─── Navigation structure ─────────────────────────────────────────────────────
+// Razionalizzazione v2 — raggruppamento per obiettivo utente:
+//   Home        → Dashboard + News (colpo d'occhio)
+//   Partite     → Tutto ciò che riguarda la singola partita (MatchReport + MatchStats + Avversario)
+//   Analisi     → Analisi aggregate (squadra, giocatrici, gioco, grafici)
+//   Evidenze    → Insight e pattern (trend, rotazioni, attacco, catene, coach)
+//   Training    → Preparazione (suggerimenti, cockpit, piano settimanale, piano catene)
+//   Impostazioni → Config, dati, guida, glossario
 const SECTIONS = [
-  { id: 'home',        label: 'Home',        icon: 'House',       minProfile: 'base' },
-  { id: 'analisi',     label: 'Analisi',     icon: 'Search',      minProfile: 'base' },
-  { id: 'matchstats',  label: 'Match-stats', icon: 'ClipboardList', minProfile: 'base' },
-  { id: 'evidenze',    label: 'Evidenze',    icon: 'LineChart',   minProfile: 'pro'  },
-  { id: 'training',    label: 'Training',    icon: 'Dumbbell',    minProfile: 'base' },
-  { id: 'sistema',     label: 'Sistema',     icon: 'Settings',    minProfile: 'base' },
-  { id: 'coach_promax',   label: 'Coach ProMax',        icon: 'Crown',        minProfile: 'promax' },
-  { id: 'admin_users',    label: 'Gestione Utenti',    icon: 'ShieldCheck',  minProfile: 'base' },
-  { id: 'admin_requests', label: 'Richieste Upgrade',  icon: 'Mail',         minProfile: 'base' },
-  { id: 'admin_content',  label: 'Bacheca & Offerte',  icon: 'LayoutList',   minProfile: 'base' },
-  { id: 'admin_stats',    label: 'Statistiche Utilizzo', icon: 'BarChart3',  minProfile: 'base' },
-  { id: 'admin_packages', label: 'Gestione Pacchetti',  icon: 'Package',    minProfile: 'base' },
+  { id: 'home',           label: 'Home',          icon: 'House',          minProfile: 'base' },
+  { id: 'partite',        label: 'Partite',       icon: 'ClipboardList',  minProfile: 'base' },
+  { id: 'analisi',        label: 'Analisi',       icon: 'Search',         minProfile: 'base' },
+  { id: 'evidenze',       label: 'Evidenze',      icon: 'LineChart',      minProfile: 'base' },
+  { id: 'training',       label: 'Training',      icon: 'Dumbbell',       minProfile: 'base' },
+  { id: 'impostazioni',   label: 'Impostazioni',  icon: 'Settings',       minProfile: 'base' },
+  { id: 'admin_users',    label: 'Gestione Utenti',     icon: 'ShieldCheck',  minProfile: 'base' },
+  { id: 'admin_requests', label: 'Richieste Upgrade',   icon: 'Mail',         minProfile: 'base' },
+  { id: 'admin_content',  label: 'Bacheca & Offerte',   icon: 'LayoutList',   minProfile: 'base' },
+  { id: 'admin_stats',    label: 'Statistiche Utilizzo', icon: 'BarChart3',   minProfile: 'base' },
+  { id: 'admin_packages', label: 'Gestione Pacchetti',  icon: 'Package',      minProfile: 'base' },
 ];
 const ADMIN_SECTION_IDS = ['admin', 'admin_users', 'admin_requests', 'admin_content', 'admin_stats', 'admin_packages'];
 
 const SECTION_TABS = {
+  // ── Partite: tutto sulla singola partita ──
+  partite: [
+    { id: 'riepilogo',   label: 'Riepilogo',   icon: 'CalendarDays',  minProfile: 'base' },
+    { id: 'statistiche', label: 'Statistiche',  icon: 'ClipboardList', minProfile: 'base' },
+    { id: 'avversario',  label: 'Avversario',   icon: 'Target',        minProfile: 'base' },
+  ],
+  // ── Analisi: aggregate su squadra, giocatrici, gioco ──
   analisi: [
-    { id: 'partite',    label: 'Partite',    icon: 'CalendarDays', minProfile: 'base'   },
-    { id: 'giocatrici', label: 'Giocatrici', icon: 'Users',        minProfile: 'base'   },
-    { id: 'squadra',    label: 'Squadra',    icon: 'Shield',       minProfile: 'pro'    },
-    { id: 'avversari',  label: 'Avversari',  icon: 'Target',       minProfile: 'pro'    },
-    { id: 'gioco',      label: 'Gioco',      icon: 'Activity',     minProfile: 'promax' },
+    { id: 'giocatrici',    label: 'Giocatrici',    icon: 'Users',        minProfile: 'base' },
+    { id: 'squadra',       label: 'Squadra',       icon: 'Shield',       minProfile: 'base' },
+    { id: 'gioco',         label: 'Gioco',         icon: 'Activity',     minProfile: 'base' },
+    { id: 'grafici',       label: 'Grafici',       icon: 'BarChart3',    minProfile: 'base' },
   ],
+  // ── Evidenze: insight, trend, pattern, coach ──
   evidenze: [
-    { id: 'suggerimenti', label: 'Suggerimenti', icon: 'Lightbulb', minProfile: 'pro'    },
-    { id: 'trend',        label: 'Trend',        icon: 'TrendingUp', minProfile: 'pro'    },
-    { id: 'rotazioni',    label: 'Rotazioni',    icon: 'RefreshCw',  minProfile: 'pro'    },
-    { id: 'attacco',      label: 'Attacco',      icon: 'Crosshair',  minProfile: 'pro'    },
-    { id: 'catene',       label: 'Catene',       icon: 'GitBranch',  minProfile: 'promax' },
+    { id: 'trend',         label: 'Trend',          icon: 'TrendingUp',  minProfile: 'base' },
+    { id: 'rotazioni',     label: 'Rotazioni',      icon: 'RefreshCw',   minProfile: 'base' },
+    { id: 'attacco',       label: 'Attacco',        icon: 'Crosshair',   minProfile: 'base' },
+    { id: 'catene',        label: 'Catene',         icon: 'GitBranch',   minProfile: 'base' },
+    { id: 'coach',         label: 'Coach',          icon: 'Crown',       minProfile: 'base' },
   ],
+  // ── Training: preparazione unica e senza duplicati ──
   training: [
-    { id: 'suggerimenti', label: 'Suggerimenti', icon: 'Lightbulb',   minProfile: 'base'   },
-    { id: 'settimana',    label: 'Settimana',    icon: 'CalendarDays', minProfile: 'pro'    },
-    { id: 'piano',        label: 'Piano',        icon: 'Link2',        minProfile: 'promax' },
+    { id: 'suggerimenti',  label: 'Suggerimenti',   icon: 'Lightbulb',    minProfile: 'base' },
+    { id: 'cockpit',       label: 'Cockpit',        icon: 'CalendarDays', minProfile: 'base' },
+    { id: 'piano_catene',  label: 'Piano Catene',   icon: 'Link2',        minProfile: 'base' },
   ],
-  coach_promax: [
-    { id: 'profilo',       label: 'Profilo Partita',   icon: 'Target',      minProfile: 'promax' },
-    { id: 'coefficienti',  label: 'Coefficienti',      icon: 'TrendingUp',  minProfile: 'promax' },
-    { id: 'palleggiatore', label: 'Palleggiatore',     icon: 'Crosshair',   minProfile: 'promax' },
-    { id: 'ruoli',         label: 'Ruoli',             icon: 'Users',       minProfile: 'promax' },
-    { id: 'ritorno',       label: 'Prep. Ritorno',     icon: 'RefreshCw',   minProfile: 'promax' },
-  ],
-  sistema: [
-    { id: 'tipologia', label: 'Tipologia Gare', icon: 'Tag',          minProfile: 'base'   },
-    { id: 'dati',      label: 'Dati',           icon: 'Database',     minProfile: 'base'   },
-    { id: 'guida',     label: 'Guida',          icon: 'CircleHelp',   minProfile: 'base'   },
-    { id: 'glossario', label: 'Glossario',      icon: 'BookOpenText', minProfile: 'base'   },
-    { id: 'config',    label: 'Config',         icon: 'SlidersHorizontal', minProfile: 'pro'    },
-    { id: 'grafici',   label: 'Grafici',        icon: 'BarChart3',    minProfile: 'promax' },
+  // ── Impostazioni: configurazione, dati, help ──
+  impostazioni: [
+    { id: 'dati',       label: 'Dati',            icon: 'Database',          minProfile: 'base' },
+    { id: 'tipologia',  label: 'Tipologia Gare',  icon: 'Tag',              minProfile: 'base' },
+    { id: 'config',     label: 'Configurazione',  icon: 'SlidersHorizontal', minProfile: 'base' },
+    { id: 'guida',      label: 'Guida',           icon: 'CircleHelp',       minProfile: 'base' },
+    { id: 'glossario',  label: 'Glossario',       icon: 'BookOpenText',     minProfile: 'base' },
   ],
 };
 
@@ -1381,7 +1388,7 @@ export default function App() {
     if (!opponentName) return;
     setSelectedMatch(null);
     setMatchReportIntent({ opponent: opponentName, openCommentTick: Date.now() });
-    navigateTo('analisi', 'partite');
+    navigateTo('partite', 'riepilogo');
   }, [navigateTo]);
 
   const handleOpenOpponentReportFromDashboard = useCallback((opponentName) => {
@@ -1398,7 +1405,7 @@ export default function App() {
       }) || opponentName;
     setSelectedMatch(null);
     setMatchReportIntent({ opponent: matchOpponentName, openCommentTick: 0 });
-    navigateTo('analisi', 'partite');
+    navigateTo('partite', 'riepilogo');
   }, [matches, navigateTo]);
 
   useEffect(() => {
@@ -1505,8 +1512,8 @@ export default function App() {
         if (loadedOffers) setTeamOffers(loadedOffers);
 
         if (loadedMatches.length === 0) {
-          setActiveSection('sistema');
-          setActiveSubTabs(prev => ({ ...prev, sistema: 'dati' }));
+          setActiveSection('impostazioni');
+          setActiveSubTabs(prev => ({ ...prev, impostazioni: 'dati' }));
         }
         setLoadingMsg(
           loadedMatches.length > 0
@@ -1722,8 +1729,8 @@ export default function App() {
       setStandings([]);
       setSelectedMatch(null);
       setLoadingMsg('Archivio ripulito: partite e calendario eliminati');
-      setActiveSection('sistema');
-      setActiveSubTabs(prev => ({ ...prev, sistema: 'dati' }));
+      setActiveSection('impostazioni');
+      setActiveSubTabs(prev => ({ ...prev, impostazioni: 'dati' }));
       setTimeout(() => setLoadingMsg(''), 3500);
     } catch (err) {
       console.error('[App] clearArchive error:', err);
@@ -1893,7 +1900,7 @@ export default function App() {
     return profileAllows(effectiveMin);
   });
   const curSubTab  = activeSubTabs[activeSection] || curSubTabs[0]?.id || '';
-  const isMatchesView = activeSection === 'analisi' && curSubTab === 'partite';
+  const isMatchesView = activeSection === 'partite' && curSubTab === 'riepilogo';
 
   // ─── Main App ─────────────────────────────────────────────────────────────
   return (
@@ -2131,7 +2138,7 @@ export default function App() {
               )}
             </div>
           )}
-          {!isMatchesView && !canUseAdminUi && (
+          {!isMatchesView && !canUseAdminUi && activeSection !== 'home' && activeSection !== 'impostazioni' && (
             <DataModeSelector
               mode={dataMode}
               onChange={setDataMode}
@@ -2388,7 +2395,9 @@ export default function App() {
           <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
           <PinProvider dashboardConfig={dashboardConfig} onConfigChange={handleDashboardConfigChange}>
 
-            {/* HOME */}
+            {/* ═══════════════════════════════════════════════════════════
+                ① HOME — Dashboard + News
+            ═══════════════════════════════════════════════════════════ */}
             {activeSection === 'home' && (
               <Dashboard
                 analytics={analytics}
@@ -2399,11 +2408,11 @@ export default function App() {
                 dataMode={dataMode}
                 fncConfig={fncConfig}
                 baselines={baselines}
-                onSelectMatch={(m) => { setSelectedMatch(m); navigateTo('analisi', 'partite'); }}
+                onSelectMatch={(m) => { setSelectedMatch(m); navigateTo('partite', 'riepilogo'); }}
                 onSelectPlayer={(p) => { setSelectedPlayer(p); navigateTo('analisi', 'giocatrici'); }}
                 dashboardConfig={dashboardConfig}
                 onConfigChange={handleDashboardConfigChange}
-                onOpenGrafici={() => navigateTo('sistema', 'grafici')}
+                onOpenGrafici={() => navigateTo('analisi', 'grafici')}
                 ownerTeamName={ownerTeamName}
                 onOwnerTeamChange={handleOwnerTeamChange}
                 ownerTeamId={ownerTeamId}
@@ -2418,17 +2427,14 @@ export default function App() {
                 onOffersChange={null}
                 newsUnreadByTab={unreadNewsByCategory}
                 onNewsTabViewed={markNewsCategoryAsRead}
-                onOpenDataImport={() => navigateTo('sistema', 'dati')}
+                onOpenDataImport={() => navigateTo('impostazioni', 'dati')}
               />
             )}
 
-            {/* MATCH-STATS */}
-            {activeSection === 'matchstats' && (
-              <MatchStats matches={filteredMatches} analytics={analytics} standings={standings} />
-            )}
-
-            {/* ANALISI */}
-            {activeSection === 'analisi' && curSubTab === 'partite' && (
+            {/* ═══════════════════════════════════════════════════════════
+                ② PARTITE — Tutto sulla singola partita
+            ═══════════════════════════════════════════════════════════ */}
+            {activeSection === 'partite' && curSubTab === 'riepilogo' && (
               <MatchReport
                 analytics={analytics}
                 matches={filteredMatches}
@@ -2442,6 +2448,28 @@ export default function App() {
               />
             )}
 
+            {activeSection === 'partite' && curSubTab === 'statistiche' && (
+              <MatchStats matches={filteredMatches} analytics={analytics} standings={standings} />
+            )}
+
+            {activeSection === 'partite' && curSubTab === 'avversario' && (
+              <MatchReport
+                analytics={analytics}
+                matches={filteredMatches}
+                standings={standings}
+                dataMode={dataMode}
+                selectedMatch={selectedMatch}
+                onSelectMatch={setSelectedMatch}
+                weights={weights}
+                externalScoutOpponent={matchReportIntent.opponent}
+                externalOpenCommentTick={matchReportIntent.openCommentTick}
+                focusOpponent={true}
+              />
+            )}
+
+            {/* ═══════════════════════════════════════════════════════════
+                ③ ANALISI — Aggregate su squadra, giocatrici, gioco
+            ═══════════════════════════════════════════════════════════ */}
             {activeSection === 'analisi' && curSubTab === 'giocatrici' && (
               <PlayerCard
                 analytics={analytics}
@@ -2459,17 +2487,6 @@ export default function App() {
               <TeamAnalysis matches={filteredMatches} />
             )}
 
-            {activeSection === 'analisi' && curSubTab === 'avversari' && (
-              <div className="flex flex-col items-center justify-center h-64 gap-3 text-center select-none">
-                <p className="opacity-20 text-gray-500"><IconGlyph name="Target" className="w-10 h-10" /></p>
-                <p className="text-sm font-medium text-gray-400">Analisi Avversari</p>
-                <p className="text-xs text-gray-600 max-w-xs">
-                  Scout dedotto per ogni avversario, benchmark campionato e analisi storica.
-                  In arrivo nella prossima release.
-                </p>
-              </div>
-            )}
-
             {activeSection === 'analisi' && curSubTab === 'gioco' && (() => {
               const roster = (() => {
                 const seen = {};
@@ -2485,31 +2502,21 @@ export default function App() {
               );
             })()}
 
-            {/* EVIDENZE */}
-            {activeSection === 'evidenze' && curSubTab === 'suggerimenti' && (
-              <TrainingSuggestions
+            {activeSection === 'analisi' && curSubTab === 'grafici' && (
+              <ChartsExplorer
                 analytics={analytics}
-                matches={filteredMatches}
+                matches={matches}
+                standings={standings}
                 dataMode={dataMode}
-                readOnly={!canEditDataset}
-                datasetOwnerUid={dataOwnerId}
-                capFilterEnabled={capFilterEnabled}
-                onToggleCapFilter={() => setCapFilterEnabled(v => !v)}
-                capMinPriority={capMinPriority}
-                capMaxPriority={capMaxPriority}
-                onCapMinChange={(v) => {
-                  const next = Math.min(5, Math.max(1, Math.round(Number(v) || 1)));
-                  setCapMinPriority(next);
-                  if (next > capMaxPriority) setCapMaxPriority(next);
-                }}
-                onCapMaxChange={(v) => {
-                  const next = Math.min(5, Math.max(1, Math.round(Number(v) || 5)));
-                  setCapMaxPriority(next);
-                  if (next < capMinPriority) setCapMinPriority(next);
-                }}
+                dashboardConfig={dashboardConfig}
+                onConfigChange={handleDashboardConfigChange}
+                onSelectPlayer={(p) => { setSelectedPlayer(p); navigateTo('analisi', 'giocatrici'); }}
               />
             )}
 
+            {/* ═══════════════════════════════════════════════════════════
+                ④ EVIDENZE — Insight, trend, pattern, coach
+            ═══════════════════════════════════════════════════════════ */}
             {activeSection === 'evidenze' && curSubTab === 'trend' && (
               <TeamTrends
                 analytics={analytics}
@@ -2560,7 +2567,18 @@ export default function App() {
               />
             )}
 
-            {/* TRAINING */}
+            {activeSection === 'evidenze' && curSubTab === 'coach' && (
+              <CoachProMax
+                matches={filteredMatches}
+                standings={standings}
+                analytics={analytics}
+                activeSubTab={curSubTab}
+              />
+            )}
+
+            {/* ═══════════════════════════════════════════════════════════
+                ⑤ TRAINING — Preparazione (unica istanza Suggerimenti)
+            ═══════════════════════════════════════════════════════════ */}
             {activeSection === 'training' && curSubTab === 'suggerimenti' && (
               <TrainingSuggestions
                 analytics={analytics}
@@ -2585,7 +2603,7 @@ export default function App() {
               />
             )}
 
-            {activeSection === 'training' && curSubTab === 'settimana' && (
+            {activeSection === 'training' && curSubTab === 'cockpit' && (
               <TrainPage
                 analytics={analytics}
                 matches={filteredMatches}
@@ -2599,7 +2617,7 @@ export default function App() {
               />
             )}
 
-            {activeSection === 'training' && curSubTab === 'piano' && (
+            {activeSection === 'training' && curSubTab === 'piano_catene' && (
               <ChainTrainingPlan
                 analytics={analytics}
                 matches={filteredMatches}
@@ -2613,8 +2631,10 @@ export default function App() {
               />
             )}
 
-            {/* SISTEMA — Tipologia Gare */}
-            {activeSection === 'sistema' && curSubTab === 'tipologia' && (
+            {/* ═══════════════════════════════════════════════════════════
+                ⑥ IMPOSTAZIONI — Config, dati, help
+            ═══════════════════════════════════════════════════════════ */}
+            {activeSection === 'impostazioni' && curSubTab === 'tipologia' && (
               <div className="max-w-2xl mx-auto space-y-6">
                 <div>
                   <h2 className="text-base font-semibold text-white mb-1">Tipologia Gare</h2>
@@ -2707,7 +2727,7 @@ export default function App() {
             )}
 
             {/* SISTEMA — Dati */}
-            {activeSection === 'sistema' && curSubTab === 'dati' && (
+            {activeSection === 'impostazioni' && curSubTab === 'dati' && (
               <div className="space-y-8">
                 <div className="rounded-xl border border-sky-500/20 p-4 space-y-3"
                   style={{ background: 'rgba(14,165,233,0.06)' }}>
@@ -2777,7 +2797,7 @@ export default function App() {
               </div>
             )}
 
-            {activeSection === 'sistema' && curSubTab === 'config' && (
+            {activeSection === 'impostazioni' && curSubTab === 'config' && (
               <ConfigPanel
                 weights={weights}
                 onWeightsChange={setWeights}
@@ -2795,32 +2815,13 @@ export default function App() {
               />
             )}
 
-            {activeSection === 'sistema' && curSubTab === 'grafici' && (
-              <ChartsExplorer
-                analytics={analytics}
-                matches={matches}
-                standings={standings}
-                dataMode={dataMode}
-                dashboardConfig={dashboardConfig}
-                onConfigChange={handleDashboardConfigChange}
-                onSelectPlayer={(p) => { setSelectedPlayer(p); navigateTo('analisi', 'giocatrici'); }}
-              />
-            )}
+            {activeSection === 'impostazioni' && curSubTab === 'glossario' && <Glossary />}
 
-            {activeSection === 'sistema' && curSubTab === 'glossario' && <Glossary />}
+            {activeSection === 'impostazioni' && curSubTab === 'guida' && <GuidePage />}
 
-            {activeSection === 'sistema' && curSubTab === 'guida' && <GuidePage />}
-
-            {/* COACH PROMAX */}
-            {activeSection === 'coach_promax' && (
-              <CoachProMax
-                matches={filteredMatches}
-                standings={standings}
-                analytics={analytics}
-                activeSubTab={curSubTab}
-              />
-            )}
-
+            {/* ═══════════════════════════════════════════════════════════
+                ADMIN SECTIONS
+            ═══════════════════════════════════════════════════════════ */}
             {activeSection === 'admin_users' && canUseAdminUi && (
               <AdminUsersPanel
                 users={adminUsers}

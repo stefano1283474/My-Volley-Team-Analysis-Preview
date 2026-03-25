@@ -29,8 +29,11 @@ const TOOLTIP_STYLE = {
 
 function shortOpp(name) {
   if (!name) return '?';
-  const parts = name.split(' ');
-  return parts[parts.length - 1];
+  const roundMatch = name.match(/^\([AR]\) /);
+  const roundPrefix = roundMatch ? roundMatch[0] : '';
+  const baseName = roundMatch ? name.slice(roundMatch[0].length) : name;
+  const parts = baseName.split(' ');
+  return roundPrefix + parts[parts.length - 1];
 }
 
 function fmtPct(v) {
@@ -508,7 +511,9 @@ export default function TeamAnalysis({ matches = [] }) {
       <div className="bg-white/5 rounded-xl px-4 py-3 border border-white/10 flex items-center gap-3">
         <span className="text-amber-400 text-xl">🛡</span>
         <div>
-          <div className="text-sm font-semibold text-white">GEAS Volley ASD</div>
+          <div className="text-sm font-semibold text-white">
+            {validMatches[0]?.metadata?.teamName || validMatches[0]?.metadata?.myTeam || 'Squadra'}
+          </div>
           <div className="text-xs text-gray-400">
             {validMatches.length} partite · {record.w}V–{record.l}S
           </div>

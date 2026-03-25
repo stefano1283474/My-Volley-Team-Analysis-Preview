@@ -175,14 +175,15 @@ export default function Dashboard({
   const radarData = FUNDS.map(f => {
     const rawVal = teamAvg[f].raw;
     const weiVal = teamAvg[f].weighted;
-    const rawFnc = fncConfig && baselines ? applyFNCToEfficacy(rawVal, f, baselines, fncConfig) : rawVal;
-    const weiFnc = fncConfig && baselines ? applyFNCToEfficacy(weiVal, f, baselines, fncConfig) : weiVal;
+    // Normalizza a 0-1 prima di passare all'FNC (i baselines sono in scala 0-1)
+    const rawFnc = fncConfig && baselines ? applyFNCToEfficacy(rawVal / 100, f, baselines, fncConfig) : rawVal / 100;
+    const weiFnc = fncConfig && baselines ? applyFNCToEfficacy(weiVal / 100, f, baselines, fncConfig) : weiVal / 100;
     return {
       fund: FUND_LABELS[f],
-      raw: Math.max(0, rawFnc * 100),
+      raw: Math.max(0, rawFnc * 100),      // 0-1 → 0-100%
       weighted: Math.max(0, weiFnc * 100),
-      rawOrig: Math.max(0, rawVal * 100),
-      weiOrig: Math.max(0, weiVal * 100),
+      rawOrig: Math.max(0, rawVal),         // già in % (0-100)
+      weiOrig: Math.max(0, weiVal),
     };
   });
 
@@ -202,7 +203,8 @@ export default function Dashboard({
   // ─── Trend chart data ─────────────────────────────────────────────────────
   const teamTrendData = useMemo(() => sortedMA.map(ma => {
     const vals = FUNDS.map(f => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
-    const raw = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length * 100 : 0;
+    // efficacy è già in scala 0-100, nessuna moltiplicazione necessaria
+    const raw = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
     return {
       label:    (ma.match.metadata.opponent || 'N/D').substring(0, 10),
       date:     ma.match.metadata.date || '',
@@ -215,7 +217,8 @@ export default function Dashboard({
     const row = { label: (ma.match.metadata.opponent || 'N/D').substring(0, 10) };
     const vals = [];
     for (const f of FUNDS) {
-      const eff = (ma.match.riepilogo?.team?.[f]?.efficacy || 0) * 100;
+      // efficacy già in scala 0-100, nessuna moltiplicazione necessaria
+      const eff = ma.match.riepilogo?.team?.[f]?.efficacy || 0;
       row[f] = +eff.toFixed(1);
       if (eff > 0) vals.push(eff);
     }

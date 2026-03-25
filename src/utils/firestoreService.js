@@ -20,7 +20,7 @@
 // ============================================================================
 
 import {
-  doc, collection,
+  doc, collection, collectionGroup,
   setDoc, getDoc, getDocs, deleteDoc,
   serverTimestamp,
 } from 'firebase/firestore';
@@ -105,13 +105,14 @@ function userProfileDocRefByEmail(email) {
 }
 
 function userUsageCol() {
-  // Nuovo: sub-collection sotto ogni utente
-  // Per admin listing, si itera su users/{uid}/usage/log
-  return collection(db, MVS_USERS_ROOT);
+  return collectionGroup(db, 'usage');
 }
 
-function userUsageDocRef(uid) {
-  // Nuovo path: users/{uid}/usage/log
+function userUsageDocRefByUserDocId(userDocId) {
+  return doc(db, MVS_USERS_ROOT, userDocId, 'usage', 'log');
+}
+
+function legacyUidUserUsageDocRef(uid) {
   return doc(db, MVS_USERS_ROOT, uid, 'usage', 'log');
 }
 function legacyUserUsageDocRef(uid) {
@@ -439,7 +440,10 @@ function buildMetadataFromMVS(rawMatch = {}, sets = []) {
   const awayTeam = String(rawMatch?.awayTeam || '').trim();
   const fallbackIsHome = myTeam ? (myTeam === homeTeam || !awayTeam) : true;
   const homeAway = normalizeHomeAway(rawMatch?.homeAway, fallbackIsHome);
-  const opponent = explicitOpp || (homeAway === 'home' ? awayTeam : homeTeam);
+  const _baseOpp = explicitOpp || (homeAway === 'home' ? awayTeam : homeTeam);
+  const _desc = String(rawMatch?.description || '').toLowerCase();
+  const _roundPrefix = _desc === 'andata' ? '(A) ' : _desc === 'ritorno' ? '(R) ' : '';
+  const opponent = _roundPrefix + _baseOpp;
   const wins = sets.filter((setItem) => setItem.won).length;
   const losses = Math.max(0, sets.length - wins);
   const computedResult = sets.length ? `${wins}-${losses}` : '';
@@ -452,8 +456,49 @@ function buildMetadataFromMVS(rawMatch = {}, sets = []) {
     homeAway,
     phase: String(rawMatch?.phase || rawMatch?.matchPhase || '').trim(),
     location: String(rawMatch?.location || '').trim(),
-    result: String(rawMatch?.finalResult || computedResult).trim(),
+    result: (() => {
+      const finalRes = String(rawMatch?.finalResult || '').trim();
+      // Ignora "0-0" (valore di default non significativo) e usa il risultato calcolato dai set
+      return (finalRes && finalRes !== '0-0') ? finalRes : computedResult;
+    })(),
   };
+}
+
+/**
+ * Ricalcola la rotazione di ogni rally quando i dati Firestore non la contengono (rotation: 0).
+ * Usa la sequenza phase/isPoint per far avanzare la rotazione dopo ogni side-out vinto.
+ * Se ourStartRotation non è impostato sul set, default a 1.
+ */
+function recomputeRallyRotations(rallies = [], sets = []) {
+  // Build per-set start rotation map
+  const setStartRot = {};
+  for (const s of sets) {
+    const rot = Number(s.ourStartRotation);
+    if (rot >= 1 && rot <= 6) setStartRot[Number(s.number)] = rot;
+  }
+
+  // Group rallies by set number (preserving original order)
+  const bySet = {};
+  for (const r of rallies) {
+    const sn = Number(r.set) || 1;
+    if (!bySet[sn]) bySet[sn] = [];
+    bySet[sn].push(r);
+  }
+
+  // Recompute rotation for each set sequentially
+  for (const [setNumStr, setRallies] of Object.entries(bySet)) {
+    const setNum = Number(setNumStr);
+    let rot = setStartRot[setNum] || 1;
+    for (const rally of setRallies) {
+      rally.rotation = rot;
+      // Side-out: la nostra squadra riceve (phase === 'r') e vince il punto → la rotazione avanza
+      if (rally.phase === 'r' && rally.isPoint === true) {
+        rot = (rot % 6) + 1;
+      }
+    }
+  }
+
+  return rallies;
 }
 
 function normalizeMatchFromFirestore(data = {}, docId = '') {
@@ -501,9 +546,16 @@ function normalizeMatchFromFirestore(data = {}, docId = '') {
   }
 
   // Fallback: nessuna azione grezza disponibile (match importati solo con stats pre-calcolate)
+  // Se i rally hanno rotation:0 (dati vecchi caricati prima del tracking rotazioni), ricalcola.
+  let fallbackRallies = Array.isArray(baseMatch.rallies) ? [...baseMatch.rallies] : [];
+  if (fallbackRallies.length > 0 && fallbackRallies.every(r => !r.rotation || r.rotation === 0)) {
+    fallbackRallies = recomputeRallyRotations(fallbackRallies, sets);
+  }
+
   return {
     match: {
       ...baseMatch,
+      rallies: fallbackRallies,
       riepilogo: normalizeRiepilogoPlayerBlocks(baseMatch?.riepilogo || {}),
     },
     updatedAt: _updatedAt,
@@ -1552,10 +1604,16 @@ export async function migrateAdminsToProMax() {
 export async function recordUserLoginUsage(user, access = {}, context = {}) {
   if (!user?.uid) return;
   const uid = user.uid;
-  const ref = userUsageDocRef(uid);
+  const fallbackEmail = normalizeEmail(user.email);
+  const userDocId = await resolveUserEmail({ uid, email: fallbackEmail }) || fallbackEmail || uid;
+  const ref = userUsageDocRefByUserDocId(userDocId);
   let existing = {};
   try {
     let snap = await getDoc(ref);
+    if (!snap.exists() && userDocId !== uid) {
+      const legacyUidSnap = await getDoc(legacyUidUserUsageDocRef(uid));
+      if (legacyUidSnap.exists()) snap = legacyUidSnap;
+    }
     if (!snap.exists()) snap = await getDoc(legacyUserUsageDocRef(uid));
     existing = snap.exists() ? (snap.data() || {}) : {};
   } catch {}
@@ -1563,7 +1621,7 @@ export async function recordUserLoginUsage(user, access = {}, context = {}) {
   const loginCount = Math.max(0, Number(existing.loginCount || 0)) + 1;
   const payload = sanitize({
     uid,
-    email: normalizeEmail(user.email),
+    email: fallbackEmail,
     displayName: user.displayName || '',
     role: normalizeUserRole(access.role),
     assignedProfile: normalizeAssignedProfile(access.assignedProfile || 'base'),
@@ -1580,12 +1638,19 @@ export async function recordUserLoginUsage(user, access = {}, context = {}) {
   await setDoc(ref, payload, { merge: true });
 }
 
-export async function recordUserSectionUsage(uid, sectionId) {
+export async function recordUserSectionUsage(userOrUid, sectionId) {
+  const uid = typeof userOrUid === 'string' ? userOrUid : String(userOrUid?.uid || '').trim();
+  const email = typeof userOrUid === 'string' ? '' : normalizeEmail(userOrUid?.email || '');
   if (!uid || !sectionId) return;
-  const ref = userUsageDocRef(uid);
+  const userDocId = await resolveUserEmail({ uid, email }) || email || uid;
+  const ref = userUsageDocRefByUserDocId(userDocId);
   let existing = {};
   try {
-    const snap = await getDoc(ref);
+    let snap = await getDoc(ref);
+    if (!snap.exists() && userDocId !== uid) {
+      const legacyUidSnap = await getDoc(legacyUidUserUsageDocRef(uid));
+      if (legacyUidSnap.exists()) snap = legacyUidSnap;
+    }
     existing = snap.exists() ? (snap.data() || {}) : {};
   } catch {}
   const counters = { ...(existing.sectionCounters || {}) };
@@ -1601,11 +1666,14 @@ export async function recordUserSectionUsage(uid, sectionId) {
 
 export async function loadAllUserUsageStats() {
   const snap = await getDocs(userUsageCol());
-  const rows = [];
+  const rowsByUid = new Map();
   snap.forEach((d) => {
+    if (d.id !== 'log') return;
     const data = d.data() || {};
-    rows.push({
-      uid: d.id,
+    const uid = String(data.uid || '').trim();
+    if (!uid) return;
+    const row = {
+      uid,
       email: normalizeEmail(data.email),
       displayName: data.displayName || '',
       role: normalizeUserRole(data.role),
@@ -1619,9 +1687,26 @@ export async function loadAllUserUsageStats() {
       lastAppVersion: data.lastAppVersion || '',
       lastUserAgent: data.lastUserAgent || '',
       updatedAt: data.updatedAt || null,
-    });
+      userDocId: String(d.ref?.parent?.parent?.id || '').trim(),
+    };
+    const prev = rowsByUid.get(uid);
+    if (!prev) {
+      rowsByUid.set(uid, row);
+      return;
+    }
+    const prevSeen = timestampToMs(prev.lastSeenAt);
+    const curSeen = timestampToMs(row.lastSeenAt);
+    if (curSeen > prevSeen) {
+      rowsByUid.set(uid, row);
+      return;
+    }
+    if (curSeen === prevSeen) {
+      const prevIsEmailDoc = prev.userDocId.includes('@');
+      const curIsEmailDoc = row.userDocId.includes('@');
+      if (curIsEmailDoc && !prevIsEmailDoc) rowsByUid.set(uid, row);
+    }
   });
-  return rows.sort((a, b) => timestampToMs(b.lastSeenAt) - timestampToMs(a.lastSeenAt));
+  return Array.from(rowsByUid.values()).sort((a, b) => timestampToMs(b.lastSeenAt) - timestampToMs(a.lastSeenAt));
 }
 
 // ─── Admin Content globale (Sistema posts + Offerte con visibilità) ───────────

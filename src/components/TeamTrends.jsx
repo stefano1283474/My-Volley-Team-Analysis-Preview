@@ -43,16 +43,16 @@ export default function TeamTrends({ analytics, matches, standings, dataMode = '
           label: (ma.match.metadata.opponent || '').substring(0, 10),
           date: ma.match.metadata.date || `Match ${i + 1}`,
           weight: w,
-          // Raw
-          attRaw: (team?.attack?.efficacy || 0) * 100,
-          serRaw: (team?.serve?.efficacy || 0) * 100,
-          recRaw: (team?.reception?.efficacy || 0) * 100,
-          defRaw: (team?.defense?.efficacy || 0) * 100,
+          // Raw (efficacy already stored as 0-100)
+          attRaw: (team?.attack?.efficacy || 0),
+          serRaw: (team?.serve?.efficacy || 0),
+          recRaw: (team?.reception?.efficacy || 0),
+          defRaw: (team?.defense?.efficacy || 0),
           // Weighted
-          attWei: (team?.attack?.efficacy || 0) * w * (fw.a || 1) * 100,
-          serWei: (team?.serve?.efficacy || 0) * w * (fw.b || 1) * 100,
-          recWei: (team?.reception?.efficacy || 0) * w * (fw.r || 1) * 100,
-          defWei: (team?.defense?.efficacy || 0) * w * (fw.d || 1) * 100,
+          attWei: (team?.attack?.efficacy || 0) * w * (fw.a || 1),
+          serWei: (team?.serve?.efficacy || 0) * w * (fw.b || 1),
+          recWei: (team?.reception?.efficacy || 0) * w * (fw.r || 1),
+          defWei: (team?.defense?.efficacy || 0) * w * (fw.d || 1),
           // Chain stats
           sideOut: (ma.chains.sideOut.pct || 0) * 100,
           breakPoint: (ma.chains.breakPoint.pct || 0) * 100,

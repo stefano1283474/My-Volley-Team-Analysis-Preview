@@ -109,6 +109,8 @@ export function buildFundamentalScale(matches) {
 
   // Raggruppa partite per avversario
   const byOpponent = {};
+  // Helper: extract round prefix (A)/(R) from a key/name
+  function _roundPrefix(s) { const m = s.match(/^\([ar]\) /i); return m ? m[0].toUpperCase() : ''; }
   for (const m of matches) {
     const oppName = String(m?.metadata?.opponent || '').trim();
     if (!oppName || !m?.riepilogo?.opponent) continue;
@@ -116,6 +118,8 @@ export function buildFundamentalScale(matches) {
     let key = oppName.toLowerCase();
     let found = false;
     for (const k of Object.keys(byOpponent)) {
+      // Never merge (A) with (R) or prefixed with non-prefixed
+      if (_roundPrefix(k) !== _roundPrefix(key)) continue;
       if (areTeamNamesLikelySame(k, key)) { key = k; found = true; break; }
     }
     if (!byOpponent[key]) byOpponent[key] = { name: oppName, matches: [] };
@@ -830,14 +834,20 @@ export function computeCoachProMax(matches, roster, standings) {
   const roles = compareRoles(matches, roster);
 
   // Per-match analysis
-  const matchAnalyses = matches.map(m => ({
-    matchId: m.id,
-    opponent: m?.metadata?.opponent || '',
-    date: m?.metadata?.date || '',
-    result: m?.metadata?.result || '',
-    analysis: analyzeMatch(m, avgOpp, scales, standings, rankingScale),
-    returnPrediction: predictReturnMatch(m, avgOpp, teamAvg, scales),
-  }));
+  const matchAnalyses = matches.map(m => {
+    // Calcola il risultato dai set (più affidabile di metadata.result che può essere "0-0")
+    const setsWon  = (m.sets || []).filter(s => s.won).length;
+    const setsLost = (m.sets || []).filter(s => !s.won).length;
+    const computedResult = (m.sets || []).length > 0 ? `${setsWon}-${setsLost}` : '';
+    return {
+      matchId: m.id,
+      opponent: m?.metadata?.opponent || '',
+      date: m?.metadata?.date || '',
+      result: computedResult || m?.metadata?.result || '',
+      analysis: analyzeMatch(m, avgOpp, scales, standings, rankingScale),
+      returnPrediction: predictReturnMatch(m, avgOpp, teamAvg, scales),
+    };
+  });
 
   return {
     avgOpponentProfile: avgOpp,

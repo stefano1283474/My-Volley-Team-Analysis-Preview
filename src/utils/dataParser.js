@@ -154,7 +154,13 @@ function parseMetadata(wb) {
   const opponent = getCellValue(ws, 'D20') || '';
   const dateRaw = getCellValue(ws, 'D21');
   const matchType = getCellValue(ws, 'D22') || '';
-  const homeAway = getCellValue(ws, 'D23') || '';
+  // Normalizza il valore sede DataVolley ('C'/'T') → 'Casa'/'Trasferta'
+  const homeAwayRaw = String(getCellValue(ws, 'D23') || '').trim().toUpperCase();
+  const homeAway = homeAwayRaw === 'C' || homeAwayRaw === 'CASA' || homeAwayRaw === 'H' || homeAwayRaw === 'HOME'
+    ? 'Casa'
+    : homeAwayRaw === 'T' || homeAwayRaw === 'TRASFERTA' || homeAwayRaw === 'A' || homeAwayRaw === 'AWAY'
+      ? 'Trasferta'
+      : getCellValue(ws, 'D23') || '';
   const phase = getCellValue(ws, 'D24') || '';
 
   let date = '';

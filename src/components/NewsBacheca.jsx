@@ -135,12 +135,23 @@ function newId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function formatDate(isoDate) {
-  if (!isoDate) return null;
+// Normalizza DD/MM/YYYY → YYYY-MM-DD per ordinamento e parsing corretti
+function normDate(d) {
+  if (!d) return '';
+  const m = String(d).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  return String(d);
+}
+
+function formatDate(rawDate) {
+  if (!rawDate) return null;
   try {
+    // Converte DD/MM/YYYY → YYYY-MM-DD prima di passarlo a Date()
+    const isoDate = normDate(rawDate);
     const d = new Date(isoDate + 'T12:00:00');
+    if (isNaN(d.getTime())) return rawDate;
     return d.toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' });
-  } catch { return isoDate; }
+  } catch { return rawDate; }
 }
 
 function sortPosts(posts) {
@@ -216,8 +227,9 @@ function genCampionatoNews(standings, calendar, teamName) {
 
   // Calendario del team
   const teamCal = (calendar || []).filter(c => sameTeam(c.home, teamName) || sameTeam(c.away, teamName));
-  const played  = teamCal.filter(c => c.played).sort((a, b) => (b.data || '').localeCompare(a.data || ''));
-  const upcoming = teamCal.filter(c => !c.played).sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+  // normDate converte DD/MM/YYYY → YYYY-MM-DD per ordinamento cronologico corretto
+  const played  = teamCal.filter(c => c.played).sort((a, b) => normDate(b.data).localeCompare(normDate(a.data)));
+  const upcoming = teamCal.filter(c => !c.played).sort((a, b) => normDate(a.data).localeCompare(normDate(b.data)));
 
   // 3. Forma recente (ultime ≤5 gare)
   if (played.length >= 2) {
@@ -323,8 +335,9 @@ function genSquadraNews(sortedMA) {
 
   // 2. Trend di forma (ultimi 3 vs media stagione)
   if (sortedMA.length >= 3) {
+    // efficacy da riepilogo è in scala 0-100 (DataVolley): dividiamo per 100 → 0-1
     const avgs = sortedMA.map(ma => {
-      const vals = FUNDS.map(f => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
+      const vals = FUNDS.map(f => (ma.match.riepilogo?.team?.[f]?.efficacy || 0) / 100).filter(v => v > 0);
       return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
     });
     const season  = avgs.reduce((a, b) => a + b, 0) / avgs.length;
@@ -349,8 +362,9 @@ function genSquadraNews(sortedMA) {
   }
 
   // 3. Classifica fondamentali
+  // efficacy da riepilogo è in scala 0-100 (DataVolley): dividiamo per 100 → 0-1
   const fundAvgs = FUNDS.map(f => {
-    const vals = sortedMA.map(ma => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
+    const vals = sortedMA.map(ma => (ma.match.riepilogo?.team?.[f]?.efficacy || 0) / 100).filter(v => v > 0);
     return { f, avg: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0 };
   }).filter(fa => fa.avg > 0).sort((a, b) => b.avg - a.avg);
 
@@ -1091,9 +1105,10 @@ export default function NewsBacheca({
   const matchAnalytics = analytics?.matchAnalytics || [];
   const playerTrends   = analytics?.playerTrends   || {};
 
+  // normDate gestisce sia YYYY-MM-DD che DD/MM/YYYY per ordinamento cronologico corretto
   const sortedMA = useMemo(() =>
     [...matchAnalytics].sort((a, b) =>
-      (a.match.metadata.date || '').localeCompare(b.match.metadata.date || '')
+      normDate(a.match.metadata.date).localeCompare(normDate(b.match.metadata.date))
     ), [matchAnalytics]);
 
   const campNews    = useMemo(() => genCampionatoNews(standings, calendar, ownerTeamName), [standings, calendar, ownerTeamName]);

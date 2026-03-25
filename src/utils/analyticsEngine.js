@@ -438,7 +438,7 @@ export function computePlayerTrends(allMatchPlayerStats) {
       const matchesWithData = player.matches.map(m => {
         const fundData = m.raw[fund];
         const tot = fundData?.tot || 0;
-        const played = tot > 0;
+        const played = tot >= 3;
         return { ...m, played, tot };
       });
 
@@ -519,7 +519,8 @@ export function generateTrainingSuggestions(playerTrends, teamStats, roster = []
         continue;
       }
 
-      const isCoreFund = roleConfig ? roleConfig.core.includes(fund) : true;
+      // Default false: se il ruolo è sconosciuto non marchiamo erroneamente tutti i fondamentali come CORE
+      const isCoreFund = roleConfig ? roleConfig.core.includes(fund) : false;
       const isSecondaryFund = roleConfig ? roleConfig.secondary.includes(fund) : false;
       const roleLabel = roleConfig ? roleConfig.label : '';
 
@@ -655,7 +656,8 @@ export function generateTrainingSuggestions(playerTrends, teamStats, roster = []
           type: 'team_decline',
           priority: 4,
           fundamental: fund,
-          message: `Squadra: ${fundLabel(fund)} in calo significativo nell'ultima partita (${(lastEff * 100).toFixed(1)}% vs ${(prevEff * 100).toFixed(1)}% precedente).`,
+          // lastEff e prevEff sono già in scala 0-100 (DataVolley riepilogo): nessun ×100
+          message: `Squadra: ${fundLabel(fund)} in calo significativo nell'ultima partita (${lastEff.toFixed(1)}% vs ${prevEff.toFixed(1)}% precedente).`,
           action: `Sessione specifica su ${fundLabel(fund)} per ${targetRoles}. Analizzare i video per identificare pattern di errore.`,
         });
       }

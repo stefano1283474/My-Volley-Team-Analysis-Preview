@@ -581,103 +581,248 @@ function PalleggiatoreTab({ cpx, roster }) {
     return Object.entries(sa.setterMap).filter(([, d]) => d.totalAttacks > 0);
   }, [sa]);
 
-  const [activeSetter, setActiveSetter] = useState(null);
-
-  // Auto-select first setter
-  const effectiveSetter = activeSetter || (setterEntries[0]?.[0] ?? null);
+  const [attackerFilter, setAttackerFilter] = useState('TOP3'); // 'TOP1' | 'TOP3' | 'ALL'
 
   if (!setterEntries.length) {
     return <NoData msg="Nessun dato di attribuzione palleggiatore disponibile. Serve un roster con ruoli P e rally con servizi dei palleggiatori." />;
   }
 
-  const currentData = setterEntries.find(([k]) => k === effectiveSetter)?.[1];
-  const insights = useMemo(
-    () => currentData ? buildSetterInsights(effectiveSetter, effectiveSetter, currentData, roster) : [],
-    [effectiveSetter, currentData, roster],
-  );
+  // Build unified attacker list: union of all attackers across all setters, sorted by combined avg output
+  const unifiedAttackers = useMemo(() => {
+    const ids = new Set();
+    setterEntries.forEach(([, data]) => Object.keys(data.attacksByPlayer).forEach(p => ids.add(p)));
+    return Array.from(ids)
+      .map(p => {
+        let totalWeighted = 0, totalAtt = 0;
+        setterEntries.forEach(([, data]) => {
+          const s = data.attacksByPlayer[p];
+          if (s && s.total > 0) { totalWeighted += s.avgOutput * s.total; totalAtt += s.total; }
+        });
+        return { player: p, combinedAvg: totalAtt > 0 ? totalWeighted / totalAtt : 0, totalAtt };
+      })
+      .filter(a => a.totalAtt >= 1)
+      .sort((a, b) => b.combinedAvg - a.combinedAvg);
+  }, [setterEntries]);
+
+  // Apply Top1/Top3/ALL filter — top-N best + bottom-N worst
+  const filteredAttackers = useMemo(() => {
+    const total = unifiedAttackers.length;
+    if (attackerFilter === 'ALL' || total <= 2) return unifiedAttackers;
+    const n = attackerFilter === 'TOP1' ? 1 : 3;
+    const top = unifiedAttackers.slice(0, Math.min(n, total));
+    const topSet = new Set(top.map(a => a.player));
+    const bottom = unifiedAttackers.slice(Math.max(total - n, n)).filter(a => !topSet.has(a.player));
+    return [...top, ...bottom];
+  }, [unifiedAttackers, attackerFilter]);
+
+  const hasDelta = setterEntries.length === 2;
+  const FILTER_OPTIONS = [
+    { key: 'TOP1', label: 'Top 1', desc: '1 migliore + 1 peggiore' },
+    { key: 'TOP3', label: 'Top 3', desc: '3 migliori + 3 peggiori' },
+    { key: 'ALL',  label: 'Tutti',  desc: 'Tutti gli attaccanti' },
+  ];
 
   return (
     <div className="space-y-4">
-      {/* Setter pills */}
-      <div className="flex items-center gap-3">
+      {/* Setter info pills (read-only summary) */}
+      <div className="flex items-center gap-3 flex-wrap">
         {setterEntries.map(([setter, data]) => (
-          <button
-            key={setter}
-            onClick={() => setActiveSetter(setter)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-              setter === effectiveSetter
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                : 'bg-white/5 text-gray-400 border border-white/5 hover:bg-white/10'
-            }`}
-          >
+          <div key={setter} className="px-4 py-2 rounded-xl text-sm font-medium bg-amber-500/10 text-amber-300 border border-amber-500/30">
             {playerLabel(setter, roster)}
-            <span className="ml-2 text-[10px] opacity-60">{data.totalAttacks} att.</span>
-          </button>
+            <span className="ml-2 text-[10px] opacity-70">
+              {data.totalAttacks} att. · Ø {data.avgOutput} · Kill {data.killRate}%
+            </span>
+          </div>
         ))}
       </div>
 
-      {currentData && (
-        <>
-          {/* Descriptive insights */}
-          <InsightBox items={insights} title={`Analisi — ${playerLabel(effectiveSetter, roster)}`} />
-
-          {/* Stats tables */}
-          <div className={S.card}>
-            <h3 className={S.header}>
-              Distribuzione per Attaccante — {playerLabel(effectiveSetter, roster)}
-              <span className="ml-3 text-gray-500 normal-case tracking-normal">
-                Ø output {currentData.avgOutput} — Kill rate {currentData.killRate}%
-              </span>
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-gray-500 border-b border-white/5">
-                    <th className="text-left py-1.5 px-2">Giocatrice</th>
-                    <th className="text-right py-1.5 px-2">Tot</th>
-                    <th className="text-right py-1.5 px-2">Ø Output</th>
-                    <th className="text-right py-1.5 px-2">Kills</th>
-                    <th className="text-right py-1.5 px-2">Errori</th>
-                    <th className="text-right py-1.5 px-2">Efficacia</th>
-                    <th className="text-right py-1.5 px-2">Efficienza</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(currentData.attacksByPlayer)
-                    .sort(([, a], [, b]) => b.total - a.total)
-                    .map(([player, stats]) => (
-                      <tr key={player} className="border-b border-white/3 hover:bg-white/3">
-                        <td className="py-1.5 px-2 font-mono text-amber-400">{playerLabel(player, roster)}</td>
-                        <td className="py-1.5 px-2 text-right text-gray-300">{stats.total}</td>
-                        <td className="py-1.5 px-2 text-right text-white font-semibold">{stats.avgOutput}</td>
-                        <td className="py-1.5 px-2 text-right text-emerald-400">{stats.kills}</td>
-                        <td className="py-1.5 px-2 text-right text-red-400">{stats.errors}</td>
-                        <td className="py-1.5 px-2 text-right text-gray-300">{fmtPct(stats.efficacy)}</td>
-                        <td className="py-1.5 px-2 text-right text-gray-400">{fmtPct(stats.efficiency)}</td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
+      {/* ── Single comparison table ── */}
+      <div className={S.card}>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 className={`${S.header} mb-0`}>
+            Confronto Attaccanti per Palleggiatore
+            <span className="ml-3 text-gray-500 normal-case tracking-normal font-normal">
+              {unifiedAttackers.length} attaccanti
+            </span>
+          </h3>
+          {/* Filter toggle */}
+          <div className="flex rounded-lg border border-white/10 overflow-hidden text-[11px]">
+            {FILTER_OPTIONS.map(opt => (
+              <button
+                key={opt.key}
+                title={opt.desc}
+                onClick={() => setAttackerFilter(opt.key)}
+                className={`px-3 py-1.5 font-medium transition-all ${
+                  attackerFilter === opt.key
+                    ? 'bg-amber-500/25 text-amber-300'
+                    : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
+        </div>
 
-          <div className={S.card}>
-            <h3 className={S.header}>Qualità Input → Output</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {Object.entries(currentData.attacksByInput)
-                .filter(([, d]) => d.total > 0)
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([key, d]) => (
-                  <div key={key} className={S.cardInner}>
-                    <div className="text-xs font-mono text-amber-400 mb-1">{key}</div>
-                    <div className="text-sm font-semibold text-white">{(d.sumOutput / d.total).toFixed(2)}</div>
-                    <div className="text-[10px] text-gray-600">{d.total} azioni</div>
-                  </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border-collapse">
+            {/* ── Group header row: one column group per setter + optional Δ ── */}
+            <thead>
+              <tr className="border-b border-white/10">
+                <th className="text-left py-2 px-2 text-gray-600 w-6" rowSpan={2}>#</th>
+                <th className="text-left py-2 px-2 text-gray-400 min-w-[90px]" rowSpan={2}>Attaccante</th>
+                {setterEntries.map(([setter]) => (
+                  <th key={setter} colSpan={4} className="text-center py-2 px-3 border-l border-white/10 text-amber-400/90 font-semibold">
+                    {playerLabel(setter, roster)}
+                  </th>
                 ))}
+                {hasDelta && (
+                  <th colSpan={2} className="text-center py-2 px-3 border-l border-white/10 text-purple-400/80 font-semibold">
+                    Δ Differenza
+                  </th>
+                )}
+              </tr>
+              <tr className="text-[10px] text-gray-600 border-b border-white/8">
+                {setterEntries.map(([setter]) => (
+                  <>
+                    <th key={`${setter}-out`} className="text-right py-1 px-2 border-l border-white/8 whitespace-nowrap">Ø Out</th>
+                    <th key={`${setter}-kill`} className="text-right py-1 px-2 whitespace-nowrap">Kill%</th>
+                    <th key={`${setter}-eff`}  className="text-right py-1 px-2 whitespace-nowrap">Eff.</th>
+                    <th key={`${setter}-n`}    className="text-right py-1 px-2 text-gray-700">n</th>
+                  </>
+                ))}
+                {hasDelta && (
+                  <>
+                    <th className="text-right py-1 px-2 border-l border-white/8 text-purple-400/60 whitespace-nowrap">Δ Output</th>
+                    <th className="text-right py-1 px-2 text-purple-400/60 whitespace-nowrap">Δ Kill%</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+
+            <tbody>
+              {filteredAttackers.map((a, rowIdx) => {
+                const globalRank = unifiedAttackers.findIndex(u => u.player === a.player) + 1;
+                const isTop = globalRank <= Math.ceil(unifiedAttackers.length / 2);
+                const rowBg = rowIdx % 2 === 0 ? '' : 'bg-white/[0.018]';
+
+                // Per-setter stats for this attacker
+                const statsBySetter = setterEntries.map(([, data]) => data.attacksByPlayer[a.player] || null);
+
+                // Delta columns (only for exactly 2 setters)
+                let deltaOutput = null, deltaKill = null;
+                if (hasDelta) {
+                  const s0 = statsBySetter[0], s1 = statsBySetter[1];
+                  if (s0 && s0.total > 0 && s1 && s1.total > 0) {
+                    deltaOutput = (s0.avgOutput - s1.avgOutput).toFixed(2);
+                    deltaKill   = (s0.efficacy  - s1.efficacy ).toFixed(1);
+                  }
+                }
+
+                return (
+                  <tr key={a.player} className={`border-b border-white/5 hover:bg-white/5 transition-colors ${rowBg}`}>
+                    <td className="py-1.5 px-2 text-gray-600 font-mono">{globalRank}</td>
+                    <td className="py-1.5 px-2 font-medium">
+                      <span className={`mr-1 text-[10px] ${isTop ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {isTop ? '▲' : '▼'}
+                      </span>
+                      <span className="text-amber-400">{playerLabel(a.player, roster)}</span>
+                    </td>
+                    {statsBySetter.map((stats, si) => {
+                      if (!stats || stats.total < 1) {
+                        return (
+                          <>
+                            <td key={`${si}-out`} className="py-1.5 px-2 text-right text-gray-700 border-l border-white/5">—</td>
+                            <td key={`${si}-kill`} className="py-1.5 px-2 text-right text-gray-700">—</td>
+                            <td key={`${si}-eff`}  className="py-1.5 px-2 text-right text-gray-700">—</td>
+                            <td key={`${si}-n`}    className="py-1.5 px-2 text-right text-gray-700">—</td>
+                          </>
+                        );
+                      }
+                      const outColor = stats.avgOutput >= 3.5
+                        ? 'text-emerald-400'
+                        : stats.avgOutput >= 3.0
+                          ? 'text-amber-300'
+                          : 'text-red-400';
+                      return (
+                        <>
+                          <td key={`${si}-out`}  className={`py-1.5 px-2 text-right font-semibold font-mono ${outColor} border-l border-white/5`}>
+                            {stats.avgOutput}
+                          </td>
+                          <td key={`${si}-kill`} className="py-1.5 px-2 text-right font-mono text-gray-300">
+                            {fmtPct(stats.efficacy)}
+                          </td>
+                          <td key={`${si}-eff`}  className="py-1.5 px-2 text-right font-mono text-gray-500">
+                            {fmtPct(stats.efficiency)}
+                          </td>
+                          <td key={`${si}-n`}    className="py-1.5 px-2 text-right text-gray-600">
+                            {stats.total}
+                          </td>
+                        </>
+                      );
+                    })}
+                    {hasDelta && (() => {
+                      const dOut = deltaOutput !== null ? parseFloat(deltaOutput) : null;
+                      const dKill = deltaKill !== null ? parseFloat(deltaKill) : null;
+                      const outCls = dOut === null ? 'text-gray-700' : dOut > 0 ? 'text-emerald-400' : dOut < 0 ? 'text-red-400' : 'text-gray-500';
+                      const killCls = dKill === null ? 'text-gray-700' : dKill > 0 ? 'text-emerald-400' : dKill < 0 ? 'text-red-400' : 'text-gray-500';
+                      return (
+                        <>
+                          <td className={`py-1.5 px-2 text-right font-mono border-l border-white/5 ${outCls}`}>
+                            {dOut !== null ? (dOut > 0 ? '+' : '') + deltaOutput : '—'}
+                          </td>
+                          <td className={`py-1.5 px-2 text-right font-mono ${killCls}`}>
+                            {dKill !== null ? (dKill > 0 ? '+' : '') + deltaKill + '%' : '—'}
+                          </td>
+                        </>
+                      );
+                    })()}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Legend */}
+        <div className="mt-3 flex flex-wrap gap-4 text-[10px] text-gray-600">
+          <span><span className="text-emerald-400">▲</span> Migliore connessione (avg output alto)</span>
+          <span><span className="text-red-400">▼</span> Connessione da migliorare</span>
+          {hasDelta && (
+            <span>
+              <span className="text-purple-400">Δ</span> = {playerLabel(setterEntries[0][0], roster)} − {playerLabel(setterEntries[1][0], roster)}
+              <span className="ml-1 text-gray-700">(verde = meglio con {playerLabel(setterEntries[0][0], roster)})</span>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ── Input quality side-by-side per setter ── */}
+      <div className={S.card}>
+        <h3 className={S.header}>Qualità Input → Output per Palleggiatore</h3>
+        <div className={`grid gap-6 ${setterEntries.length > 1 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
+          {setterEntries.map(([setter, data]) => (
+            <div key={setter}>
+              <div className="text-xs font-semibold text-amber-400 mb-2 flex items-center gap-2">
+                {playerLabel(setter, roster)}
+                <span className="text-gray-600 font-normal text-[10px]">{data.totalAttacks} att.</span>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {Object.entries(data.attacksByInput)
+                  .filter(([, d]) => d.total > 0)
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([key, d]) => (
+                    <div key={key} className={S.cardInner}>
+                      <div className="text-xs font-mono text-amber-400 mb-1">{key}</div>
+                      <div className="text-sm font-semibold text-white">{(d.sumOutput / d.total).toFixed(2)}</div>
+                      <div className="text-[10px] text-gray-600">{d.total} azioni</div>
+                    </div>
+                  ))}
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
