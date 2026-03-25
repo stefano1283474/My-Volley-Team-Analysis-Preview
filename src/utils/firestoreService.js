@@ -36,9 +36,6 @@ const LEGACY_SHARED_ACCESS_COLLECTION = 'volley_team_analysis_6_0_shared_access'
 const LEGACY_SHARE_TOKENS_COLLECTION = 'volley_team_analysis_6_0_share_tokens';
 const LEGACY_USER_USAGE_COLLECTION = 'volley_team_analysis_6_0_user_usage';
 const PROFILE_VALUES = ['base', 'pro', 'promax'];
-// Email di bootstrap: ottiene role='admin' automaticamente al PRIMO login.
-// Logins successivi non sovrascrivono il ruolo (già nel documento).
-const BOOTSTRAP_ADMIN_EMAIL = 'peraimodel@gmail.com';
 
 function resolveTeamId(teamId) {
   const explicit = String(teamId || '').trim();
@@ -221,30 +218,31 @@ async function resolveUserEmail({ uid = '', email = '' } = {}) {
   const rawEmail = String(email || '').trim();
   const normalizedEmail = normalizeEmail(rawEmail);
   const normalizedUid = String(uid || '').trim();
-  try {
-    const snap = await getDocs(usersRootCol());
-    const directVariants = new Set(emailDocIdVariants(rawEmail));
-    const matches = [];
-    for (const docSnap of snap.docs) {
-      const data = docSnap.data() || {};
-      const docId = String(docSnap.id || '').trim();
-      const docUid = String(data.uid || '').trim();
-      const docEmailNorm = normalizeEmail(data.email || docId);
-      let score = 0;
-      if (normalizedUid && docUid && docUid === normalizedUid) score += 100;
-      if (normalizedEmail && docEmailNorm && docEmailNorm === normalizedEmail) score += 60;
-      if (directVariants.has(docId)) score += 40;
-      if (data?.apps?.mvta?.enabled === true || data?.role || data?.assignedProfile || data?.pacchetto) score += 10;
-      if (score > 0) {
-        matches.push({ id: docId, score });
-      }
+
+  if (normalizedEmail) {
+    const variants = emailDocIdVariants(rawEmail);
+    for (const variant of variants) {
+      try {
+        const snap = await getDoc(doc(db, MVS_USERS_ROOT, variant));
+        if (snap.exists()) return variant;
+      } catch {}
     }
-    matches.sort((a, b) => b.score - a.score);
-    if (matches.length > 0) return matches[0].id;
-  } catch {}
-  if (normalizedEmail) return normalizedEmail;
-  if (rawEmail) return normalizeEmail(rawEmail);
-  return normalizedUid || '';
+    return normalizedEmail;
+  }
+
+  if (normalizedUid) {
+    try {
+      const snap = await getDocs(usersRootCol());
+      for (const docSnap of snap.docs) {
+        const data = docSnap.data() || {};
+        const docUid = String(data.uid || '').trim();
+        if (docUid === normalizedUid) return docSnap.id;
+      }
+    } catch {}
+    return normalizedUid;
+  }
+
+  return '';
 }
 
 async function resolveTeamOwnerId(userId = '') {
@@ -1073,25 +1071,15 @@ export async function resolveSharedAccess(token, user) {
   };
 }
 
-/**
- * Crea o aggiorna il documento utente in users/{usermail}.
- *
- * Logica ruolo (unica sorgente di verità = users/{usermail}.role):
- *  - Se il documento NON esiste ancora (primo login):
- *      · BOOTSTRAP_ADMIN_EMAIL → role='admin', assignedProfile='promax'
- *      · tutti gli altri       → role='user',  assignedProfile='base'
- *  - Se il documento ESISTE GIÀ:
- *      · il ruolo viene preservato (non sovrascritto)
- *      · viene aggiornato solo lastLoginAt + dati anagrafici (displayName, photoURL)
- */
 export async function ensureUserAccessRecord(user) {
   if (!user?.uid) return null;
   const uid = user.uid;
   const rawEmail = String(user.email || '').trim();
   const email = normalizeEmail(rawEmail);
   if (!rawEmail) return null;
-  const resolvedDocId = await resolveUserEmail({ uid, email: rawEmail });
-  const ref = userProfileDocRefByEmail(resolvedDocId);
+
+  const ownDocId = email;
+  const ref = userProfileDocRefByEmail(ownDocId);
 
   let snap = null;
   try { snap = await getDoc(ref); } catch {}
@@ -1114,13 +1102,10 @@ export async function ensureUserAccessRecord(user) {
   const legacyMembership = normalizeMembership(currentData.appMembership);
   const legacyMvsEnabled = legacyMembership === 'mvs' || legacyMembership === 'both';
   const existingRole = normalizeUserRole(currentMvta.role || currentData.role);
-  const bootstrapRole = email === BOOTSTRAP_ADMIN_EMAIL ? 'admin' : 'user';
-  const role = isNewUser ? bootstrapRole : existingRole;
+  const role = isNewUser ? 'user' : existingRole;
 
-  // Profilo: preservato se esiste; bootstrap admin → promax, altri → base
   const existingProfile = normalizeAssignedProfile(currentMvta.assignedProfile || currentData.assignedProfile || profileFromPacchetto(currentData.pacchetto));
-  const bootstrapProfile = bootstrapRole === 'admin' ? 'promax' : 'base';
-  const assignedProfile = isNewUser ? bootstrapProfile : existingProfile;
+  const assignedProfile = isNewUser ? 'base' : existingProfile;
   const pacchetto = normalizePacchetto(assignedProfile);
   const apps = {
     mvta: {
