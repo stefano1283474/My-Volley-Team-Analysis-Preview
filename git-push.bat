@@ -13,10 +13,15 @@ echo.
 git status --short
 echo.
 
+for /f "delims=" %%B in ('git rev-parse --abbrev-ref HEAD') do set BRANCH=%%B
+if "%BRANCH%"=="" set BRANCH=main
+for /f "delims=" %%R in ('git remote') do set REMOTE=%%R
+if "%REMOTE%"=="" set REMOTE=origin
+
 echo ========================================
 echo   Vuoi procedere con il commit e push?
-echo   Branch: master
-echo   Remote: origin
+echo   Branch: %BRANCH%
+echo   Remote: %REMOTE%
 echo ========================================
 echo.
 set /p CONFERMA="Premi S per confermare, qualsiasi altro tasto per annullare: "
@@ -57,7 +62,8 @@ if errorlevel 1 (
 
 echo.
 echo [4/4] Push su GitHub (origin/master)...
-git push origin master
+echo [4/4] Push su GitHub (%REMOTE%/%BRANCH%)...
+git push %REMOTE% %BRANCH%
 if errorlevel 1 (
     echo.
     echo ERRORE durante il push. Verifica la connessione e le credenziali GitHub.

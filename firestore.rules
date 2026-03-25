@@ -37,14 +37,17 @@ service cloud.firestore {
       return request.auth.token.email != null ? request.auth.token.email.lower() : '';
     }
 
-    // Admin determinato esclusivamente dal campo role nel documento utente.
+    // Admin determinato dal campo role nel documento utente.
+    // Controlla sia il campo top-level role che apps.mvta.role per robustezza.
     // Nessun account email hardcoded — il ruolo admin va impostato manualmente
     // in Firestore sul documento users/{email} (campo role: 'admin').
     function isAdminUser() {
       let userRef = /databases/$(database)/documents/users/$(requesterEmail());
+      let data = get(userRef).data;
       return isSignedIn()
         && exists(userRef)
-        && get(userRef).data.role == 'admin';
+        && (data.role == 'admin'
+            || ('apps' in data && 'mvta' in data.apps && data.apps.mvta.role == 'admin'));
     }
 
     // ── Funzioni di condivisione ───────────────────────────────────────────

@@ -959,24 +959,17 @@ export default function App() {
         } catch {}
 
         if (access?.role === 'admin') {
-          try {
-            const [usersList, requestsList, usageRows] = await Promise.all([
-              loadAllUsersAccess(),
-              loadAllProfileUpgradeRequests(),
-              loadAllUserUsageStats(),
-            ]);
-            if (cancelled) return;
-            setAdminUsers(usersList);
-            setProfileRequests(requestsList);
-            setAdminUsageStats(usageRows);
-          } catch (adminErr) {
-            console.warn('[syncAccess] Admin data load failed:', adminErr?.message);
-            if (!cancelled) {
-              setAdminUsers([]);
-              setProfileRequests([]);
-              setAdminUsageStats([]);
-            }
-          }
+          // Carica dati admin in parallelo ma con catch indipendenti
+          // così se una query fallisce (es. indice mancante) le altre funzionano
+          const [usersList, requestsList, usageRows] = await Promise.all([
+            loadAllUsersAccess().catch(e => { console.warn('[syncAccess] loadAllUsersAccess failed:', e?.message); return []; }),
+            loadAllProfileUpgradeRequests().catch(e => { console.warn('[syncAccess] loadAllProfileUpgradeRequests failed:', e?.message); return []; }),
+            loadAllUserUsageStats().catch(e => { console.warn('[syncAccess] loadAllUserUsageStats failed:', e?.message); return []; }),
+          ]);
+          if (cancelled) return;
+          setAdminUsers(usersList);
+          setProfileRequests(requestsList);
+          setAdminUsageStats(usageRows);
           setMyProfileRequest(null);
         } else {
           setAdminUsers([]);
@@ -1029,18 +1022,14 @@ export default function App() {
 
   const refreshAdminUsers = useCallback(async () => {
     if (!isAdmin) return;
-    try {
-      const [usersList, requestsList, usageRows] = await Promise.all([
-        loadAllUsersAccess(),
-        loadAllProfileUpgradeRequests(),
-        loadAllUserUsageStats(),
-      ]);
-      setAdminUsers(usersList);
-      setProfileRequests(requestsList);
-      setAdminUsageStats(usageRows);
-    } catch (err) {
-      console.warn('[refreshAdminUsers] failed:', err?.message);
-    }
+    const [usersList, requestsList, usageRows] = await Promise.all([
+      loadAllUsersAccess().catch(e => { console.warn('[refreshAdminUsers] users failed:', e?.message); return []; }),
+      loadAllProfileUpgradeRequests().catch(e => { console.warn('[refreshAdminUsers] requests failed:', e?.message); return []; }),
+      loadAllUserUsageStats().catch(e => { console.warn('[refreshAdminUsers] usage failed:', e?.message); return []; }),
+    ]);
+    setAdminUsers(usersList);
+    setProfileRequests(requestsList);
+    setAdminUsageStats(usageRows);
   }, [isAdmin]);
 
   useEffect(() => {
