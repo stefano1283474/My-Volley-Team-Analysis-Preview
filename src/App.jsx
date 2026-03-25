@@ -901,14 +901,50 @@ export default function App() {
     const syncAccess = async () => {
       try {
         setIsAccessReady(false);
-        const ensuredAccess = await ensureUserAccessRecord(user);
-        const loadedAccess = await loadCurrentUserAccess(user.uid, user.email || '');
+
+        // ── 1. Ensure user access record (crea/aggiorna doc utente) ──
+        let ensuredAccess = null;
+        try {
+          ensuredAccess = await ensureUserAccessRecord(user);
+        } catch (ensureErr) {
+          console.warn('[syncAccess] ensureUserAccessRecord failed:', ensureErr?.message);
+        }
+
+        // ── 2. Load current user access (lettura Firestore, fonte di verità) ──
+        let loadedAccess = null;
+        try {
+          loadedAccess = await loadCurrentUserAccess(user.uid, user.email || '');
+        } catch (loadErr) {
+          console.warn('[syncAccess] loadCurrentUserAccess failed:', loadErr?.message);
+        }
+
         // loadCurrentUserAccess è la fonte di verità (legge da Firestore).
         // Se il documento non esiste ancora, usiamo ensuredAccess ma forziamo
         // role='user' per evitare che logica locale bypasdi Firestore come fonte
         // di verità per il ruolo admin.
         const access = loadedAccess || (ensuredAccess ? { ...ensuredAccess, role: 'user', assignedProfile: ensuredAccess.assignedProfile || 'base' } : null);
         if (cancelled) return;
+
+        // Se entrambe le operazioni sono fallite, costruisci un profilo minimo
+        // per evitare che l'app crashi. L'utente vedrà un profilo base.
+        if (!access) {
+          console.warn('[syncAccess] Could not load any user access, using minimal fallback');
+          const minimalAccess = {
+            uid: user.uid,
+            email: (user.email || '').toLowerCase(),
+            displayName: user.displayName || '',
+            photoURL: user.photoURL || '',
+            role: 'user',
+            assignedProfile: 'base',
+            pacchetto: 'base',
+            appMembership: 'mvta',
+            apps: { mvta: { enabled: true, role: 'user', assignedProfile: 'base', pacchetto: 'base' }, mvs: { enabled: false, role: 'user', assignedProfile: 'base', pacchetto: 'base' } },
+          };
+          setUserAccess(minimalAccess);
+          setIsAccessReady(true);
+          return;
+        }
+
         setUserAccess(access);
         const assigned = access?.assignedProfile || 'base';
         setActiveProfile((prev) => {
@@ -923,23 +959,35 @@ export default function App() {
         } catch {}
 
         if (access?.role === 'admin') {
-          const [usersList, requestsList, usageRows] = await Promise.all([
-            loadAllUsersAccess(),
-            loadAllProfileUpgradeRequests(),
-            loadAllUserUsageStats(),
-          ]);
-          if (cancelled) return;
-          setAdminUsers(usersList);
-          setProfileRequests(requestsList);
-          setAdminUsageStats(usageRows);
+          try {
+            const [usersList, requestsList, usageRows] = await Promise.all([
+              loadAllUsersAccess(),
+              loadAllProfileUpgradeRequests(),
+              loadAllUserUsageStats(),
+            ]);
+            if (cancelled) return;
+            setAdminUsers(usersList);
+            setProfileRequests(requestsList);
+            setAdminUsageStats(usageRows);
+          } catch (adminErr) {
+            console.warn('[syncAccess] Admin data load failed:', adminErr?.message);
+            if (!cancelled) {
+              setAdminUsers([]);
+              setProfileRequests([]);
+              setAdminUsageStats([]);
+            }
+          }
           setMyProfileRequest(null);
         } else {
           setAdminUsers([]);
           setAdminUsageStats([]);
           setProfileRequests([]);
-          const myRequest = await loadMyProfileUpgradeRequest(user.uid, user.email || '');
-          if (cancelled) return;
-          setMyProfileRequest(myRequest);
+          try {
+            const myRequest = await loadMyProfileUpgradeRequest(user.uid, user.email || '');
+            if (!cancelled) setMyProfileRequest(myRequest);
+          } catch {
+            if (!cancelled) setMyProfileRequest(null);
+          }
           try {
             await recordUserLoginUsage(user, access, {
               section: 'home',
@@ -965,9 +1013,10 @@ export default function App() {
           } catch {}
         }
       } catch (err) {
-        if (!cancelled) {
-          setErrorMsg(`Errore profilo utente: ${err.message}`);
-        }
+        console.warn('[syncAccess] Unexpected outer error:', err?.message);
+        // Non mostrare il banner di errore — le operazioni critiche sono
+        // gestite internamente con try/catch e fallback.
+        // L'app continua con il profilo base o quello che è stato caricato.
       } finally {
         if (!cancelled) {
           setIsAccessReady(true);
@@ -980,14 +1029,18 @@ export default function App() {
 
   const refreshAdminUsers = useCallback(async () => {
     if (!isAdmin) return;
-    const [usersList, requestsList, usageRows] = await Promise.all([
-      loadAllUsersAccess(),
-      loadAllProfileUpgradeRequests(),
-      loadAllUserUsageStats(),
-    ]);
-    setAdminUsers(usersList);
-    setProfileRequests(requestsList);
-    setAdminUsageStats(usageRows);
+    try {
+      const [usersList, requestsList, usageRows] = await Promise.all([
+        loadAllUsersAccess(),
+        loadAllProfileUpgradeRequests(),
+        loadAllUserUsageStats(),
+      ]);
+      setAdminUsers(usersList);
+      setProfileRequests(requestsList);
+      setAdminUsageStats(usageRows);
+    } catch (err) {
+      console.warn('[refreshAdminUsers] failed:', err?.message);
+    }
   }, [isAdmin]);
 
   useEffect(() => {
@@ -1001,7 +1054,7 @@ export default function App() {
         await migrateAdminsToProMax();
         if (!cancelled) await refreshAdminUsers();
       } catch (err) {
-        if (!cancelled) setErrorMsg(`Errore migrazione admin: ${err.message}`);
+        console.warn('[adminMigration] failed:', err?.message);
       }
     };
     run();
@@ -1493,8 +1546,8 @@ export default function App() {
         const [loadedMatches, calData, loadedNews, loadedOffers] = await Promise.all([
           activeTeamId ? loadAllMatches(ownerEmail, activeTeamId) : Promise.resolve([]),
           activeTeamId ? loadCalendar(ownerEmail, activeTeamId) : Promise.resolve(null),
-          loadTeamNews(ownerUid),
-          loadTeamOffers(ownerUid),
+          loadTeamNews(ownerUid).catch(e => { console.warn('[loadData] news failed:', e?.message); return null; }),
+          loadTeamOffers(ownerUid).catch(e => { console.warn('[loadData] offers failed:', e?.message); return null; }),
         ]);
 
         if (cancelled) return;
