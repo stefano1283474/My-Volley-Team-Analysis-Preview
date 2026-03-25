@@ -1426,6 +1426,7 @@ function AggregatedScoutPanel({
           latestMatchMA={latestMatchMA}
           lineMode={lineMode}
           forceOpenCommentTick={forceOpenCommentTick}
+          matchAnalytics={matchAnalytics}
         />
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <DetailedOppStatCard title="Battuta" data={cardsAgg.serve} type="serve" />
@@ -2068,7 +2069,7 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
   );
 }
 
-function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, activeOpponent, lineMode = 'attitude') {
+function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, activeOpponent, lineMode = 'attitude', matchAnalytics = []) {
   if (!selectedMatchMA || !selectedOppAgg) return null;
 
   const match = selectedMatchMA.match;
@@ -2682,7 +2683,398 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, ac
     sections.push({ id: 'chain', title: 'Catena del Gioco', color: 'emerald', items: chainItems });
   }
 
-  // ─── SECTION 5: SINTESI PER L'ALLENATORE ─────────────────────────────────
+  // ─── SECTION: PERFORMANCE CONTESTUALE (Team e Avversario vs media) ──────
+  const perfItems = [];
+
+  // Helper: compute a single fundamental metric for a given raw-data object
+  const metricFromRaw = (data, fundKey) => {
+    if (!data || typeof data !== 'object') return null;
+    const total = Number(data.tot || 0);
+    if (!Number.isFinite(total) || total <= 0) return null;
+    return teamMetricPct(data, null, fundKey);
+  };
+
+  // Map lineMode → seasonTeamAvg property
+  const perfAvgKey = { efficienza: 'efficiency', efficacia: 'efficacy', mediaPond: 'mediaPond', mediaPct: 'mediaPct', attitude: 'attitude' }[lineMode] || 'efficiency';
+
+  // --- Nostra squadra vs media stagionale ---
+  if (seasonTeamAvg) {
+    const teamDeltas = [];
+    for (const fd of fundDefs) {
+      const matchVal = metricFromRaw(team?.[fd.key], fd.key);
+      const avgVal = seasonTeamAvg?.[fd.key]?.[perfAvgKey];
+      if (matchVal !== null && Number.isFinite(avgVal)) {
+        teamDeltas.push({ ...fd, matchVal, avgVal, delta: matchVal - avgVal });
+      }
+    }
+    if (teamDeltas.length > 0) {
+      const overPerf = teamDeltas.filter(d => d.delta > (isMediaPondComment ? 0.1 : 3));
+      const underPerf = teamDeltas.filter(d => d.delta < -(isMediaPondComment ? 0.1 : 3));
+      if (overPerf.length > 0 || underPerf.length > 0) {
+        const avgDelta = teamDeltas.reduce((s, d) => s + d.delta, 0) / teamDeltas.length;
+        const overallLabel = avgDelta > (isMediaPondComment ? 0.05 : 2) ? 'sopra la media stagionale' : avgDelta < -(isMediaPondComment ? 0.05 : 2) ? 'sotto la media stagionale' : 'in linea con la media stagionale';
+        perfItems.push({
+          text: `La nostra squadra ha giocato complessivamente ${overallLabel}.${overPerf.length > 0 ? ` Sopra media in: ${overPerf.map(d => d.label).join(', ')}.` : ''}${underPerf.length > 0 ? ` Sotto media in: ${underPerf.map(d => d.label).join(', ')}.` : ''}`,
+          positive: avgDelta > 0,
+          tooltip: {
+            label: `Nostra squadra vs media stagionale (${metricLabel})`,
+            values: teamDeltas.map(d => `${d.label}: ${isMediaPondComment ? d.matchVal.toFixed(2) : d.matchVal.toFixed(1) + '%'} vs media ${isMediaPondComment ? d.avgVal.toFixed(2) : d.avgVal.toFixed(1) + '%'} (${d.delta > 0 ? '+' : ''}${isMediaPondComment ? d.delta.toFixed(2) : d.delta.toFixed(1) + '%'})`)
+          }
+        });
+      }
+    }
+  }
+
+  // --- Avversario vs sua media stagionale ---
+  if (seasonAgg && selectedOppAgg) {
+    const oppFundKeys = [
+      { key: 'serve', label: 'Battuta' },
+      { key: 'attack', label: 'Attacco' },
+      { key: 'defense', label: 'Difesa' },
+      { key: 'reception', label: 'Ricezione' },
+    ];
+    const oppAvgMetricKey = lineMode === 'efficacia' || lineMode === 'efficacy' ? 'efficacy'
+      : lineMode === 'mediaPond' ? 'mediaPond'
+      : lineMode === 'mediaPct' ? 'mediaPct'
+      : lineMode === 'attitude' ? 'attitude'
+      : 'efficiency';
+    const oppDeltas = [];
+    for (const fd of oppFundKeys) {
+      const matchOpp = selectedOppAgg?.[fd.key]?.[oppAvgMetricKey];
+      const seasonOpp = seasonAgg?.[fd.key]?.[oppAvgMetricKey];
+      if (Number.isFinite(matchOpp) && Number.isFinite(seasonOpp)) {
+        const mV = toPct(matchOpp);
+        const sV = toPct(seasonOpp);
+        if (mV !== null && sV !== null) {
+          oppDeltas.push({ ...fd, matchVal: isMediaPondComment ? matchOpp : mV, avgVal: isMediaPondComment ? seasonOpp : sV, delta: (isMediaPondComment ? matchOpp : mV) - (isMediaPondComment ? seasonOpp : sV) });
+        }
+      }
+    }
+    if (oppDeltas.length > 0) {
+      const avgOppDelta = oppDeltas.reduce((s, d) => s + d.delta, 0) / oppDeltas.length;
+      const oppOverall = avgOppDelta > (isMediaPondComment ? 0.05 : 2) ? 'ha sovra-performato' : avgOppDelta < -(isMediaPondComment ? 0.05 : 2) ? 'ha sotto-performato' : 'ha giocato in linea con la sua media';
+      const oppOver = oppDeltas.filter(d => d.delta > (isMediaPondComment ? 0.1 : 3));
+      const oppUnder = oppDeltas.filter(d => d.delta < -(isMediaPondComment ? 0.1 : 3));
+      perfItems.push({
+        text: `${oppName} ${oppOverall} rispetto alla propria media stagionale.${oppOver.length > 0 ? ` Sopra media in: ${oppOver.map(d => d.label).join(', ')}.` : ''}${oppUnder.length > 0 ? ` Sotto media in: ${oppUnder.map(d => d.label).join(', ')}.` : ''}`,
+        positive: avgOppDelta < 0, // opponent under-performing is positive for us
+        tooltip: {
+          label: `${oppName} vs media stagionale (${metricLabel})`,
+          values: oppDeltas.map(d => `${d.label}: ${isMediaPondComment ? d.matchVal.toFixed(2) : d.matchVal.toFixed(1) + '%'} vs media ${isMediaPondComment ? d.avgVal.toFixed(2) : d.avgVal.toFixed(1) + '%'} (${d.delta > 0 ? '+' : ''}${isMediaPondComment ? d.delta.toFixed(2) : d.delta.toFixed(1) + '%'})`)
+        }
+      });
+    }
+  }
+
+  if (perfItems.length > 0) {
+    sections.push({ id: 'performance', title: 'Performance Contestuale', color: 'cyan', items: perfItems });
+  }
+
+  // ─── SECTION: PROTAGONISTI DELLA PARTITA ────────────────────────────────
+  const playerItems = [];
+
+  // Gather player data: merge playerStats, playerReception, playerDefense
+  const pStats = match?.riepilogo?.playerStats || [];
+  const pRec = match?.riepilogo?.playerReception || [];
+  const pDef = match?.riepilogo?.playerDefense || [];
+  const roster = match?.roster || [];
+
+  // Compute player season averages from matchAnalytics
+  const playerSeasonAvg = {};
+  if (matchAnalytics.length > 1) {
+    const playerAccum = {}; // { playerNumber: { serve: [], attack: [], defense: [], reception: [] } }
+    for (const ma of matchAnalytics) {
+      if (ma.match?.id === match?.id) continue; // exclude current match for comparison
+      const ps = ma.match?.riepilogo?.playerStats || [];
+      const pr = ma.match?.riepilogo?.playerReception || [];
+      const pd = ma.match?.riepilogo?.playerDefense || [];
+      for (const p of ps) {
+        if (!p.number) continue;
+        if (!playerAccum[p.number]) playerAccum[p.number] = { name: p.name, serve: [], attack: [], defense: [], reception: [] };
+        const pn = playerAccum[p.number];
+        // compute metric for each fundamental
+        const sv = p.serve; const at = p.attack;
+        if (sv?.tot > 0) pn.serve.push(teamMetricPct(sv, null, 'serve'));
+        if (at?.tot > 0) pn.attack.push(teamMetricPct(at, null, 'attack'));
+      }
+      for (const p of pr) {
+        if (!p.number || !playerAccum[p.number]) {
+          if (p.number && !playerAccum[p.number]) playerAccum[p.number] = { name: p.name, serve: [], attack: [], defense: [], reception: [] };
+          else continue;
+        }
+        if (p.tot > 0) playerAccum[p.number].reception.push(teamMetricPct(p, null, 'reception'));
+      }
+      for (const p of pd) {
+        if (!p.number || !playerAccum[p.number]) {
+          if (p.number && !playerAccum[p.number]) playerAccum[p.number] = { name: p.name, serve: [], attack: [], defense: [], reception: [] };
+          else continue;
+        }
+        if (p.tot > 0) playerAccum[p.number].defense.push(teamMetricPct(p, null, 'defense'));
+      }
+    }
+    // Compute averages
+    for (const [num, acc] of Object.entries(playerAccum)) {
+      const avg = {};
+      for (const f of ['serve', 'attack', 'defense', 'reception']) {
+        const vals = acc[f].filter(v => v !== null && Number.isFinite(v));
+        avg[f] = vals.length >= 2 ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+      }
+      avg.name = acc.name;
+      playerSeasonAvg[num] = avg;
+    }
+  }
+
+  // Build per-player performance scores for this match
+  const playerPerf = [];
+  for (const p of pStats) {
+    if (!p.number) continue;
+    const recData = pRec.find(r => r.number === p.number);
+    const defData = pDef.find(d => d.number === p.number);
+    const avg = playerSeasonAvg[p.number];
+    const rosterEntry = roster.find(r => r.number === p.number);
+    const role = rosterEntry?.role || '';
+    const nick = rosterEntry?.nickname || (p.name || '').trim().split(/\s+/)[0] || p.number;
+    const deltas = [];
+
+    const fundMap = [
+      { key: 'serve', label: 'Battuta', data: p.serve },
+      { key: 'attack', label: 'Attacco', data: p.attack },
+      { key: 'reception', label: 'Ricezione', data: recData },
+      { key: 'defense', label: 'Difesa', data: defData },
+    ];
+
+    for (const fm of fundMap) {
+      const matchVal = fm.data?.tot > 0 ? teamMetricPct(fm.data, null, fm.key) : null;
+      const avgVal = avg?.[fm.key];
+      if (matchVal !== null && avgVal !== null && Number.isFinite(avgVal)) {
+        deltas.push({ key: fm.key, label: fm.label, matchVal, avgVal, delta: matchVal - avgVal, tot: fm.data?.tot || 0 });
+      }
+    }
+
+    const significantDeltas = deltas.filter(d => d.tot >= 3); // at least 3 actions
+    const avgDelta = significantDeltas.length > 0 ? significantDeltas.reduce((s, d) => s + d.delta, 0) / significantDeltas.length : 0;
+    const totalActions = fundMap.reduce((s, fm) => s + (fm.data?.tot || 0), 0);
+
+    playerPerf.push({ number: p.number, name: p.name, nick, role, deltas: significantDeltas, avgDelta, totalActions, points: p.points });
+  }
+
+  // Sort by average delta to find best/worst performers
+  const rankedPlayers = playerPerf.filter(p => p.deltas.length > 0 && p.totalActions >= 5).sort((a, b) => b.avgDelta - a.avgDelta);
+
+  if (rankedPlayers.length > 0) {
+    // Best player
+    const best = rankedPlayers[0];
+    if (best.avgDelta > (isMediaPondComment ? 0.05 : 1)) {
+      const bestFunds = best.deltas.filter(d => d.delta > 0).sort((a, b) => b.delta - a.delta);
+      playerItems.push({
+        text: `Best performer: ${best.nick} (#${best.number}) — ha giocato ${isMediaPondComment ? 'significativamente' : best.avgDelta > (isMediaPondComment ? 0.3 : 10) ? 'molto' : ''} sopra la propria media${bestFunds.length > 0 ? `, soprattutto in ${bestFunds.slice(0, 2).map(d => d.label.toLowerCase()).join(' e ')}` : ''}.`,
+        positive: true,
+        tooltip: {
+          label: `${best.nick} — dettaglio performance`,
+          values: best.deltas.map(d => `${d.label}: ${isMediaPondComment ? d.matchVal.toFixed(2) : d.matchVal.toFixed(1) + '%'} vs media ${isMediaPondComment ? d.avgVal.toFixed(2) : d.avgVal.toFixed(1) + '%'} (${d.delta > 0 ? '+' : ''}${isMediaPondComment ? d.delta.toFixed(2) : d.delta.toFixed(1) + '%'})`)
+        }
+      });
+    }
+
+    // Worst player
+    const worst = rankedPlayers[rankedPlayers.length - 1];
+    if (worst.avgDelta < -(isMediaPondComment ? 0.05 : 1) && worst.number !== best.number) {
+      const worstFunds = worst.deltas.filter(d => d.delta < 0).sort((a, b) => a.delta - b.delta);
+      playerItems.push({
+        text: `Sottotono: ${worst.nick} (#${worst.number}) — ha giocato sotto la propria media${worstFunds.length > 0 ? `, in particolare in ${worstFunds.slice(0, 2).map(d => d.label.toLowerCase()).join(' e ')}` : ''}. Fondamentale da monitorare.`,
+        positive: false,
+        tooltip: {
+          label: `${worst.nick} — dettaglio performance`,
+          values: worst.deltas.map(d => `${d.label}: ${isMediaPondComment ? d.matchVal.toFixed(2) : d.matchVal.toFixed(1) + '%'} vs media ${isMediaPondComment ? d.avgVal.toFixed(2) : d.avgVal.toFixed(1) + '%'} (${d.delta > 0 ? '+' : ''}${isMediaPondComment ? d.delta.toFixed(2) : d.delta.toFixed(1) + '%'})`)
+        }
+      });
+    }
+
+    // Per-fundamental MVP
+    const fundMVPs = {};
+    for (const fd of fundDefs) {
+      const candidates = playerPerf.filter(p => {
+        const d = p.deltas.find(dd => dd.key === fd.key);
+        return d && d.tot >= 3;
+      });
+      if (candidates.length >= 2) {
+        const sorted = candidates.sort((a, b) => {
+          const da = a.deltas.find(d => d.key === fd.key);
+          const db = b.deltas.find(d => d.key === fd.key);
+          return (db?.matchVal || 0) - (da?.matchVal || 0);
+        });
+        fundMVPs[fd.key] = sorted[0];
+      }
+    }
+    const mvpEntries = Object.entries(fundMVPs).filter(([, p]) => p);
+    if (mvpEntries.length > 0) {
+      playerItems.push({
+        text: `Migliori per fondamentale: ${mvpEntries.map(([key, p]) => {
+          const fd = fundDefs.find(f => f.key === key);
+          const d = p.deltas.find(dd => dd.key === key);
+          return `${fd.label}: ${p.nick} (${isMediaPondComment ? d?.matchVal?.toFixed(2) : d?.matchVal?.toFixed(1) + '%'})`;
+        }).join('; ')}.`,
+        positive: null,
+        tooltip: {
+          label: 'MVP per fondamentale',
+          values: mvpEntries.map(([key, p]) => {
+            const fd = fundDefs.find(f => f.key === key);
+            const d = p.deltas.find(dd => dd.key === key);
+            return `${fd.label}: ${p.nick} #${p.number} — ${isMediaPondComment ? d?.matchVal?.toFixed(2) : d?.matchVal?.toFixed(1) + '%'} (media: ${isMediaPondComment ? d?.avgVal?.toFixed(2) : d?.avgVal?.toFixed(1) + '%'})`;
+          })
+        }
+      });
+    }
+  }
+
+  if (playerItems.length > 0) {
+    sections.push({ id: 'players', title: 'Protagonisti della Partita', color: 'sky', items: playerItems });
+  }
+
+  // ─── SECTION: ANALISI PALLEGGIATORE ─────────────────────────────────────
+  const setterItems = [];
+
+  // Find setter(s) in roster
+  const setters = roster.filter(r => r.role === 'P1' || r.role === 'P2');
+  const gioco = match?.gioco;
+
+  if (setters.length > 0 && gioco) {
+    const setter = setters[0]; // primary setter
+    const setterNick = setter.nickname || (setter.name || setter.surname || '').trim().split(/\s+/)[0] || '#' + setter.number;
+
+    // Attack distribution analysis from gioco data
+    const atkFromRec = gioco.attackFromReception || {};
+    const atkFromDef = gioco.attackFromDefense || {};
+
+    // Collect attack distribution per role
+    const roleAttacks = {};
+    const allAtkEntries = [...(atkFromRec.R5 || []), ...(atkFromRec.R4 || []), ...(atkFromRec.R3 || []),
+                           ...(atkFromDef.D5 || []), ...(atkFromDef.D4 || []), ...(atkFromDef.D3 || [])];
+    for (const entry of allAtkEntries) {
+      if (!entry.role) continue;
+      if (!roleAttacks[entry.role]) roleAttacks[entry.role] = { attacks: 0, pts: 0, errs: 0 };
+      roleAttacks[entry.role].attacks += entry.attacks || 0;
+      // Parse pointsStr "12-3" → pts=12, errs=3
+      if (entry.pointsStr) {
+        const parts = entry.pointsStr.split('-');
+        roleAttacks[entry.role].pts += parseInt(parts[0]) || 0;
+        roleAttacks[entry.role].errs += parseInt(parts[1]) || 0;
+      }
+    }
+
+    const totalDistributed = Object.values(roleAttacks).reduce((s, r) => s + r.attacks, 0);
+
+    if (totalDistributed > 0) {
+      // Distribution analysis
+      const roleEntries = Object.entries(roleAttacks)
+        .filter(([, v]) => v.attacks > 0)
+        .sort((a, b) => b[1].attacks - a[1].attacks);
+
+      const topAttacker = roleEntries[0];
+      const topPct = ((topAttacker[1].attacks / totalDistributed) * 100).toFixed(0);
+      const isBalanced = roleEntries.length >= 3 && (topAttacker[1].attacks / totalDistributed) < 0.40;
+
+      // Setter distribution text
+      setterItems.push({
+        text: `Regia di ${setterNick}: ${totalDistributed} palloni distribuiti. ${isBalanced ? 'Distribuzione equilibrata tra i terminali' : `Distribuzione polarizzata su ${topAttacker[0]} (${topPct}%)`}.`,
+        positive: isBalanced,
+        tooltip: {
+          label: `Distribuzione attacco (${setterNick})`,
+          values: roleEntries.map(([role, data]) => {
+            const pct = ((data.attacks / totalDistributed) * 100).toFixed(0);
+            const killRate = data.attacks > 0 ? ((data.pts / data.attacks) * 100).toFixed(0) : '0';
+            return `${role}: ${data.attacks} attacchi (${pct}%) → ${data.pts} pts, kill rate ${killRate}%`;
+          })
+        }
+      });
+
+      // Attacker efficiency by role — who benefited most from the setter's choices
+      const attackerEfficiency = roleEntries
+        .filter(([, v]) => v.attacks >= 3)
+        .map(([role, data]) => ({ role, attacks: data.attacks, killRate: data.attacks > 0 ? (data.pts / data.attacks) * 100 : 0, errRate: data.attacks > 0 ? (data.errs / data.attacks) * 100 : 0 }))
+        .sort((a, b) => b.killRate - a.killRate);
+
+      if (attackerEfficiency.length >= 2) {
+        const bestTerminal = attackerEfficiency[0];
+        const worstTerminal = attackerEfficiency[attackerEfficiency.length - 1];
+        setterItems.push({
+          text: `Terminale più efficace: ${bestTerminal.role} (kill rate ${bestTerminal.killRate.toFixed(0)}% su ${bestTerminal.attacks} attacchi). ${worstTerminal.killRate < 25 && worstTerminal.attacks >= 5 ? `Attenzione: ${worstTerminal.role} in difficoltà (kill rate ${worstTerminal.killRate.toFixed(0)}%).` : ''}`,
+          positive: bestTerminal.killRate >= 30,
+          tooltip: {
+            label: 'Efficacia per terminale d\'attacco',
+            values: attackerEfficiency.map(a => `${a.role}: kill rate ${a.killRate.toFixed(1)}%, err ${a.errRate.toFixed(1)}% (${a.attacks} att.)`)
+          }
+        });
+      }
+    }
+
+    // Setter's own technical performance (defense, serve, block from their playerStats)
+    const setterPS = pStats.find(p => p.number === setter.number);
+    const setterDef = pDef.find(p => p.number === setter.number);
+    const setterAvg = playerSeasonAvg[setter.number];
+
+    if (setterPS || setterDef) {
+      const setterTech = [];
+      if (setterDef?.tot > 0) {
+        const defVal = teamMetricPct(setterDef, null, 'defense');
+        const defAvg = setterAvg?.defense;
+        if (defVal !== null) {
+          const cmp = defAvg !== null && Number.isFinite(defAvg) ? (defVal > defAvg + 3 ? '(sopra media)' : defVal < defAvg - 3 ? '(sotto media)' : '(in media)') : '';
+          setterTech.push(`Difesa: ${isMediaPondComment ? defVal.toFixed(2) : defVal.toFixed(1) + '%'} ${cmp}`);
+        }
+      }
+      if (setterPS?.serve?.tot > 0) {
+        const srvVal = teamMetricPct(setterPS.serve, null, 'serve');
+        const srvAvg = setterAvg?.serve;
+        if (srvVal !== null) {
+          const cmp = srvAvg !== null && Number.isFinite(srvAvg) ? (srvVal > srvAvg + 3 ? '(sopra media)' : srvVal < srvAvg - 3 ? '(sotto media)' : '(in media)') : '';
+          setterTech.push(`Battuta: ${isMediaPondComment ? srvVal.toFixed(2) : srvVal.toFixed(1) + '%'} ${cmp}`);
+        }
+      }
+      if (setterTech.length > 0) {
+        setterItems.push({
+          text: `Tecnica ${setterNick}: ${setterTech.join('; ')}.`,
+          positive: null,
+          tooltip: {
+            label: `${setterNick} — performance tecnica individuale`,
+            values: setterTech
+          }
+        });
+      }
+    }
+
+    // Quality of sets: analyze R5 → attack distribution specifically
+    const r5Attacks = atkFromRec.R5 || [];
+    const r4Attacks = atkFromRec.R4 || [];
+    const r5Total = r5Attacks.reduce((s, e) => s + (e.attacks || 0), 0);
+    const r5Pts = r5Attacks.reduce((s, e) => { const p = e.pointsStr?.split('-'); return s + (parseInt(p?.[0]) || 0); }, 0);
+    const r4Total = r4Attacks.reduce((s, e) => s + (e.attacks || 0), 0);
+    const r4Pts = r4Attacks.reduce((s, e) => { const p = e.pointsStr?.split('-'); return s + (parseInt(p?.[0]) || 0); }, 0);
+
+    if (r5Total >= 3 && r4Total >= 3) {
+      const r5KR = (r5Pts / r5Total * 100).toFixed(0);
+      const r4KR = (r4Pts / r4Total * 100).toFixed(0);
+      const delta = r5Pts / r5Total * 100 - r4Pts / r4Total * 100;
+      setterItems.push({
+        text: `Conversione in attacco: da ricezione perfetta (R5) kill rate ${r5KR}% (${r5Total} att.), da ricezione positiva (R4) kill rate ${r4KR}% (${r4Total} att.). ${Math.abs(delta) > 15 ? `Il calo di ${Math.abs(delta).toFixed(0)}% suggerisce che la regia dipende molto dalla qualità della ricezione.` : 'Buona capacità di mantenere qualità anche con palla meno precisa.'}`,
+        positive: delta <= 15,
+        tooltip: {
+          label: 'Conversione attacco per qualità ricezione',
+          values: [
+            `Da R5: ${r5Pts} pts su ${r5Total} att. = ${r5KR}%`,
+            `Da R4: ${r4Pts} pts su ${r4Total} att. = ${r4KR}%`,
+            `Delta: ${delta.toFixed(1)}%`,
+          ]
+        }
+      });
+    }
+  }
+
+  if (setterItems.length > 0) {
+    sections.push({ id: 'setter', title: 'Analisi Palleggiatore', color: 'teal', items: setterItems });
+  }
+
+  // ─── SECTION: SINTESI PER L'ALLENATORE ─────────────────────────────────
   const synthItems = [];
 
   // Map lineMode → property key in seasonTeamAvg (same scale as fg.ourEff)
@@ -2791,6 +3183,7 @@ function OpponentScoutComparisonChart({
   onSelectOpponent,
   lineMode = 'efficacia',
   forceOpenCommentTick = 0,
+  matchAnalytics = [],
 }) {
   const [showNoi, setShowNoi] = useState(true);
   const [showNoiMedi, setShowNoiMedi] = useState(false);
@@ -3069,8 +3462,10 @@ function OpponentScoutComparisonChart({
               selectedMatchMA={selectedMatchMA}
               selectedOppAgg={selectedOppAgg}
               seasonTeamAvg={seasonTeamAvg}
+              seasonAgg={seasonAgg}
               activeOpponent={activeOpponent}
               lineMode={lineMode}
+              matchAnalytics={matchAnalytics}
             />
           </div>
         </div>
@@ -3094,8 +3489,8 @@ function InfoTooltip({ label, values }) {
   );
 }
 
-function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, activeOpponent, lineMode = 'attitude' }) {
-  const sections = generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, activeOpponent, lineMode);
+function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, activeOpponent, lineMode = 'attitude', matchAnalytics = [] }) {
+  const sections = generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, activeOpponent, lineMode, matchAnalytics);
 
   if (!sections) {
     return <p className="text-sm text-gray-300 italic">Dati insufficienti per generare un'analisi completa.</p>;
@@ -3107,6 +3502,9 @@ function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, activeO
     amber:   { title: 'text-amber-300',   border: 'border-amber-500/20',   bg: 'bg-amber-500/5'   },
     emerald: { title: 'text-emerald-300', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5' },
     rose:    { title: 'text-rose-300',    border: 'border-rose-500/20',    bg: 'bg-rose-500/5'    },
+    cyan:    { title: 'text-cyan-300',    border: 'border-cyan-500/20',    bg: 'bg-cyan-500/5'    },
+    sky:     { title: 'text-sky-300',     border: 'border-sky-500/20',     bg: 'bg-sky-500/5'     },
+    teal:    { title: 'text-teal-300',    border: 'border-teal-500/20',    bg: 'bg-teal-500/5'    },
   };
 
   return (
