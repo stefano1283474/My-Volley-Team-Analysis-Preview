@@ -30,11 +30,6 @@ import { computeStatsFromMVSMatch } from './dataParser';
 // ─── Path helpers ────────────────────────────────────────────────────────────
 
 const MVS_USERS_ROOT = 'users';
-// ── Consolidamento: tutte le collection sotto users/ ──
-// Legacy root collection (non più usate, mantenute per backward compat in lettura):
-const LEGACY_SHARED_ACCESS_COLLECTION = 'volley_team_analysis_6_0_shared_access';
-const LEGACY_SHARE_TOKENS_COLLECTION = 'volley_team_analysis_6_0_share_tokens';
-const LEGACY_USER_USAGE_COLLECTION = 'volley_team_analysis_6_0_user_usage';
 const PROFILE_VALUES = ['base', 'pro', 'promax'];
 
 function resolveTeamId(teamId) {
@@ -63,9 +58,7 @@ function teamCalendarDocRef(userId, teamId) {
   return doc(teamDocRef(userId, teamId), 'calendar', 'current');
 }
 
-function legacyUserCalendarDocRef(userId, teamId) {
-  return doc(db, MVS_USERS_ROOT, userId, 'calendari', resolveTeamId(teamId));
-}
+
 
 function matchDocRef(userId, matchId, teamId) {
   return doc(teamMatchesCol(userId, teamId), matchId);
@@ -75,18 +68,8 @@ function shareAccessDocRef(ownerUid) {
   // Nuovo path: users/{ownerUid}/shared_access/config
   return doc(db, MVS_USERS_ROOT, ownerUid, 'shared_access', 'config');
 }
-function legacyShareAccessDocRef(ownerUid) {
-  return doc(db, LEGACY_SHARED_ACCESS_COLLECTION, ownerUid);
-}
-
 function shareTokenDocRef(token) {
-  // Nuovo path: users/{ownerUid}/share_tokens/{token}
-  // Nota: i token devono ora essere sotto l'utente che li crea.
-  // Per retrocompatibilità in lettura, si controlla anche il vecchio path.
   return doc(db, MVS_USERS_ROOT, '_global_tokens', 'share_tokens', token);
-}
-function legacyShareTokenDocRef(token) {
-  return doc(db, LEGACY_SHARE_TOKENS_COLLECTION, token);
 }
 
 function usersRootCol() {
@@ -107,13 +90,6 @@ function userUsageCol() {
 
 function userUsageDocRefByUserDocId(userDocId) {
   return doc(db, MVS_USERS_ROOT, userDocId, 'usage', 'log');
-}
-
-function legacyUidUserUsageDocRef(uid) {
-  return doc(db, MVS_USERS_ROOT, uid, 'usage', 'log');
-}
-function legacyUserUsageDocRef(uid) {
-  return doc(db, LEGACY_USER_USAGE_COLLECTION, uid);
 }
 
 // ─── Utility: strip undefined fields (Firestore non li accetta) ──────────────
@@ -739,14 +715,7 @@ export async function loadCalendar(userId, teamId = '') {
     }
   }
 
-  const legacyRef = legacyUserCalendarDocRef(ownerId, teamId);
-  const legacySnap = await getDoc(legacyRef);
-  if (!legacySnap.exists()) return null;
-  const data = legacySnap.data() || {};
-  return {
-    calendar: Array.isArray(data.calendar) ? data.calendar : [],
-    standings: Array.isArray(data.standings) ? data.standings : [],
-  };
+  return null;
 }
 
 export async function clearArchiveData(userId, teamId = '') {
@@ -766,7 +735,6 @@ export async function clearArchiveData(userId, teamId = '') {
     standings: [],
     reviews: {},
   }), { merge: true }));
-  tasks.push(deleteDoc(legacyUserCalendarDocRef(ownerId, teamId)).catch(() => {}));
   await Promise.all(tasks);
 }
 
@@ -997,10 +965,6 @@ export async function resolveSharedAccess(token, user) {
     return { granted: false, reason: 'missing_context' };
   }
   let tokenSnap = await getDoc(shareTokenDocRef(token));
-  // Fallback: legacy root collection per i token
-  if (!tokenSnap.exists()) {
-    tokenSnap = await getDoc(legacyShareTokenDocRef(token));
-  }
   if (!tokenSnap.exists()) {
     return { granted: false, reason: 'not_found' };
   }
@@ -1010,10 +974,6 @@ export async function resolveSharedAccess(token, user) {
     return { granted: false, reason: 'disabled' };
   }
   let snap = await getDoc(shareAccessDocRef(tokenData.ownerUid));
-  // Fallback: legacy root collection per share access
-  if (!snap.exists()) {
-    snap = await getDoc(legacyShareAccessDocRef(tokenData.ownerUid));
-  }
   if (!snap.exists()) {
     return { granted: false, reason: 'not_found' };
   }
@@ -1139,7 +1099,11 @@ export async function ensureUserAccessRecord(user) {
   });
   try {
     await setDoc(ref, payload, { merge: true });
-  } catch {}
+  } catch (err) {
+    console.warn('[ensureUserAccessRecord] setDoc failed:', err?.message || err);
+    // Non bloccare il login: il profilo verrà letto da loadCurrentUserAccess.
+    // Ma log dell'errore per debug.
+  }
 
   return { uid, email, displayName: user.displayName || '', photoURL: user.photoURL || '', role, assignedProfile, pacchetto, appMembership, apps };
 }
@@ -1426,14 +1390,8 @@ export async function updateUserAssignedProfile(uid, assignedProfile, email = ''
 
 // ─── Team News (Bacheca) ──────────────────────────────────────────────────────
 
-const LEGACY_NEWS_COLLECTION = 'volley_team_analysis_6_0_news';
-
 function newsDocRef(ownerUid) {
-  // Nuovo path: users/{ownerUid}/news/posts
   return doc(db, MVS_USERS_ROOT, ownerUid, 'news', 'posts');
-}
-function legacyNewsDocRef(ownerUid) {
-  return doc(db, LEGACY_NEWS_COLLECTION, ownerUid);
 }
 
 /**
@@ -1443,12 +1401,8 @@ function legacyNewsDocRef(ownerUid) {
 export async function loadTeamNews(ownerUid) {
   if (!ownerUid) return [];
   try {
-    // Prova nuovo path sotto users/
     const snap = await getDoc(newsDocRef(ownerUid));
     if (snap.exists()) return snap.data()?.posts || [];
-    // Fallback: legacy root collection
-    const legacySnap = await getDoc(legacyNewsDocRef(ownerUid));
-    if (legacySnap.exists()) return legacySnap.data()?.posts || [];
     return [];
   } catch (err) {
     if (err?.code !== 'permission-denied') {
@@ -1469,14 +1423,8 @@ export async function saveTeamNews(ownerUid, posts) {
 
 // ─── Team Offerte ─────────────────────────────────────────────────────────────
 
-const LEGACY_OFFERS_COLLECTION = 'volley_team_analysis_6_0_offers';
-
 function offersDocRef(ownerUid) {
-  // Nuovo path: users/{ownerUid}/offers/list
   return doc(db, MVS_USERS_ROOT, ownerUid, 'offers', 'list');
-}
-function legacyOffersDocRef(ownerUid) {
-  return doc(db, LEGACY_OFFERS_COLLECTION, ownerUid);
 }
 
 /**
@@ -1488,9 +1436,6 @@ export async function loadTeamOffers(ownerUid) {
   try {
     const snap = await getDoc(offersDocRef(ownerUid));
     if (snap.exists()) return snap.data()?.offers || [];
-    // Fallback: legacy root collection
-    const legacySnap = await getDoc(legacyOffersDocRef(ownerUid));
-    if (legacySnap.exists()) return legacySnap.data()?.offers || [];
     return [];
   } catch (err) {
     if (err?.code !== 'permission-denied') {
@@ -1594,12 +1539,7 @@ export async function recordUserLoginUsage(user, access = {}, context = {}) {
   const ref = userUsageDocRefByUserDocId(userDocId);
   let existing = {};
   try {
-    let snap = await getDoc(ref);
-    if (!snap.exists() && userDocId !== uid) {
-      const legacyUidSnap = await getDoc(legacyUidUserUsageDocRef(uid));
-      if (legacyUidSnap.exists()) snap = legacyUidSnap;
-    }
-    if (!snap.exists()) snap = await getDoc(legacyUserUsageDocRef(uid));
+    const snap = await getDoc(ref);
     existing = snap.exists() ? (snap.data() || {}) : {};
   } catch {}
 
@@ -1631,11 +1571,7 @@ export async function recordUserSectionUsage(userOrUid, sectionId) {
   const ref = userUsageDocRefByUserDocId(userDocId);
   let existing = {};
   try {
-    let snap = await getDoc(ref);
-    if (!snap.exists() && userDocId !== uid) {
-      const legacyUidSnap = await getDoc(legacyUidUserUsageDocRef(uid));
-      if (legacyUidSnap.exists()) snap = legacyUidSnap;
-    }
+    const snap = await getDoc(ref);
     existing = snap.exists() ? (snap.data() || {}) : {};
   } catch {}
   const counters = { ...(existing.sectionCounters || {}) };
@@ -1696,7 +1632,7 @@ export async function loadAllUserUsageStats() {
 
 // ─── Admin Content globale (Sistema posts + Offerte con visibilità) ───────────
 //
-// Documento: volley_team_analysis_6_0_admin_content/global
+// Documento: users/_admin/content/global
 //   { posts: [...], offers: [...], updatedAt }
 //
 // visibility shape: { mode: 'all'|'profiles'|'users', profiles?: string[], userIds?: string[] }
@@ -1704,15 +1640,10 @@ export async function loadAllUserUsageStats() {
 //   'profiles' → utenti con assignedProfile in vis.profiles
 //   'users'    → utenti con uid in vis.userIds
 
-const LEGACY_ADMIN_CONTENT_COLLECTION = 'volley_team_analysis_6_0_admin_content';
 const ADMIN_CONTENT_DOC_ID = 'global';
 
 function adminContentRef() {
-  // Nuovo path: users/_admin/content/global
   return doc(db, MVS_USERS_ROOT, '_admin', 'content', ADMIN_CONTENT_DOC_ID);
-}
-function legacyAdminContentRef() {
-  return doc(db, LEGACY_ADMIN_CONTENT_COLLECTION, ADMIN_CONTENT_DOC_ID);
 }
 
 export async function loadAdminContent() {
@@ -1720,15 +1651,6 @@ export async function loadAdminContent() {
     const snap = await getDoc(adminContentRef());
     if (snap.exists()) {
       const data = snap.data() || {};
-      return {
-        posts:  Array.isArray(data.posts)  ? data.posts  : [],
-        offers: Array.isArray(data.offers) ? data.offers : [],
-      };
-    }
-    // Fallback: legacy root collection
-    const legacySnap = await getDoc(legacyAdminContentRef());
-    if (legacySnap.exists()) {
-      const data = legacySnap.data() || {};
       return {
         posts:  Array.isArray(data.posts)  ? data.posts  : [],
         offers: Array.isArray(data.offers) ? data.offers : [],

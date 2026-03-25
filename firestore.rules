@@ -3,23 +3,17 @@ rules_version = '2';
 // FIRESTORE SECURITY RULES — Unified (My Volley Scout + My Volley Team Analysis)
 // Progetto Firebase: volley-data-studio
 //
-// Strutture dati gestite:
-//   [MVS]  users/{email}/teams/{teamId}/matches/{matchId}
-//   [MVS]  users/{email}/... (tutte le subcollection MVS)
-//   [MVTA] users/{uid}/shared_access/config        (NEW)
-//   [MVTA] users/{uid}/news/posts                   (NEW)
-//   [MVTA] users/{uid}/offers/list                  (NEW)
-//   [MVTA] users/{uid}/usage/log                    (NEW)
-//   [MVTA] users/_global_tokens/share_tokens/{tok}  (NEW)
-//   [MVTA] users/_admin/content/{docId}             (NEW)
-//   [MVTA legacy] volley_team_analysis_6_0/{uid}/datasets/{docId}
-//   [MVTA legacy] volley_team_analysis_6_0_users/{uid}
-//   [MVTA legacy] volley_team_analysis_6_0_shared_access/{ownerUid}
-//   [MVTA legacy] volley_team_analysis_6_0_share_tokens/{token}
-//   [MVTA legacy] volley_team_analysis_6_0_profile_requests/{uid}
-//   [MVTA legacy] volley_team_analysis_6_0_user_usage/{uid}
-//   [MVTA legacy] volley_team_analysis_6_0_news/{ownerUid}
-//   [MVTA legacy] volley_team_analysis_6_0_offers/{ownerUid}
+// Struttura unificata sotto users/:
+//   users/{email}                                   — profilo utente
+//   users/{email}/teams/{teamId}/matches/{matchId}  — dati partita
+//   users/{email}/teams/{teamId}/calendar/current    — calendario + classifica
+//   users/{email}/teams/{teamId}/user_access/{email} — condivisione team
+//   users/{email}/shared_access/config              — config condivisione
+//   users/{email}/news/posts                        — bacheca
+//   users/{email}/offers/list                       — offerte
+//   users/{email}/usage/log                         — tracking utilizzo
+//   users/_global_tokens/share_tokens/{token}       — token condivisione
+//   users/_admin/content/{docId}                    — contenuto admin
 // ============================================================================
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -30,12 +24,7 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // MVTA: ownership basata su Firebase Auth UID
-    function isOwner(ownerUid) {
-      return isSignedIn() && request.auth.uid == ownerUid;
-    }
-
-    // MVS: ownership basata su email (il documento utente MVS è indicizzato per email)
+    // Ownership basata su email (il documento utente è indicizzato per email)
     function isUser(userId) {
       return isSignedIn() && (
         request.auth.uid == userId ||
@@ -44,30 +33,21 @@ service cloud.firestore {
       );
     }
 
-    function isBootstrapAdminEmail() {
-      return isSignedIn()
-        && request.auth.token.email != null
-        && request.auth.token.email.lower() == 'peraimodel@gmail.com';
-    }
-
     function requesterEmail() {
       return request.auth.token.email != null ? request.auth.token.email.lower() : '';
     }
 
+    // Admin determinato esclusivamente dal campo role nel documento utente.
+    // Nessun account email hardcoded — il ruolo admin va impostato manualmente
+    // in Firestore sul documento users/{email} (campo role: 'admin').
     function isAdminUser() {
-      let legacyUserRef = /databases/$(database)/documents/volley_team_analysis_6_0_users/$(request.auth.uid);
-      let unifiedUserRef = /databases/$(database)/documents/users/$(requesterEmail());
+      let userRef = /databases/$(database)/documents/users/$(requesterEmail());
       return isSignedIn()
-        && (isBootstrapAdminEmail()
-            || (exists(unifiedUserRef) && get(unifiedUserRef).data.role == 'admin')
-            || (exists(legacyUserRef) && get(legacyUserRef).data.role == 'admin'));
+        && exists(userRef)
+        && get(userRef).data.role == 'admin';
     }
 
-    function isOwnUserDoc(uid) {
-      return isSignedIn() && request.auth.uid == uid;
-    }
-
-    // ── Funzioni di condivisione MVTA ───────────────────────────────────────
+    // ── Funzioni di condivisione ───────────────────────────────────────────
 
     function isShareEnabled(data) {
       return !('enabled' in data) || data.enabled == true;
@@ -91,21 +71,19 @@ service cloud.firestore {
     }
 
     function isAllowedReader(ownerUid) {
-      let sharedRef = /databases/$(database)/documents/volley_team_analysis_6_0_shared_access/$(ownerUid);
-      let d = get(sharedRef).data;
+      let sharedRef = /databases/$(database)/documents/users/$(ownerUid)/shared_access/config;
       return isSignedIn()
         && exists(sharedRef)
-        && isShareEnabled(d)
-        && (hasPublicAccess(d) || hasRestrictedAccess(d));
+        && isShareEnabled(get(sharedRef).data)
+        && (hasPublicAccess(get(sharedRef).data) || hasRestrictedAccess(get(sharedRef).data));
     }
 
     function isAllowedWriter(ownerUid) {
-      let sharedRef = /databases/$(database)/documents/volley_team_analysis_6_0_shared_access/$(ownerUid);
-      let d = get(sharedRef).data;
+      let sharedRef = /databases/$(database)/documents/users/$(ownerUid)/shared_access/config;
       return isSignedIn()
         && exists(sharedRef)
-        && isShareEnabled(d)
-        && hasWriterAccess(d);
+        && isShareEnabled(get(sharedRef).data)
+        && hasWriterAccess(get(sharedRef).data);
     }
 
     // ── Funzioni di accesso MVS (team sharing) ──────────────────────────────
@@ -171,41 +149,8 @@ service cloud.firestore {
       allow update, delete: if isSignedIn() && resource.data.ownerId == request.auth.token.email;
     }
 
-    // Regole legacy (vecchie collection flat MVS)
-    match /matches/{matchId} {
-      allow read, write: if request.auth != null &&
-                          (resource.data.userId == request.auth.token.email ||
-                           resource.data.userId == request.auth.token.email.replace('.', '_') ||
-                           resource.data.userId == request.auth.uid ||
-                           request.resource.data.userId == request.auth.token.email ||
-                           request.resource.data.userId == request.auth.token.email.replace('.', '_') ||
-                           request.resource.data.userId == request.auth.uid);
-    }
-
-    match /rosters/{rosterId} {
-      allow read, write: if request.auth != null &&
-                          (resource.data.userId == request.auth.token.email ||
-                           resource.data.userId == request.auth.token.email.replace('.', '_') ||
-                           resource.data.userId == request.auth.uid ||
-                           request.resource.data.userId == request.auth.token.email ||
-                           request.resource.data.userId == request.auth.token.email.replace('.', '_') ||
-                           request.resource.data.userId == request.auth.uid);
-    }
-
-    match /teams/{teamId} {
-      allow read, write: if request.auth != null &&
-                          (resource.data.userId == request.auth.token.email ||
-                           resource.data.userId == request.auth.token.email.replace('.', '_') ||
-                           resource.data.userId == request.auth.uid ||
-                           request.resource.data.userId == request.auth.token.email ||
-                           request.resource.data.userId == request.auth.token.email.replace('.', '_') ||
-                           request.resource.data.userId == request.auth.uid);
-    }
-
     // ══════════════════════════════════════════════════════════════════════════
-    // REGOLE UNIFICATE MVTA (nuove sub-collection sotto users/)
-    // Questi path sostituiscono le root collection legacy. Le regole legacy
-    // rimangono attive per backward compatibility durante la migrazione.
+    // REGOLE UNIFICATE (sub-collection sotto users/)
     // ══════════════════════════════════════════════════════════════════════════
 
     // Shared access config (nuovo path: users/{uid}/shared_access/config)
@@ -251,115 +196,6 @@ service cloud.firestore {
     match /users/_admin/content/{docId} {
       allow read: if isSignedIn();
       allow create, update, delete: if isAdminUser();
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    // REGOLE MY VOLLEY TEAM ANALYSIS (MVTA) — LEGACY
-    // Struttura: volley_team_analysis_6_0/{uid}/datasets/{docId}
-    // Identificazione utente: Firebase Auth UID
-    // Queste regole restano attive per backward compatibility.
-    // ══════════════════════════════════════════════════════════════════════════
-
-    // Dataset match e calendario
-    // Sia MVS (tramite saveMVTAMatch) che MVTA possono scrivere con il proprio UID
-    match /volley_team_analysis_6_0/{ownerUid}/datasets/{docId} {
-      allow read: if isOwner(ownerUid) || isAllowedReader(ownerUid);
-      allow create, update, delete: if isOwner(ownerUid) || isAllowedWriter(ownerUid);
-    }
-
-    // Bacheca team news (notifiche personali per-utente)
-    match /volley_team_analysis_6_0_news/{ownerUid} {
-      allow read: if isOwner(ownerUid) || isAllowedReader(ownerUid);
-      allow create, update, delete: if isOwner(ownerUid) || isAllowedWriter(ownerUid);
-    }
-
-    // Offerte team (legacy per-user — mantenuto per backward compat)
-    match /volley_team_analysis_6_0_offers/{ownerUid} {
-      allow read: if isOwner(ownerUid) || isAllowedReader(ownerUid);
-      allow create, update, delete: if isOwner(ownerUid) || isAllowedWriter(ownerUid);
-    }
-
-    // Admin Content globale (Sistema posts + Offerte con visibilità per profilo/utente)
-    // Lettura: qualsiasi utente autenticato (il filtro visibilità è applicato lato client)
-    // Scrittura: solo admin (ruolo verificato su volley_team_analysis_6_0_users)
-    match /volley_team_analysis_6_0_admin_content/{docId} {
-      allow read:                   if isSignedIn();
-      allow create, update, delete: if isAdminUser();
-    }
-
-    // Telemetria utilizzo utente
-    match /volley_team_analysis_6_0_user_usage/{uid} {
-      allow get: if isOwnUserDoc(uid) || isAdminUser();
-      allow list: if isAdminUser();
-      allow create, update: if isOwnUserDoc(uid)
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.email == requesterEmail();
-      allow delete: if isAdminUser();
-    }
-
-    // Richieste upgrade profilo
-    match /volley_team_analysis_6_0_profile_requests/{uid} {
-      allow get: if isOwnUserDoc(uid) || isAdminUser();
-      allow list: if isAdminUser();
-      allow create: if isOwnUserDoc(uid)
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.email == requesterEmail()
-        && request.resource.data.currentProfile in ['base', 'pro', 'promax']
-        && request.resource.data.targetProfile in ['pro', 'promax']
-        && request.resource.data.status == 'pending';
-      allow update: if isAdminUser()
-        || (isOwnUserDoc(uid)
-            && resource.data.status == 'pending'
-            && request.resource.data.uid == resource.data.uid
-            && request.resource.data.email == resource.data.email
-            && request.resource.data.currentProfile in ['base', 'pro', 'promax']
-            && request.resource.data.targetProfile in ['pro', 'promax']
-            && request.resource.data.status == 'pending');
-      allow delete: if isAdminUser();
-    }
-
-    // Shared access (configurazione condivisione dell'owner MVTA)
-    match /volley_team_analysis_6_0_shared_access/{ownerUid} {
-      allow read: if isOwner(ownerUid)
-        || (isSignedIn()
-            && isShareEnabled(resource.data)
-            && (hasPublicAccess(resource.data) || hasRestrictedAccess(resource.data)));
-      allow create, update, delete: if isOwner(ownerUid);
-    }
-
-    // Token di condivisione MVTA
-    match /volley_team_analysis_6_0_share_tokens/{token} {
-      allow read: if isSignedIn()
-        && isShareEnabled(resource.data)
-        && (resource.data.ownerUid == request.auth.uid
-            || isAllowedReader(resource.data.ownerUid));
-      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
-      allow update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
-    }
-
-    // Registro utenti MVTA
-    match /volley_team_analysis_6_0_users/{uid} {
-      allow get: if isOwnUserDoc(uid) || isAdminUser();
-      allow list: if isAdminUser();
-      allow create: if isOwnUserDoc(uid)
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.email == requesterEmail()
-        && (
-            (isBootstrapAdminEmail()
-              && request.resource.data.role == 'admin'
-              && request.resource.data.assignedProfile in ['base', 'pro', 'promax'])
-            ||
-            (!isBootstrapAdminEmail()
-              && request.resource.data.role == 'user'
-              && request.resource.data.assignedProfile == 'base')
-           );
-      allow update: if isAdminUser()
-        || (isOwnUserDoc(uid)
-            && request.resource.data.uid == resource.data.uid
-            && request.resource.data.email == resource.data.email
-            && request.resource.data.role == resource.data.role
-            && request.resource.data.assignedProfile == resource.data.assignedProfile);
-      allow delete: if isAdminUser();
     }
 
   }

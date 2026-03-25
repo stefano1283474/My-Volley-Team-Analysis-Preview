@@ -701,7 +701,7 @@ export default function App() {
     profile === 'promax' ? 'Pro Max' : profile === 'pro' ? 'Pro' : 'Base'
   ), []);
 
-  // ─── Team Offerte (legacy per-user — mantenuto per backward compat) ───────
+  // ─── Team Offerte ────────────────────────────────────────────────────────
   const [teamOffers, setTeamOffers] = useState([]);
   const handleOffersChange = useCallback(async (newOffers) => {
     const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
@@ -903,7 +903,11 @@ export default function App() {
         setIsAccessReady(false);
         const ensuredAccess = await ensureUserAccessRecord(user);
         const loadedAccess = await loadCurrentUserAccess(user.uid, user.email || '');
-        const access = loadedAccess || ensuredAccess;
+        // loadCurrentUserAccess è la fonte di verità (legge da Firestore).
+        // Se il documento non esiste ancora, usiamo ensuredAccess ma forziamo
+        // role='user' per evitare che logica locale bypasdi Firestore come fonte
+        // di verità per il ruolo admin.
+        const access = loadedAccess || (ensuredAccess ? { ...ensuredAccess, role: 'user', assignedProfile: ensuredAccess.assignedProfile || 'base' } : null);
         if (cancelled) return;
         setUserAccess(access);
         const assigned = access?.assignedProfile || 'base';

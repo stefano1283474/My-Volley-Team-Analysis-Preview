@@ -6,7 +6,7 @@ import pkg from '../../package.json';
 
 // Team name mapping: sheet name → CSV official name
 export const APP_NAME = 'My Volley Team Analysis';
-export const APP_VERSION = '1.1.2 Preview';
+export const APP_VERSION = '1.2.0 Preview';
 
 export const TEAM_MAP = {};
 
