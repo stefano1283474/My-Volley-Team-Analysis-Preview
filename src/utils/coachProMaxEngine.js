@@ -41,6 +41,99 @@ function isSetterRole(role) {
   return r === 'P' || r === 'P1' || r === 'P2';
 }
 
+// ─── Helper: identifica il palleggiatore dalla rotazione P1 in battuta ──────
+// In pallavolo, quando la squadra è in rotazione P1 e serve (fase 'b'),
+// chi batte È il palleggiatore. Questa è l'unica logica affidabile per
+// identificare il palleggiatore, indipendentemente dal ruolo assegnato nel roster.
+function _getServerFromRally(rally) {
+  // Prova rally.server (dal parser DataVolley, colonna R)
+  if (rally.server) return String(rally.server).padStart(2, '0');
+  // Fallback: cerca la prima azione di battuta nella quartina
+  const q = rally.quartine || rally.quartine || [];
+  const serve = q.find(t => t.type === 'action' && String(t.fundamental || '').toLowerCase() === 'b');
+  if (serve?.player) return String(serve.player).padStart(2, '0');
+  return null;
+}
+
+/**
+ * Identifica i numeri dei palleggiatori basandosi sulla logica P1:
+ * chi serve quando la squadra è in rotazione P1 (fase 'b') è il palleggiatore.
+ * @param {Array|Object} matches - Un singolo match o array di match
+ * @returns {Set<string>} - Set di numeri giocatore (padded a 2 cifre)
+ */
+export function identifySettersFromP1Serve(matches) {
+  const setterNums = new Set();
+  const matchList = Array.isArray(matches) ? matches : [matches];
+  for (const match of matchList) {
+    for (const rally of (match?.rallies || [])) {
+      if (rally.rotation === 1 && rally.phase === 'b') {
+        const server = _getServerFromRally(rally);
+        if (server) setterNums.add(server);
+      }
+    }
+  }
+  return setterNums;
+}
+
+/**
+ * Attribuisce il palleggiatore a ogni rally basandosi sulla logica P1.
+ * Algoritmo:
+ * - Scansiona i rally per set in ordine
+ * - Quando incontra rotazione P1 fase 'b': chi serve è il palleggiatore
+ * - Tutti i rally precedenti (dall'ultimo P1-b o inizio set) vengono attribuiti retroattivamente
+ * - Se il set finisce senza nuovo P1-b, i rally pendenti ereditano l'ultimo palleggiatore noto
+ * @param {Array} rallies - Array di rally del match
+ * @returns {Array} - Rally arricchiti con campo .setterNum
+ */
+export function attributeSetterToRallies(rallies) {
+  if (!rallies || !rallies.length) return [];
+
+  // Raggruppa rally per set
+  const rallyPerSet = {};
+  for (const r of rallies) {
+    const s = r.set || 1;
+    if (!rallyPerSet[s]) rallyPerSet[s] = [];
+    rallyPerSet[s].push(r);
+  }
+
+  let lastKnownSetter = null; // Persiste tra set
+
+  for (const setNum of Object.keys(rallyPerSet).sort((a, b) => a - b)) {
+    const setRallies = rallyPerSet[setNum];
+    let pendingRallies = [];
+    let currentSetter = null;
+
+    for (const rally of setRallies) {
+      pendingRallies.push(rally);
+
+      if (rally.rotation === 1 && rally.phase === 'b') {
+        const server = _getServerFromRally(rally);
+        if (server) {
+          currentSetter = server;
+          lastKnownSetter = server;
+          // Attribuisci retroattivamente tutti i rally pendenti
+          for (const pr of pendingRallies) {
+            pr.setterNum = currentSetter;
+          }
+          pendingRallies = [];
+        }
+      }
+    }
+
+    // Fine del set: eredita dall'ultimo palleggiatore noto
+    if (pendingRallies.length > 0) {
+      const setter = currentSetter || lastKnownSetter;
+      if (setter) {
+        for (const pr of pendingRallies) {
+          pr.setterNum = setter;
+        }
+      }
+    }
+  }
+
+  return rallies;
+}
+
 // ─── Helper: Media Ponderata su scala 1-5 ─────────────────────────────────
 // Calcola (5×kill + 4×pos + 3×exc + 2×neg + 1×err) / tot
 export function mediaPonderata(stat) {
@@ -222,11 +315,14 @@ export function computeTransformationCoefficients(matches, scales, roster) {
   const teamTransf = { fromRcv: {}, fromDef: {} };
 
   // Costruisce set di numeri palleggiatori (da escludere dagli attaccanti)
-  const setterNums = new Set(
+  // Logica P1: chi serve in rotazione P1 è il palleggiatore
+  const globalSetterNums = identifySettersFromP1Serve(matches);
+  // Fallback: se non ci sono rally P1-b, usa il roster
+  if (globalSetterNums.size === 0) {
     (roster || [])
       .filter(p => isSetterRole(p.role))
-      .map(p => String(p.number || '').padStart(2, '0'))
-  );
+      .forEach(p => globalSetterNums.add(String(p.number || '').padStart(2, '0')));
+  }
 
   for (const match of matches) {
     const opp = match?.riepilogo?.opponent;
@@ -234,13 +330,9 @@ export function computeTransformationCoefficients(matches, scales, roster) {
     const defScale = scales?.defense;
     const oppDefPosition = positionOnScale(oppDefMP, defScale);
 
-    // Costruisce set locale di palleggiatori dal roster della partita
-    const matchSetterNums = new Set(
-      (match?.roster || [])
-        .filter(p => isSetterRole(p.role))
-        .map(p => String(p.number || '').padStart(2, '0'))
-    );
-    const allSetters = new Set([...setterNums, ...matchSetterNums]);
+    // Palleggiatori identificati dalla logica P1 per questa partita
+    const matchSetterNums = identifySettersFromP1Serve([match]);
+    const allSetters = new Set([...globalSetterNums, ...matchSetterNums]);
 
     // Analizza rally per rally
     const rallies = match?.rallies || [];
@@ -327,58 +419,46 @@ export function computeTransformationCoefficients(matches, scales, roster) {
 }
 
 // ─── 5. Attribuzione Palleggiatore ───────────────────────────────────────
-// Determina quale palleggiatore ha servito gli attaccanti basandosi sulle
-// rotazioni. In P1 il palleggiatore è al servizio → retroattivamente
-// tutti i rally da quel giro di rotazione sono stati gestiti da quel P.
+// Determina quale palleggiatore ha servito gli attaccanti basandosi sulla
+// logica P1: chi serve quando la squadra è in rotazione P1 (fase 'b')
+// è il palleggiatore. Retroattivamente tutti i rally dal giro precedente
+// vengono attribuiti a quel palleggiatore.
 export function attributeSetterToAttacks(matches, roster) {
   const setterMap = {}; // { setterNumber: { attacks: [...], totals } }
 
-  // Identifica palleggiatori dal roster (accetta sia P che P1/P2)
-  const setters = (roster || []).filter(p => isSetterRole(p.role))
-    .map(p => String(p.number || '').padStart(2, '0'));
+  // Identifica palleggiatori dalla logica P1 (chi serve in P1)
+  const setterNumsSet = identifySettersFromP1Serve(matches);
 
+  // Fallback al roster se non ci sono rally con P1-b (es. dati incompleti)
+  if (setterNumsSet.size === 0) {
+    const rosterSetters = (roster || []).filter(p => isSetterRole(p.role))
+      .map(p => String(p.number || '').padStart(2, '0'));
+    rosterSetters.forEach(s => setterNumsSet.add(s));
+  }
+
+  const setters = [...setterNumsSet];
   if (setters.length === 0) return { setterMap: {}, setters: [] };
 
   for (const match of matches) {
     const rallies = match?.rallies || [];
     if (!rallies.length) continue;
 
-    // Scorri i rally e identifica i "giri" di rotazione
-    // Quando un giocatore P serve (fondamentale 'b'), quel palleggiatore gestisce
-    // tutti i rally fino al prossimo palleggiatore al servizio
-    let currentSetter = null;
-    let serveSegments = []; // Array di { setter, rallies[] }
-    let currentSegment = null;
+    // Attribuisci il palleggiatore a ogni rally con la logica P1
+    attributeSetterToRallies(rallies);
 
+    // Raggruppa rally per palleggiatore attribuito
+    const segmentsBySetterObj = {};
     for (const rally of rallies) {
-      const q = rally?.quartine || [];
-      // Controlla se il primo token è un servizio di un palleggiatore
-      const firstAction = q.find(t => t.type === 'action');
-      if (firstAction && String(firstAction.fundamental || '').toLowerCase() === 'b') {
-        const serverNum = String(firstAction.player || '').padStart(2, '0');
-        if (setters.includes(serverNum)) {
-          // Un palleggiatore sta servendo → nuovo segmento
-          currentSetter = serverNum;
-        }
-      }
-
-      if (currentSetter) {
-        if (!currentSegment || currentSegment.setter !== currentSetter) {
-          currentSegment = { setter: currentSetter, rallies: [] };
-          serveSegments.push(currentSegment);
-        }
-        currentSegment.rallies.push(rally);
-      }
+      const s = rally.setterNum;
+      if (!s) continue;
+      if (!segmentsBySetterObj[s]) segmentsBySetterObj[s] = [];
+      segmentsBySetterObj[s].push(rally);
     }
 
-    // Per i rally prima del primo servizio di un palleggiatore,
-    // attribuisci retroattivamente al primo palleggiatore trovato
-    // (o usa la logica rotazione P1 dal metadata del set)
-
-    // Analizza ogni segmento
-    for (const seg of serveSegments) {
-      if (!setterMap[seg.setter]) {
-        setterMap[seg.setter] = {
+    // Analizza attacchi per ogni palleggiatore
+    for (const [setterNum, setterRallies] of Object.entries(segmentsBySetterObj)) {
+      if (!setterMap[setterNum]) {
+        setterMap[setterNum] = {
           attacksServed: [],
           totalAttacks: 0,
           attacksByPlayer: {},
@@ -387,7 +467,7 @@ export function attributeSetterToAttacks(matches, roster) {
         };
       }
 
-      for (const rally of seg.rallies) {
+      for (const rally of setterRallies) {
         const q = rally?.quartine || [];
         let lastInput = null;
         let lastInputEval = 0;
@@ -401,26 +481,26 @@ export function attributeSetterToAttacks(matches, roster) {
           if (f === 'r' && e >= 3) { lastInput = 'R'; lastInputEval = e; }
           else if (f === 'd' && e >= 3) { lastInput = 'D'; lastInputEval = e; }
           else if (f === 'a' && lastInput && lastInputEval >= 3) {
-            // Questo attacco è stato servito da seg.setter
+            // Questo attacco è stato gestito dal palleggiatore attribuito al rally
             // Escludiamo attacchi dei palleggiatori stessi
-            if (setters.includes(player)) { lastInput = null; continue; }
+            if (setterNumsSet.has(player)) { lastInput = null; continue; }
             const inputKey = `${lastInput}${lastInputEval}`;
-            setterMap[seg.setter].totalAttacks++;
+            setterMap[setterNum].totalAttacks++;
 
-            if (!setterMap[seg.setter].attacksByPlayer[player]) {
-              setterMap[seg.setter].attacksByPlayer[player] = { total: 0, sumOutput: 0, kills: 0, errors: 0 };
+            if (!setterMap[setterNum].attacksByPlayer[player]) {
+              setterMap[setterNum].attacksByPlayer[player] = { total: 0, sumOutput: 0, kills: 0, errors: 0 };
             }
-            setterMap[seg.setter].attacksByPlayer[player].total++;
-            setterMap[seg.setter].attacksByPlayer[player].sumOutput += e;
-            if (e === 5) setterMap[seg.setter].attacksByPlayer[player].kills++;
-            if (e === 1) setterMap[seg.setter].attacksByPlayer[player].errors++;
+            setterMap[setterNum].attacksByPlayer[player].total++;
+            setterMap[setterNum].attacksByPlayer[player].sumOutput += e;
+            if (e === 5) setterMap[setterNum].attacksByPlayer[player].kills++;
+            if (e === 1) setterMap[setterNum].attacksByPlayer[player].errors++;
 
-            if (setterMap[seg.setter].attacksByInput[inputKey]) {
-              setterMap[seg.setter].attacksByInput[inputKey].total++;
-              setterMap[seg.setter].attacksByInput[inputKey].sumOutput += e;
+            if (setterMap[setterNum].attacksByInput[inputKey]) {
+              setterMap[setterNum].attacksByInput[inputKey].total++;
+              setterMap[setterNum].attacksByInput[inputKey].sumOutput += e;
             }
 
-            setterMap[seg.setter].attacksServed.push({
+            setterMap[setterNum].attacksServed.push({
               attacker: player,
               input: inputKey,
               output: e,

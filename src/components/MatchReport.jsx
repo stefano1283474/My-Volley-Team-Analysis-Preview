@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, LineChart, Line, ReferenceLine } from 'recharts';
 import { COLORS } from '../utils/constants';
-import { analyzeRotationalChains } from '../utils/analyticsEngine';
+import { analyzeRotationalChains, trackOpponentRotations, computeMatchupMatrix } from '../utils/analyticsEngine';
 import { areTeamNamesLikelySame, pickCanonicalTeamLabel } from '../utils/teamNameMatcher';
 
 const ALL_OPPONENTS_ID = '__all_opponents__';
@@ -155,6 +155,7 @@ export default function MatchReport({ analytics, matches, standings, selectedMat
         </div>
         <AggregatedScoutPanel
           matchAnalytics={matchAnalytics}
+          standings={standings}
           selectedOpponent={activeScoutOpponent}
           onSelectOpponent={setSelectedScoutOpponent}
           selectedMatchId={activeScoutMatchId}
@@ -1027,6 +1028,42 @@ function hasFundData(playerStats, key, metric) {
   return !!playerStats?.raw?.[key] && playerStats.raw[key].tot > 0 && Number.isFinite(playerStats.raw[key][metric]);
 }
 
+function computePlayerMediaPond(riepilogoPlayerStats, playerNumber, fundKey) {
+  // Computes 1–5 Media Ponderata from riepilogo playerStats (which have kill/pos/exc/neg/err/tot)
+  const ps = (riepilogoPlayerStats || []).find(p => p.number === playerNumber);
+  if (!ps) return null;
+  const d = ps[fundKey];
+  if (!d || !d.tot || d.tot <= 0) return null;
+  const kill = Number(d.kill || 0), pos = Number(d.pos || 0), exc = Number(d.exc || 0);
+  const neg = Number(d.neg || 0), err = Number(d.err || 0), tot = Number(d.tot);
+  const mp = (5*kill + 4*pos + 3*exc + 2*neg + 1*err) / tot;
+  return Number.isFinite(mp) ? mp : null;
+}
+
+function computePlayerAttitude(riepilogoPlayerStats, playerNumber, fundKey) {
+  // Computes AI Score (attitude) for a single player-fundamental, mirroring computeAggregatedScout formulas.
+  // Serve:     (kill+pos)/tot  [val5+val4 / tot]
+  // Attack:    kill/tot        [val5 / tot]  (simplified — rally-chain weighting not available per-player)
+  // Defense:   (kill+pos+exc)/tot  [val5+val4+val3 / tot]
+  // Reception: (kill+pos+exc)/tot  [val5+val4+val3 / tot]
+  // Block:     kill/tot
+  const ps = (riepilogoPlayerStats || []).find(p => p.number === playerNumber);
+  if (!ps) return null;
+  const d = ps[fundKey];
+  if (!d || !d.tot || d.tot <= 0) return null;
+  const kill = Number(d.kill || 0), pos = Number(d.pos || 0), exc = Number(d.exc || 0);
+  const tot = Number(d.tot);
+  let att;
+  if (fundKey === 'defense' || fundKey === 'reception') {
+    att = (kill + pos + exc) / tot;
+  } else if (fundKey === 'serve') {
+    att = (kill + pos) / tot;
+  } else {
+    att = kill / tot; // attack, block
+  }
+  return Number.isFinite(att) ? att * 100 : null;
+}
+
 function buildPlayerSeries(matchAnalytics, selectedMatchMA, playerNumber) {
   const fundRows = [
     { key: 'serve', label: 'Battuta' },
@@ -1037,6 +1074,8 @@ function buildPlayerSeries(matchAnalytics, selectedMatchMA, playerNumber) {
   ];
   const byDateDesc = [...(matchAnalytics || [])].sort(compareMatchDateDesc);
   const selectedPlayerStats = (selectedMatchMA?.playerStats || []).find(p => p.number === playerNumber) || null;
+  // Access riepilogo for mediaPond/attitude (has kill/pos/exc/neg/err/tot)
+  const selectedRiepilogo = selectedMatchMA?.match?.riepilogo?.playerStats || [];
   return fundRows.map(({ key, label }) => {
     const matchEfficacy = hasFundData(selectedPlayerStats, key, 'efficacy')
       ? selectedPlayerStats.raw[key].efficacy * 100
@@ -1044,10 +1083,16 @@ function buildPlayerSeries(matchAnalytics, selectedMatchMA, playerNumber) {
     const matchEfficiency = hasFundData(selectedPlayerStats, key, 'efficiency')
       ? selectedPlayerStats.raw[key].efficiency * 100
       : null;
+    const matchMediaPond = computePlayerMediaPond(selectedRiepilogo, playerNumber, key);
+    const matchAttitude = computePlayerAttitude(selectedRiepilogo, playerNumber, key);
     const allEfficacy = [];
     const last3Efficacy = [];
     const allEfficiency = [];
     const last3Efficiency = [];
+    const allMediaPond = [];
+    const last3MediaPond = [];
+    const allAttitude = [];
+    const last3Attitude = [];
     for (const ma of byDateDesc) {
       const ps = (ma?.playerStats || []).find(p => p.number === playerNumber);
       if (hasFundData(ps, key, 'efficacy')) {
@@ -1060,6 +1105,18 @@ function buildPlayerSeries(matchAnalytics, selectedMatchMA, playerNumber) {
         allEfficiency.push(val);
         if (last3Efficiency.length < 3) last3Efficiency.push(val);
       }
+      // mediaPond and attitude from riepilogo
+      const riep = ma?.match?.riepilogo?.playerStats || [];
+      const mpVal = computePlayerMediaPond(riep, playerNumber, key);
+      if (mpVal !== null) {
+        allMediaPond.push(mpVal);
+        if (last3MediaPond.length < 3) last3MediaPond.push(mpVal);
+      }
+      const attVal = computePlayerAttitude(riep, playerNumber, key);
+      if (attVal !== null) {
+        allAttitude.push(attVal);
+        if (last3Attitude.length < 3) last3Attitude.push(attVal);
+      }
     }
     return {
       fund: label,
@@ -1069,12 +1126,17 @@ function buildPlayerSeries(matchAnalytics, selectedMatchMA, playerNumber) {
       matchEfficiency: roundValue(matchEfficiency),
       avgAllEfficiency: roundValue(avgValue(allEfficiency)),
       avgLast3Efficiency: roundValue(avgValue(last3Efficiency)),
+      matchMediaPond: matchMediaPond !== null ? roundValue(matchMediaPond) : null,
+      avgLast3MediaPond: roundValue(avgValue(last3MediaPond)),
+      matchAttitude: matchAttitude !== null ? roundValue(matchAttitude) : null,
+      avgLast3Attitude: roundValue(avgValue(last3Attitude)),
     };
   });
 }
 
 function AggregatedScoutPanel({
   matchAnalytics,
+  standings,
   selectedOpponent,
   onSelectOpponent,
   selectedMatchId,
@@ -1417,6 +1479,7 @@ function AggregatedScoutPanel({
         </p>
         <OpponentScoutComparisonChart
           seasonAgg={agg}
+          standings={standings}
           opponents={opponents}
           activeOpponent={activeOpponent}
           onSelectOpponent={onSelectOpponent}
@@ -1860,14 +1923,20 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
           player: p,
           data: fundRows.map(({ key, label }) => {
             const row = baseSeries.find(r => r.fund === label) || {};
-            // Attitude at player level: falls back to efficacy (per-player rally chain analysis
-            // would require filtering quartine by player number — not yet implemented)
-            const matchVal = playerLineMode === 'efficienza'
-              ? row.matchEfficiency
-              : row.matchEfficacy;
-            const last3Val = playerLineMode === 'efficienza'
-              ? row.avgLast3Efficiency
-              : row.avgLast3Efficacy;
+            let matchVal, last3Val;
+            if (playerLineMode === 'mediaPond') {
+              matchVal = row.matchMediaPond;
+              last3Val = row.avgLast3MediaPond;
+            } else if (playerLineMode === 'attitude') {
+              matchVal = row.matchAttitude;
+              last3Val = row.avgLast3Attitude;
+            } else if (playerLineMode === 'efficienza') {
+              matchVal = row.matchEfficiency;
+              last3Val = row.avgLast3Efficiency;
+            } else {
+              matchVal = row.matchEfficacy;
+              last3Val = row.avgLast3Efficacy;
+            }
             return {
               fund: label,
               oppSel: getAggValue(selectedOppAgg, key),
@@ -2069,7 +2138,7 @@ function OpponentSelectedDetailsPanel({ ma, allMatchesVsOpponent = [], onSelectM
   );
 }
 
-function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, activeOpponent, lineMode = 'attitude', matchAnalytics = []) {
+function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, activeOpponent, lineMode = 'attitude', matchAnalytics = [], standings = null) {
   if (!selectedMatchMA || !selectedOppAgg) return null;
 
   const match = selectedMatchMA.match;
@@ -2275,6 +2344,11 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
     else qualifier = 'equilibrio';
 
     let text = '';
+    // Check if absolute efficacy tells a different story than the selected metric
+    const absConflict = fg.ourEfficacy !== null && fg.oppEfficacy !== null
+      && ((fg.gap < -threshSm && fg.ourEfficacy > fg.oppEfficacy + 3)
+        || (fg.gap > threshSm && fg.oppEfficacy > fg.ourEfficacy + 3));
+
     if (fg.gap > threshSm) {
       text = `${fg.label}: ${qualifier} nostro (${gapFmt(fg.gap)} ${metricLabel}) — ${
         fg.key === 'attack' ? 'abbiamo attaccato meglio dell\'avversario' :
@@ -2282,14 +2356,27 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
         fg.key === 'reception' ? 'ricezione più solida rispetto all\'avversario' :
         'difesa più efficiente dell\'avversario'
       }.`;
+      if (absConflict) {
+        text += ` (Nota: efficacia grezza avversaria ${fg.oppEfficacy.toFixed(1)}% vs nostra ${fg.ourEfficacy.toFixed(1)}% — il ${metricLabel} pesa fattori contestuali oltre il dato grezzo.)`;
+      }
     } else if (fg.gap < -threshSm) {
       qualifier = qualifier.replace('vantaggio', 'svantaggio');
-      text = `${fg.label}: ${qualifier} (${gapFmt(fg.gap)} ${metricLabel}) — ${
-        fg.key === 'attack' ? `l'attacco avversario ci ha superati` :
-        fg.key === 'serve'  ? `la battuta di ${oppName} più incisiva della nostra` :
-        fg.key === 'reception' ? `la ricezione avversaria ha retto meglio della nostra` :
-        `la difesa di ${oppName} più solida della nostra`
-      }.`;
+      if (absConflict) {
+        // Our absolute efficacy was better but AI Score says worse → clarify
+        text = `${fg.label}: ${qualifier} nel ${metricLabel} (${gapFmt(fg.gap)}) — ${
+          fg.key === 'attack' ? `l'avversario ha ottenuto un ${metricLabel} superiore, ma in efficacia grezza noi ${fg.ourEfficacy.toFixed(1)}% vs loro ${fg.oppEfficacy.toFixed(1)}%` :
+          fg.key === 'serve'  ? `la battuta di ${oppName} ha un ${metricLabel} superiore, ma efficacia grezza noi ${fg.ourEfficacy.toFixed(1)}% vs loro ${fg.oppEfficacy.toFixed(1)}%` :
+          fg.key === 'reception' ? `la ricezione avversaria ha un ${metricLabel} superiore, ma efficacia grezza noi ${fg.ourEfficacy.toFixed(1)}% vs loro ${fg.oppEfficacy.toFixed(1)}%` :
+          `la difesa di ${oppName} ha un ${metricLabel} superiore, ma efficacia grezza noi ${fg.ourEfficacy.toFixed(1)}% vs loro ${fg.oppEfficacy.toFixed(1)}%`
+        }.`;
+      } else {
+        text = `${fg.label}: ${qualifier} (${gapFmt(fg.gap)} ${metricLabel}) — ${
+          fg.key === 'attack' ? `l'avversario ha attaccato meglio di noi` :
+          fg.key === 'serve'  ? `la battuta di ${oppName} più incisiva della nostra` :
+          fg.key === 'reception' ? `la ricezione avversaria ha retto meglio della nostra` :
+          `la difesa di ${oppName} più solida della nostra`
+        }.`;
+      }
     } else {
       text = `${fg.label}: sostanziale ${qualifier} tra le due squadre (${gapFmt(fg.gap)}).`;
     }
@@ -2618,13 +2705,18 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
     if (chainR5 && chainR4 && chainR5.totalAtt > 0 && chainR4.totalAtt > 0) {
       const delta = chainR5.killPct - chainR4.killPct;
       if (Math.abs(delta) >= 8) {
+        // A positive delta (R5 > R4) is physiological — it's expected that better reception leads to better attack.
+        // Only flag as truly negative (▼) if the drop is extreme (>25%), otherwise neutral or positive.
+        const isExcessiveDrop = delta > 25;
         chainItems.push({
           text: `Impatto qualità ricezione sull'attacco: ${Math.abs(delta).toFixed(0)}% di differenza tra R5 e R4 → ${
             delta > 0
-              ? 'la qualità della palla di prima influisce sensibilmente sull\'efficacia offensiva'
+              ? (isExcessiveDrop
+                ? 'calo significativo dalla ricezione imprecisa, la qualità della palla di prima influisce molto sull\'efficacia offensiva'
+                : 'calo fisiologico dalla ricezione imprecisa, impatto nella norma')
               : 'l\'attacco mantiene efficienza anche da ricezione non perfetta'
           }.`,
-          positive: delta <= 0,
+          positive: delta <= 0 ? true : (isExcessiveDrop ? false : null),
           tooltip: {
             label: 'Delta R5→R4 (attacco)',
             values: [
@@ -2768,6 +2860,128 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
 
   if (perfItems.length > 0) {
     sections.push({ id: 'performance', title: 'Performance Contestuale', color: 'cyan', items: perfItems });
+  }
+
+  // ─── SECTION: AVVERSARIO VS STIMA CLASSIFICA ──────────────────────────
+  const stimaItems = [];
+  if (standings && standings.length >= 2 && matchAnalytics.length > 0) {
+    const expectedMP = computeExpectedMP(standings, matchAnalytics);
+    const oppClean = oppName.replace(/^\([AR]\)\s*/i, '').trim();
+    const expectedForOpp = expectedMP[oppName] || expectedMP[oppClean] ||
+      Object.entries(expectedMP).find(([k]) => areTeamNamesLikelySame(k, oppClean))?.[1];
+
+    if (expectedForOpp) {
+      const oppFunds = [
+        { key: 'serve', label: 'Battuta', oppKey: 'serve' },
+        { key: 'attack', label: 'Attacco', oppKey: 'attack' },
+        { key: 'defense', label: 'Difesa', oppKey: 'defense' },
+        { key: 'reception', label: 'Ricezione', oppKey: 'reception' },
+      ];
+      const deltas = [];
+      for (const fd of oppFunds) {
+        const estimated = expectedForOpp[fd.key];
+        const actual = selectedOppAgg?.[fd.oppKey]?.mediaPond;
+        if (Number.isFinite(estimated) && Number.isFinite(actual)) {
+          deltas.push({ ...fd, estimated, actual, delta: actual - estimated });
+        }
+      }
+      if (deltas.length > 0) {
+        const overEst = deltas.filter(d => d.delta > 0.1);
+        const underEst = deltas.filter(d => d.delta < -0.1);
+        const avgDelta = deltas.reduce((s, d) => s + d.delta, 0) / deltas.length;
+        const overallLabel = avgDelta > 0.05 ? 'sopra la stima di classifica' : avgDelta < -0.05 ? 'sotto la stima di classifica' : 'in linea con la stima';
+
+        stimaItems.push({
+          text: `${oppName} ha giocato complessivamente ${overallLabel}.${overEst.length > 0 ? ` Sopra stima in: ${overEst.map(d => `${d.label} (+${d.delta.toFixed(2)} MP)`).join(', ')}.` : ''}${underEst.length > 0 ? ` Sotto stima in: ${underEst.map(d => `${d.label} (${d.delta.toFixed(2)} MP)`).join(', ')}.` : ''}`,
+          positive: avgDelta < 0, // opponent below estimated is good for us
+          tooltip: {
+            label: `${oppName} — Stima vs Reale (Media Ponderata)`,
+            values: deltas.map(d => `${d.label}: reale ${d.actual.toFixed(2)} vs stimato ${d.estimated.toFixed(2)} (${d.delta > 0 ? '+' : ''}${d.delta.toFixed(2)})`)
+          }
+        });
+
+        // Detail: which fundamentals the opponent over/under-performed
+        for (const d of deltas) {
+          if (Math.abs(d.delta) >= 0.15) {
+            const isOver = d.delta > 0;
+            stimaItems.push({
+              text: `${d.label} avversaria: ${isOver ? 'sopra' : 'sotto'} la stima di classifica di ${Math.abs(d.delta).toFixed(2)} MP — ${isOver ? 'prestazione superiore alle attese, attenzione per il ritorno' : 'prestazione inferiore alle attese, possibile miglioramento futuro'}.`,
+              positive: !isOver,
+              tooltip: { label: `${d.label} — dettaglio`, values: [`Reale: ${d.actual.toFixed(2)} MP`, `Stimato: ${d.estimated.toFixed(2)} MP`, `Delta: ${d.delta > 0 ? '+' : ''}${d.delta.toFixed(2)}`] }
+            });
+          }
+        }
+      }
+    }
+  }
+  if (stimaItems.length > 0) {
+    sections.push({ id: 'oppEstimate', title: 'Avversario vs Stima Classifica', color: 'orange', items: stimaItems });
+  }
+
+  // ─── SECTION: CONFRONTO CROSS-FONDAMENTALI ────────────────────────────
+  const crossItems = [];
+  {
+    // Battuta Avv vs Ricezione Team e viceversa
+    const crossPairs = [
+      { ourKey: 'reception', oppKey: 'serve', ourLabel: 'Ricezione Team', oppLabel: 'Battuta Avversario', narrative: 'battuta avversaria vs nostra ricezione' },
+      { ourKey: 'serve', oppKey: 'reception', ourLabel: 'Battuta Team', oppLabel: 'Ricezione Avversario', narrative: 'nostra battuta vs ricezione avversaria' },
+      { ourKey: 'defense', oppKey: 'attack', ourLabel: 'Difesa Team', oppLabel: 'Attacco Avversario', narrative: 'attacco avversario vs nostra difesa' },
+      { ourKey: 'attack', oppKey: 'defense', ourLabel: 'Attacco Team', oppLabel: 'Difesa Avversario', narrative: 'nostro attacco vs difesa avversaria' },
+    ];
+
+    for (const cp of crossPairs) {
+      const ourMatchVal = metricFromRaw(team?.[cp.ourKey], cp.ourKey);
+      const ourAvg = seasonTeamAvg?.[cp.ourKey]?.[perfAvgKey];
+      const oppMatchVal = oppMetricPct(selectedOppAgg?.[cp.oppKey], cp.oppKey);
+      const oppAvg = seasonAgg?.[cp.oppKey]?.[lineMode === 'efficacia' ? 'efficacy' : lineMode === 'mediaPond' ? 'mediaPond' : lineMode === 'attitude' ? 'attitude' : 'efficiency'];
+      const oppAvgPct = toPct(oppAvg);
+
+      if (ourMatchVal !== null && oppMatchVal !== null) {
+        const ourDelta = (ourAvg !== null && Number.isFinite(ourAvg)) ? ourMatchVal - ourAvg : null;
+        const oppDelta = (oppAvgPct !== null && Number.isFinite(oppAvgPct)) ? oppMatchVal - (isMediaPondComment ? oppAvg : oppAvgPct) : null;
+
+        let assessment = '';
+        if (ourDelta !== null && oppDelta !== null) {
+          // Use ±3% threshold (or ±0.1 for mediaPond), aligned with PERFORMANCE CONTESTUALE individual thresholds
+          const ourBetter = ourDelta > (isMediaPondComment ? 0.1 : 3);
+          const ourWorse = ourDelta < -(isMediaPondComment ? 0.1 : 3);
+          const oppBetter = oppDelta > (isMediaPondComment ? 0.1 : 3);
+          const oppWorse = oppDelta < -(isMediaPondComment ? 0.1 : 3);
+
+          if (cp.ourKey === 'reception' || cp.ourKey === 'defense') {
+            // We are the defending side
+            if (oppBetter && ourWorse) assessment = `Incastro sfavorevole: ${cp.oppLabel} sopra la propria media stagionale e ${cp.ourLabel} sotto la propria media stagionale.`;
+            else if (oppWorse && ourBetter) assessment = `Incastro favorevole: ${cp.oppLabel} sotto la propria media stagionale e ${cp.ourLabel} sopra la propria media stagionale.`;
+            else if (oppBetter && !ourWorse) assessment = `${cp.oppLabel} sopra la propria media stagionale, ma ${cp.ourLabel} ha retto.`;
+            else if (ourWorse && !oppBetter) assessment = `${cp.ourLabel} sotto la propria media stagionale nonostante ${cp.oppLabel} nella norma.`;
+          } else {
+            // We are the attacking side
+            if (ourBetter && oppWorse) assessment = `Incastro favorevole: ${cp.ourLabel} sopra la propria media stagionale e ${cp.oppLabel} sotto la propria.`;
+            else if (ourWorse && oppBetter) assessment = `Incastro sfavorevole: ${cp.ourLabel} sotto la propria media stagionale contro ${cp.oppLabel} sopra la propria.`;
+            else if (ourBetter && !oppWorse) assessment = `${cp.ourLabel} sopra media, ha superato ${cp.oppLabel} nella norma.`;
+            else if (ourWorse && !oppBetter) assessment = `${cp.ourLabel} sotto la propria media stagionale nonostante ${cp.oppLabel} nella norma.`;
+          }
+        }
+
+        if (assessment) {
+          const valFmt = (v) => isMediaPondComment ? Number(v).toFixed(2) : `${Number(v).toFixed(1)}%`;
+          crossItems.push({
+            text: `${cp.narrative.charAt(0).toUpperCase() + cp.narrative.slice(1)}: ${assessment}`,
+            positive: assessment.includes('favorevole') || (assessment.includes('sopra media') && !assessment.includes('sfavorevole')),
+            tooltip: {
+              label: cp.narrative,
+              values: [
+                `${cp.ourLabel}: ${valFmt(ourMatchVal)}${ourDelta !== null ? ` (vs media: ${ourDelta > 0 ? '+' : ''}${isMediaPondComment ? ourDelta.toFixed(2) : ourDelta.toFixed(1) + '%'})` : ''}`,
+                `${cp.oppLabel}: ${valFmt(oppMatchVal)}${oppDelta !== null ? ` (vs media: ${oppDelta > 0 ? '+' : ''}${isMediaPondComment ? oppDelta.toFixed(2) : oppDelta.toFixed(1) + '%'})` : ''}`,
+              ]
+            }
+          });
+        }
+      }
+    }
+  }
+  if (crossItems.length > 0) {
+    sections.push({ id: 'crossFund', title: 'Confronto Cross-Fondamentali', color: 'fuchsia', items: crossItems });
   }
 
   // ─── SECTION: PROTAGONISTI DELLA PARTITA ────────────────────────────────
@@ -2927,15 +3141,365 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
     }
   }
 
+  // Per-fundamental player impact: who moved the needle most in each fundamental
+  if (rankedPlayers.length >= 2) {
+    for (const fd of fundDefs) {
+      const playersWithFund = rankedPlayers.filter(p => {
+        const d = p.deltas.find(dd => dd.key === fd.key);
+        return d && d.tot >= 3 && Math.abs(d.delta) > (isMediaPondComment ? 0.15 : 5);
+      });
+      if (playersWithFund.length === 0) continue;
+
+      const overPerf = playersWithFund.filter(p => p.deltas.find(d => d.key === fd.key).delta > 0).sort((a, b) => {
+        return b.deltas.find(d => d.key === fd.key).delta - a.deltas.find(d => d.key === fd.key).delta;
+      });
+      const underPerf = playersWithFund.filter(p => p.deltas.find(d => d.key === fd.key).delta < 0).sort((a, b) => {
+        return a.deltas.find(d => d.key === fd.key).delta - b.deltas.find(d => d.key === fd.key).delta;
+      });
+
+      const parts = [];
+      if (overPerf.length > 0) parts.push(`sopra media: ${overPerf.slice(0, 2).map(p => { const d = p.deltas.find(dd => dd.key === fd.key); return `${p.nick} (${d.delta > 0 ? '+' : ''}${isMediaPondComment ? d.delta.toFixed(2) : d.delta.toFixed(1) + '%'})`; }).join(', ')}`);
+      if (underPerf.length > 0) parts.push(`sotto media: ${underPerf.slice(0, 2).map(p => { const d = p.deltas.find(dd => dd.key === fd.key); return `${p.nick} (${d.delta > 0 ? '+' : ''}${isMediaPondComment ? d.delta.toFixed(2) : d.delta.toFixed(1) + '%'})`; }).join(', ')}`);
+
+      if (parts.length > 0) {
+        playerItems.push({
+          text: `Incidenza su ${fd.label}: ${parts.join('; ')}.`,
+          positive: overPerf.length >= underPerf.length,
+          tooltip: {
+            label: `Impatto player su ${fd.label}`,
+            values: [...overPerf, ...underPerf].slice(0, 5).map(p => {
+              const d = p.deltas.find(dd => dd.key === fd.key);
+              return `${p.nick} (#${p.number}, ${p.role}): ${isMediaPondComment ? d.matchVal.toFixed(2) : d.matchVal.toFixed(1) + '%'} vs media ${isMediaPondComment ? d.avgVal.toFixed(2) : d.avgVal.toFixed(1) + '%'} → ${d.delta > 0 ? '+' : ''}${isMediaPondComment ? d.delta.toFixed(2) : d.delta.toFixed(1) + '%'}`;
+            })
+          }
+        });
+      }
+    }
+  }
+
   if (playerItems.length > 0) {
     sections.push({ id: 'players', title: 'Protagonisti della Partita', color: 'sky', items: playerItems });
+  }
+
+  // ─── SECTION: INCASTRI ROTAZIONE VS AVVERSARIO ────────────────────────
+  const oppRotItems = [];
+  {
+    const oppStartPerSet = {};
+    const setsData = match?.sets || [];
+    for (const s of setsData) {
+      if (s.oppStartRotation >= 1 && s.oppStartRotation <= 6) {
+        oppStartPerSet[s.number] = s.oppStartRotation;
+      }
+    }
+    const hasOppRotation = Object.keys(oppStartPerSet).length > 0;
+
+    if (hasOppRotation && rallies.length > 0) {
+      // Full matchup matrix when opponent rotation data is available
+      const annotated = trackOpponentRotations(rallies, oppStartPerSet);
+      const { matrix, summary } = computeMatchupMatrix(annotated);
+
+      if (summary.totalAnnotated > 10) {
+        if (summary.bestMatchup) {
+          const bm = summary.bestMatchup;
+          const net = bm.ourPts - bm.theirPts;
+          oppRotItems.push({
+            text: `Incastro favorevole Team: nostra P${bm.us} vs loro P${bm.them} → ${bm.ourPts} pts vs ${bm.theirPts} (netto ${net > 0 ? '+' : ''}${net}). ${bm.breakPoint.total > 0 ? `BP: ${bm.breakPoint.won}/${bm.breakPoint.total} (${(bm.breakPoint.won/bm.breakPoint.total*100).toFixed(0)}%).` : ''} ${bm.sideOut.total > 0 ? `SO: ${bm.sideOut.won}/${bm.sideOut.total} (${(bm.sideOut.won/bm.sideOut.total*100).toFixed(0)}%).` : ''}`,
+            positive: true,
+            tooltip: {
+              label: `Matchup P${bm.us} vs P${bm.them}`,
+              values: [`Totale rally: ${bm.total}`, `Punti nostri: ${bm.ourPts}`, `Punti loro: ${bm.theirPts}`, `Netto: ${net > 0 ? '+' : ''}${net}`,
+                bm.breakPoint.total > 0 ? `BP: ${bm.breakPoint.won}/${bm.breakPoint.total}` : null,
+                bm.sideOut.total > 0 ? `SO: ${bm.sideOut.won}/${bm.sideOut.total}` : null].filter(Boolean)
+            }
+          });
+        }
+
+        if (summary.worstMatchup && summary.worstMatchup !== summary.bestMatchup) {
+          const wm = summary.worstMatchup;
+          const net = wm.ourPts - wm.theirPts;
+          oppRotItems.push({
+            text: `Incastro sfavorevole Team: nostra P${wm.us} vs loro P${wm.them} → ${wm.ourPts} pts vs ${wm.theirPts} (netto ${net > 0 ? '+' : ''}${net}). Questo incastro ha favorito ${oppName}.`,
+            positive: false,
+            tooltip: {
+              label: `Matchup P${wm.us} vs P${wm.them}`,
+              values: [`Totale rally: ${wm.total}`, `Punti nostri: ${wm.ourPts}`, `Punti loro: ${wm.theirPts}`, `Netto: ${net > 0 ? '+' : ''}${net}`,
+                wm.breakPoint.total > 0 ? `BP: ${wm.breakPoint.won}/${wm.breakPoint.total}` : null,
+                wm.sideOut.total > 0 ? `SO: ${wm.sideOut.won}/${wm.sideOut.total}` : null].filter(Boolean)
+            }
+          });
+        }
+
+        // Analyze serve-vs-receive across rotations (aggregated over opponent rotations)
+        const serveBP = {};
+        const recvSO = {};
+        for (let us = 1; us <= 6; us++) {
+          let bpW = 0, bpT = 0, soW = 0, soT = 0;
+          for (let them = 1; them <= 6; them++) {
+            const cell = matrix[us][them];
+            bpW += cell.breakPoint.won; bpT += cell.breakPoint.total;
+            soW += cell.sideOut.won; soT += cell.sideOut.total;
+          }
+          if (bpT >= 3) serveBP[us] = { won: bpW, total: bpT, pct: bpW / bpT * 100 };
+          if (soT >= 3) recvSO[us] = { won: soW, total: soT, pct: soW / soT * 100 };
+        }
+
+        const bpArr = Object.entries(serveBP).map(([r, d]) => ({ rot: `P${r}`, ...d })).sort((a, b) => b.pct - a.pct);
+        const soArr = Object.entries(recvSO).map(([r, d]) => ({ rot: `P${r}`, ...d })).sort((a, b) => b.pct - a.pct);
+
+        if (bpArr.length >= 2) {
+          const bestBP = bpArr[0];
+          const worstBP = bpArr[bpArr.length - 1];
+          if (bestBP.pct - worstBP.pct > 15) {
+            oppRotItems.push({
+              text: `Battuta vs Ricezione avversaria: migliore resa in ${bestBP.rot} (${bestBP.pct.toFixed(0)}% BP), peggiore in ${worstBP.rot} (${worstBP.pct.toFixed(0)}% BP). Delta ${(bestBP.pct - worstBP.pct).toFixed(0)}%.`,
+              positive: null,
+              tooltip: { label: 'Break Point per rotazione al servizio', values: bpArr.map(d => `${d.rot}: ${d.won}/${d.total} = ${d.pct.toFixed(1)}%`) }
+            });
+          }
+        }
+
+        if (soArr.length >= 2) {
+          const bestSO = soArr[0];
+          const worstSO = soArr[soArr.length - 1];
+          if (bestSO.pct - worstSO.pct > 15) {
+            oppRotItems.push({
+              text: `Ricezione Team vs Battuta avversaria: migliore side-out in ${bestSO.rot} (${bestSO.pct.toFixed(0)}% SO), peggiore in ${worstSO.rot} (${worstSO.pct.toFixed(0)}% SO). Battuta di ${oppName} più pericolosa quando noi in ${worstSO.rot}.`,
+              positive: null,
+              tooltip: { label: 'Side-Out per rotazione in ricezione', values: soArr.map(d => `${d.rot}: ${d.won}/${d.total} = ${d.pct.toFixed(1)}%`) }
+            });
+          }
+        }
+      }
+    } else if (rallies.length > 0) {
+      // Fallback: use our own rotation data from rallies when opponent rotation is unknown
+      const rotBP = {};
+      const rotSO = {};
+      for (const r of rallies) {
+        if (!r.rotation || r.rotation < 1 || r.rotation > 6) continue;
+        const rot = r.rotation;
+        if (r.phase === 'b') {
+          if (!rotBP[rot]) rotBP[rot] = { won: 0, total: 0 };
+          rotBP[rot].total++;
+          if (r.isPoint) rotBP[rot].won++;
+        } else if (r.phase === 'r') {
+          if (!rotSO[rot]) rotSO[rot] = { won: 0, total: 0 };
+          rotSO[rot].total++;
+          if (r.isPoint) rotSO[rot].won++;
+        }
+      }
+
+      const bpArr = Object.entries(rotBP).filter(([, d]) => d.total >= 3).map(([rot, d]) => ({ rot: `P${rot}`, ...d, pct: d.won / d.total * 100 })).sort((a, b) => b.pct - a.pct);
+      const soArr = Object.entries(rotSO).filter(([, d]) => d.total >= 3).map(([rot, d]) => ({ rot: `P${rot}`, ...d, pct: d.won / d.total * 100 })).sort((a, b) => b.pct - a.pct);
+
+      if (bpArr.length >= 2) {
+        const bestBP = bpArr[0];
+        const worstBP = bpArr[bpArr.length - 1];
+        if (bestBP.pct - worstBP.pct > 10) {
+          oppRotItems.push({
+            text: `Resa al servizio per rotazione: migliore in ${bestBP.rot} (${bestBP.pct.toFixed(0)}% BP, ${bestBP.won}/${bestBP.total}), peggiore in ${worstBP.rot} (${worstBP.pct.toFixed(0)}% BP, ${worstBP.won}/${worstBP.total}). Delta ${(bestBP.pct - worstBP.pct).toFixed(0)}%.`,
+            positive: bestBP.pct > 50,
+            tooltip: { label: 'Break Point per rotazione al servizio', values: bpArr.map(d => `${d.rot}: ${d.won}/${d.total} = ${d.pct.toFixed(1)}%`) }
+          });
+        }
+      }
+
+      if (soArr.length >= 2) {
+        const bestSO = soArr[0];
+        const worstSO = soArr[soArr.length - 1];
+        if (bestSO.pct - worstSO.pct > 10) {
+          oppRotItems.push({
+            text: `Side-out per rotazione in ricezione: migliore in ${bestSO.rot} (${bestSO.pct.toFixed(0)}% SO, ${bestSO.won}/${bestSO.total}), peggiore in ${worstSO.rot} (${worstSO.pct.toFixed(0)}% SO, ${worstSO.won}/${worstSO.total}). Delta ${(bestSO.pct - worstSO.pct).toFixed(0)}%.`,
+            positive: bestSO.pct > 55,
+            tooltip: { label: 'Side-Out per rotazione in ricezione', values: soArr.map(d => `${d.rot}: ${d.won}/${d.total} = ${d.pct.toFixed(1)}%`) }
+          });
+        }
+      }
+
+      // Overall BP and SO comparison
+      const totalBP = Object.values(rotBP).reduce((s, d) => ({ won: s.won + d.won, total: s.total + d.total }), { won: 0, total: 0 });
+      const totalSO = Object.values(rotSO).reduce((s, d) => ({ won: s.won + d.won, total: s.total + d.total }), { won: 0, total: 0 });
+      if (totalBP.total > 0 && totalSO.total > 0) {
+        const bpPct = totalBP.won / totalBP.total * 100;
+        const soPct = totalSO.won / totalSO.total * 100;
+        const phase = soPct > bpPct ? 'side-out' : 'break-point';
+        oppRotItems.push({
+          text: `Fase dominante: ${phase} (SO: ${soPct.toFixed(0)}%, BP: ${bpPct.toFixed(0)}%). ${soPct > 60 ? 'Eccellente cambio palla.' : soPct < 45 ? 'Difficoltà in ricezione-attacco.' : 'Side-out nella norma.'} ${bpPct > 50 ? 'Ottima pressione al servizio.' : bpPct < 35 ? 'Battuta poco incisiva.' : 'Break-point nella norma.'}`,
+          positive: (soPct > 55 && bpPct > 40),
+          tooltip: { label: 'Resa per fase', values: [`Side-Out: ${totalSO.won}/${totalSO.total} = ${soPct.toFixed(1)}%`, `Break-Point: ${totalBP.won}/${totalBP.total} = ${bpPct.toFixed(1)}%`] }
+        });
+      }
+    }
+  }
+  if (oppRotItems.length > 0) {
+    sections.push({ id: 'oppRotMatchup', title: 'Incastri Rotazione vs Avversario', color: 'lime', items: oppRotItems });
+  }
+
+  // ─── SECTION: CAPACITÀ DI TRASFORMAZIONE ──────────────────────────────
+  const transfItems = [];
+  {
+    const gioco = match?.gioco;
+    const atkFromRec = gioco?.attackFromReception || {};
+    const atkFromDef = gioco?.attackFromDefense || {};
+
+    // Team transformation: from poor reception/defense → attack effectiveness
+    const calcGroupKR = (entries) => {
+      if (!entries || entries.length === 0) return null;
+      const totAtt = entries.reduce((s, e) => s + (e.attacks || 0), 0);
+      if (totAtt === 0) return null;
+      const totPts = entries.reduce((s, e) => { const p = e.pointsStr?.split('-'); return s + (parseInt(p?.[0]) || 0); }, 0);
+      const totErr = entries.reduce((s, e) => { const p = e.pointsStr?.split('-'); return s + (parseInt(p?.[1]) || 0); }, 0);
+      return { attacks: totAtt, pts: totPts, errs: totErr, killRate: totPts / totAtt * 100, errRate: totErr / totAtt * 100 };
+    };
+
+    const recR5 = calcGroupKR(atkFromRec.R5);
+    const recR4 = calcGroupKR(atkFromRec.R4);
+    const recR3 = calcGroupKR(atkFromRec.R3);
+    const defD5 = calcGroupKR(atkFromDef?.D5);
+    const defD4 = calcGroupKR(atkFromDef?.D4);
+    const defD3 = calcGroupKR(atkFromDef?.D3);
+
+    // Transformation from poor receptions vs good receptions — try R5 vs R3, fallback to R5 vs R4
+    const recPoor = (recR3 && recR3.attacks >= 2) ? recR3 : (recR4 && recR4.attacks >= 2) ? recR4 : null;
+    const recPoorLabel = (recR3 && recR3.attacks >= 2) ? 'R3' : (recR4 && recR4.attacks >= 2) ? 'R4' : null;
+    if (recR5 && recPoor && recR5.attacks >= 3) {
+      const deltaKR = recR5.killRate - recPoor.killRate;
+      transfItems.push({
+        text: `Trasformazione in side-out: da R5 kill rate ${recR5.killRate.toFixed(0)}% → da ${recPoorLabel} kill rate ${recPoor.killRate.toFixed(0)}%. ${Math.abs(deltaKR) < 10 ? 'Ottima capacità di trasformazione anche da ricezione imprecisa.' : deltaKR > 25 ? 'Forte dipendenza dalla qualità della ricezione: con palla imprecisa l\'attacco perde molto.' : 'Calo fisiologico dalla ricezione imprecisa.'}`,
+        positive: deltaKR < 15,
+        tooltip: {
+          label: 'Conversione attacco per qualità ricezione',
+          values: [
+            `Da R5: ${recR5.pts}/${recR5.attacks} = ${recR5.killRate.toFixed(1)}%`,
+            recR4 ? `Da R4: ${recR4.pts}/${recR4.attacks} = ${recR4.killRate.toFixed(1)}%` : null,
+            recR3 ? `Da R3: ${recR3.pts}/${recR3.attacks} = ${recR3.killRate.toFixed(1)}%` : null,
+            `Delta R5→${recPoorLabel}: ${deltaKR.toFixed(1)}%`,
+          ].filter(Boolean)
+        }
+      });
+    } else if (recR5 && recR5.attacks >= 5 && !recPoor) {
+      // Only R5 data available — show standalone conversion rate
+      transfItems.push({
+        text: `Conversione da ricezione perfetta (R5): kill rate ${recR5.killRate.toFixed(0)}% su ${recR5.attacks} attacchi (${recR5.pts} punti, ${recR5.errs} errori). ${recR5.killRate > 55 ? 'Ottima conversione dalla palla alta.' : recR5.killRate > 40 ? 'Conversione nella norma.' : 'Conversione sotto le attese dalla palla perfetta.'}`,
+        positive: recR5.killRate > 50,
+        tooltip: {
+          label: 'Conversione da R5',
+          values: [
+            `R5: ${recR5.pts}/${recR5.attacks} = ${recR5.killRate.toFixed(1)}%`,
+            recR4 ? `R4: ${recR4.pts}/${recR4.attacks} = ${recR4.killRate.toFixed(1)}%` : null,
+            recR3 ? `R3: ${recR3.pts}/${recR3.attacks} = ${recR3.killRate.toFixed(1)}%` : null,
+          ].filter(Boolean)
+        }
+      });
+    }
+
+    // Transformation in transition (from defense) — try D5 vs D3, fallback to D5 vs D4
+    const defPoor = (defD3 && defD3.attacks >= 2) ? defD3 : (defD4 && defD4.attacks >= 2) ? defD4 : null;
+    const defPoorLabel = (defD3 && defD3.attacks >= 2) ? 'D3' : (defD4 && defD4.attacks >= 2) ? 'D4' : null;
+    if (defD5 && defPoor && defD5.attacks >= 2) {
+      const deltaDef = defD5.killRate - defPoor.killRate;
+      transfItems.push({
+        text: `Trasformazione in transizione: da difesa perfetta (D5) kill rate ${defD5.killRate.toFixed(0)}% → da ${defPoorLabel} kill rate ${defPoor.killRate.toFixed(0)}%. ${Math.abs(deltaDef) < 15 ? 'Buona gestione del contrattacco anche da difese difficili.' : 'Contrattacco efficace soprattutto da difese pulite.'}`,
+        positive: deltaDef < 20,
+        tooltip: {
+          label: 'Conversione attacco per qualità difesa',
+          values: [
+            `Da D5: ${defD5.pts}/${defD5.attacks} = ${defD5.killRate.toFixed(1)}%`,
+            defD4 ? `Da D4: ${defD4.pts}/${defD4.attacks} = ${defD4.killRate.toFixed(1)}%` : null,
+            defD3 ? `Da D3: ${defD3.pts}/${defD3.attacks} = ${defD3.killRate.toFixed(1)}%` : null,
+          ].filter(Boolean)
+        }
+      });
+    } else if (defD5 && defD5.attacks >= 3 && !defPoor) {
+      transfItems.push({
+        text: `Conversione da difesa perfetta (D5): kill rate ${defD5.killRate.toFixed(0)}% su ${defD5.attacks} attacchi in transizione. ${defD5.killRate > 40 ? 'Buon contrattacco dalla difesa pulita.' : 'Contrattacco da migliorare anche da difese precise.'}`,
+        positive: defD5.killRate > 35,
+        tooltip: {
+          label: 'Conversione da D5',
+          values: [
+            `D5: ${defD5.pts}/${defD5.attacks} = ${defD5.killRate.toFixed(1)}%`,
+            defD4 ? `D4: ${defD4.pts}/${defD4.attacks} = ${defD4.killRate.toFixed(1)}%` : null,
+            defD3 ? `D3: ${defD3.pts}/${defD3.attacks} = ${defD3.killRate.toFixed(1)}%` : null,
+          ].filter(Boolean)
+        }
+      });
+    }
+
+    // Per-role transformation analysis: which attacker converts best from poor passes
+    const roleTransf = {};
+    for (const recKey of ['R5', 'R4', 'R3']) {
+      for (const entry of (atkFromRec[recKey] || [])) {
+        if (!entry.role || entry.attacks < 2) continue;
+        if (!roleTransf[entry.role]) roleTransf[entry.role] = {};
+        const pParts = entry.pointsStr?.split('-');
+        roleTransf[entry.role][recKey] = {
+          attacks: entry.attacks,
+          pts: parseInt(pParts?.[0]) || 0,
+          errs: parseInt(pParts?.[1]) || 0,
+          killRate: entry.attacks > 0 ? (parseInt(pParts?.[0]) || 0) / entry.attacks * 100 : 0,
+        };
+      }
+    }
+
+    // Find attackers who maintain kill rate from R3 (good transformers)
+    const goodTransformers = [];
+    const poorTransformers = [];
+    for (const [role, data] of Object.entries(roleTransf)) {
+      if (data.R5 && data.R3 && data.R5.attacks >= 2 && data.R3.attacks >= 2) {
+        const delta = data.R5.killRate - data.R3.killRate;
+        if (delta < 10) goodTransformers.push({ role, r5KR: data.R5.killRate, r3KR: data.R3.killRate, delta });
+        else if (delta > 25) poorTransformers.push({ role, r5KR: data.R5.killRate, r3KR: data.R3.killRate, delta });
+      }
+    }
+    if (goodTransformers.length > 0) {
+      transfItems.push({
+        text: `Migliori trasformatori da ricezione imprecisa: ${goodTransformers.map(t => `${t.role} (R3→${t.r3KR.toFixed(0)}%, delta solo ${t.delta.toFixed(0)}%)`).join(', ')}. Questi terminali mantengono efficacia anche con palla difficile.`,
+        positive: true,
+        tooltip: { label: 'Trasformatori efficaci', values: goodTransformers.map(t => `${t.role}: da R5 ${t.r5KR.toFixed(0)}%, da R3 ${t.r3KR.toFixed(0)}%, delta ${t.delta.toFixed(0)}%`) }
+      });
+    }
+    if (poorTransformers.length > 0) {
+      transfItems.push({
+        text: `Attaccanti in difficoltà con palla imprecisa: ${poorTransformers.map(t => `${t.role} (R3→${t.r3KR.toFixed(0)}%, calo di ${t.delta.toFixed(0)}%)`).join(', ')}. Il palleggiatore dovrebbe limitare le scelte su questi terminali quando la ricezione è neutra.`,
+        positive: false,
+        tooltip: { label: 'Trasformatori in difficoltà', values: poorTransformers.map(t => `${t.role}: da R5 ${t.r5KR.toFixed(0)}%, da R3 ${t.r3KR.toFixed(0)}%, delta ${t.delta.toFixed(0)}%`) }
+      });
+    }
+  }
+  if (transfItems.length > 0) {
+    sections.push({ id: 'transformation', title: 'Capacità di Trasformazione', color: 'purple', items: transfItems });
   }
 
   // ─── SECTION: ANALISI PALLEGGIATORE ─────────────────────────────────────
   const setterItems = [];
 
-  // Find setter(s) in roster
-  const setters = roster.filter(r => r.role === 'P1' || r.role === 'P2');
+  // Identifica il palleggiatore dalla logica P1: chi serve in rotazione P1 (fase 'b')
+  // è il palleggiatore. Questa è l'unica logica affidabile, indipendente dal ruolo nel roster.
+  const matchRallies = match?.rallies || [];
+  const setterNumsFromP1 = new Set();
+  for (const rl of matchRallies) {
+    if (rl.rotation === 1 && rl.phase === 'b') {
+      // Prova rally.server, fallback alla prima azione di battuta nella quartina
+      let srv = rl.server ? String(rl.server).padStart(2, '0') : null;
+      if (!srv) {
+        const srvToken = (rl.quartine || []).find(t => t.type === 'action' && String(t.fundamental || '').toLowerCase() === 'b');
+        if (srvToken?.player) srv = String(srvToken.player).padStart(2, '0');
+      }
+      if (srv) setterNumsFromP1.add(srv);
+    }
+  }
+  // Fallback: se non ci sono rally P1-b (dati incompleti), usa il roster + playerStats
+  let setters;
+  if (setterNumsFromP1.size > 0) {
+    setters = roster.filter(r => setterNumsFromP1.has(String(r.number).padStart(2, '0')));
+  } else {
+    const allSettersRoster = roster.filter(r => /^P\d?$/i.test(r.role) || /palleggiator/i.test(r.role));
+    setters = allSettersRoster.filter(s => {
+      const ps = pStats.find(p => String(p.number) === String(s.number));
+      if (!ps) return false;
+      const fKeys = ['serve', 'attack', 'defense', 'reception', 'block'];
+      return fKeys.some(fk => ps[fk] && ps[fk].tot > 0);
+    });
+  }
   const gioco = match?.gioco;
 
   if (setters.length > 0 && gioco) {
@@ -2973,11 +3537,21 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
       const topAttacker = roleEntries[0];
       const topPct = ((topAttacker[1].attacks / totalDistributed) * 100).toFixed(0);
       const isBalanced = roleEntries.length >= 3 && (topAttacker[1].attacks / totalDistributed) < 0.40;
+      // If only 1 role exists (e.g. all attacks coded as generic "ATT"), this is a data limitation
+      const isSingleGenericRole = roleEntries.length === 1 && /^ATT$/i.test(topAttacker[0]);
 
       // Setter distribution text
+      let distribText;
+      if (isSingleGenericRole) {
+        distribText = `Regia di ${setterNick}: ${totalDistributed} palloni distribuiti. Dati di distribuzione per ruolo non disponibili (tutti gli attacchi classificati come ruolo generico "${topAttacker[0]}").`;
+      } else if (isBalanced) {
+        distribText = `Regia di ${setterNick}: ${totalDistributed} palloni distribuiti. Distribuzione equilibrata tra i terminali.`;
+      } else {
+        distribText = `Regia di ${setterNick}: ${totalDistributed} palloni distribuiti. Distribuzione polarizzata su ${topAttacker[0]} (${topPct}%).`;
+      }
       setterItems.push({
-        text: `Regia di ${setterNick}: ${totalDistributed} palloni distribuiti. ${isBalanced ? 'Distribuzione equilibrata tra i terminali' : `Distribuzione polarizzata su ${topAttacker[0]} (${topPct}%)`}.`,
-        positive: isBalanced,
+        text: distribText,
+        positive: isSingleGenericRole ? null : isBalanced,
         tooltip: {
           label: `Distribuzione attacco (${setterNick})`,
           values: roleEntries.map(([role, data]) => {
@@ -3070,8 +3644,107 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
     }
   }
 
+  // ─── Setter: rotation-specific distribution choices ───
+  if (rallies.length > 0 && setters.length > 0) {
+    // Group rallies by rotation and phase, then analyze attacker role choices
+    const rotChoices = {};
+    for (const r of rallies) {
+      if (!r.rotation || !r.attackRole) continue;
+      const key = `P${r.rotation}-${r.phase === 'r' ? 'SO' : 'BP'}`;
+      if (!rotChoices[key]) rotChoices[key] = {};
+      if (!rotChoices[key][r.attackRole]) rotChoices[key][r.attackRole] = { total: 0, pts: 0 };
+      rotChoices[key][r.attackRole].total++;
+      if (r.isPoint) rotChoices[key][r.attackRole].pts++;
+    }
+
+    // Find rotation+phase where a chosen role underperformed while another had better historical stats
+    const rotChoiceItems = [];
+    for (const [rotPhase, roles] of Object.entries(rotChoices)) {
+      const roleArr = Object.entries(roles)
+        .filter(([, d]) => d.total >= 2)
+        .map(([role, d]) => ({ role, ...d, killRate: d.pts / d.total * 100 }))
+        .sort((a, b) => b.total - a.total);
+
+      if (roleArr.length >= 2) {
+        const mostUsed = roleArr[0];
+        const alternatives = roleArr.slice(1).filter(r => r.killRate > mostUsed.killRate + 10 && r.total >= 2);
+        if (alternatives.length > 0 && mostUsed.killRate < 30) {
+          rotChoiceItems.push({
+            rotPhase,
+            mostUsed,
+            better: alternatives[0],
+          });
+        }
+      }
+    }
+
+    if (rotChoiceItems.length > 0) {
+      for (const item of rotChoiceItems.slice(0, 3)) {
+        setterItems.push({
+          text: `In ${item.rotPhase}: il terminale più usato (${item.mostUsed.role}, ${item.mostUsed.total} att., ${item.mostUsed.killRate.toFixed(0)}% KR) ha reso meno di ${item.better.role} (${item.better.total} att., ${item.better.killRate.toFixed(0)}% KR). Valutare distribuzione alternativa.`,
+          positive: false,
+          tooltip: {
+            label: `Scelta attaccante in ${item.rotPhase}`,
+            values: [
+              `${item.mostUsed.role}: ${item.mostUsed.pts}/${item.mostUsed.total} = ${item.mostUsed.killRate.toFixed(1)}%`,
+              `${item.better.role}: ${item.better.pts}/${item.better.total} = ${item.better.killRate.toFixed(1)}%`,
+              `Suggerimento: redistribuire palloni verso ${item.better.role} in questa configurazione`,
+            ]
+          }
+        });
+      }
+    }
+
+    // Historical setter comparison: check if in past matches, in same rotation/phase, another role was better
+    if (matchAnalytics.length > 1) {
+      const historicalRoleKR = {};
+      for (const ma of matchAnalytics) {
+        if (ma.match?.id === match?.id) continue;
+        const histRallies = ma.match?.rallies || [];
+        for (const r of histRallies) {
+          if (!r.rotation || !r.attackRole) continue;
+          const key = `P${r.rotation}-${r.phase === 'r' ? 'SO' : 'BP'}`;
+          if (!historicalRoleKR[key]) historicalRoleKR[key] = {};
+          if (!historicalRoleKR[key][r.attackRole]) historicalRoleKR[key][r.attackRole] = { total: 0, pts: 0 };
+          historicalRoleKR[key][r.attackRole].total++;
+          if (r.isPoint) historicalRoleKR[key][r.attackRole].pts++;
+        }
+      }
+
+      // Compare current match role choice vs historical alternative
+      const histSuggestions = [];
+      for (const [rotPhase, currentRoles] of Object.entries(rotChoices)) {
+        const currentArr = Object.entries(currentRoles).filter(([, d]) => d.total >= 3).sort((a, b) => b[1].total - a[1].total);
+        if (currentArr.length === 0) continue;
+        const [mostUsedRole, mostUsedData] = currentArr[0];
+        const currentKR = mostUsedData.total > 0 ? mostUsedData.pts / mostUsedData.total * 100 : 0;
+
+        const histRoles = historicalRoleKR[rotPhase] || {};
+        for (const [hRole, hData] of Object.entries(histRoles)) {
+          if (hRole === mostUsedRole || hData.total < 5) continue;
+          const hKR = hData.pts / hData.total * 100;
+          if (hKR > currentKR + 15 && currentKR < 30) {
+            histSuggestions.push({ rotPhase, usedRole: mostUsedRole, usedKR: currentKR, altRole: hRole, altKR: hKR, altTotal: hData.total });
+          }
+        }
+      }
+
+      if (histSuggestions.length > 0) {
+        const top = histSuggestions.sort((a, b) => (b.altKR - b.usedKR) - (a.altKR - a.usedKR))[0];
+        setterItems.push({
+          text: `Storico regia: in ${top.rotPhase} il terminale ${top.usedRole} (${top.usedKR.toFixed(0)}% KR oggi) ha storicamente reso meno di ${top.altRole} (${top.altKR.toFixed(0)}% KR su ${top.altTotal} att. nello storico). Considerare questo dato per la prossima gara.`,
+          positive: null,
+          tooltip: {
+            label: `Confronto storico in ${top.rotPhase}`,
+            values: [`Oggi: ${top.usedRole} = ${top.usedKR.toFixed(1)}%`, `Storico: ${top.altRole} = ${top.altKR.toFixed(1)}% (${top.altTotal} att.)`]
+          }
+        });
+      }
+    }
+  }
+
   if (setterItems.length > 0) {
-    sections.push({ id: 'setter', title: 'Analisi Palleggiatore', color: 'teal', items: setterItems });
+    sections.push({ id: 'setter', title: 'Analisi Regia', color: 'teal', items: setterItems });
   }
 
   // ─── SECTION: SINTESI PER L'ALLENATORE ─────────────────────────────────
@@ -3174,6 +3847,7 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
 
 function OpponentScoutComparisonChart({
   seasonAgg,
+  standings,
   selectedOppAgg,
   selectedMatchMA,
   seasonTeamAvg,
@@ -3463,6 +4137,7 @@ function OpponentScoutComparisonChart({
               selectedOppAgg={selectedOppAgg}
               seasonTeamAvg={seasonTeamAvg}
               seasonAgg={seasonAgg}
+              standings={standings}
               activeOpponent={activeOpponent}
               lineMode={lineMode}
               matchAnalytics={matchAnalytics}
@@ -3489,8 +4164,8 @@ function InfoTooltip({ label, values }) {
   );
 }
 
-function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, activeOpponent, lineMode = 'attitude', matchAnalytics = [] }) {
-  const sections = generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, activeOpponent, lineMode, matchAnalytics);
+function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, standings, activeOpponent, lineMode = 'attitude', matchAnalytics = [] }) {
+  const sections = generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonAgg, activeOpponent, lineMode, matchAnalytics, standings);
 
   if (!sections) {
     return <p className="text-sm text-gray-300 italic">Dati insufficienti per generare un'analisi completa.</p>;
@@ -3505,6 +4180,10 @@ function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonA
     cyan:    { title: 'text-cyan-300',    border: 'border-cyan-500/20',    bg: 'bg-cyan-500/5'    },
     sky:     { title: 'text-sky-300',     border: 'border-sky-500/20',     bg: 'bg-sky-500/5'     },
     teal:    { title: 'text-teal-300',    border: 'border-teal-500/20',    bg: 'bg-teal-500/5'    },
+    orange:  { title: 'text-orange-300',  border: 'border-orange-500/20',  bg: 'bg-orange-500/5'  },
+    fuchsia: { title: 'text-fuchsia-300', border: 'border-fuchsia-500/20', bg: 'bg-fuchsia-500/5' },
+    lime:    { title: 'text-lime-300',    border: 'border-lime-500/20',    bg: 'bg-lime-500/5'    },
+    purple:  { title: 'text-purple-300',  border: 'border-purple-500/20',  bg: 'bg-purple-500/5'  },
   };
 
   return (

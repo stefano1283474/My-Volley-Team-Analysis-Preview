@@ -484,13 +484,28 @@ function normalizeMatchFromFirestore(data = {}, docId = '') {
     : (Array.isArray(rawMatch?.players) ? rawMatch.players : []);
   const roster = rosterSource.map((player) => normalizeRosterPlayer(player));
 
+  // Build metadata – when metadata already exists (e.g. from XLSX import) we still
+  // need to honour the Firestore `description` field ("Andata" / "Ritorno") so that
+  // the opponent name carries the (A)/(R) round prefix used downstream to separate
+  // first-leg and second-leg matches against the same team.
+  let metadata;
+  if (hasMetadata) {
+    metadata = { ...(rawMatch.metadata || {}), matchType: normalizeMatchType(rawMatch?.metadata?.matchType) };
+    // Inject round prefix from `description` when the opponent name doesn't already have one
+    const _desc = String(rawMatch?.description || '').trim().toLowerCase();
+    const _prefix = _desc === 'andata' ? '(A) ' : _desc === 'ritorno' ? '(R) ' : '';
+    if (_prefix && metadata.opponent && !/^\([AR]\) /i.test(metadata.opponent)) {
+      metadata.opponent = _prefix + metadata.opponent;
+    }
+  } else {
+    metadata = buildMetadataFromMVS(rawMatch, sets);
+  }
+
   const baseMatch = {
     ...rawMatch,
     id: rawMatch?.id || docId,
     roster,
-    metadata: hasMetadata
-      ? { ...(rawMatch.metadata || {}), matchType: normalizeMatchType(rawMatch?.metadata?.matchType) }
-      : buildMetadataFromMVS(rawMatch, sets),
+    metadata,
     sets,
   };
 
