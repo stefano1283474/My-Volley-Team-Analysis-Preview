@@ -21,11 +21,32 @@
 
 import {
   doc, collection, collectionGroup,
-  setDoc, getDoc, getDocs, deleteDoc,
+  setDoc as _setDoc, getDoc as _getDoc, getDocs as _getDocs, deleteDoc as _deleteDoc,
   serverTimestamp,
+  disableNetwork, enableNetwork,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { computeStatsFromMVSMatch } from './dataParser';
+
+// ── Network management: disable after initial load, re-enable on writes ──
+let _networkDisabled = false;
+
+export async function terminateFirestore() {
+  try { await disableNetwork(db); _networkDisabled = true; } catch (e) { console.warn('[disableNetwork]', e?.message); }
+}
+
+async function _ensureNetwork() {
+  if (_networkDisabled) {
+    try { await enableNetwork(db); _networkDisabled = false; } catch {}
+  }
+}
+
+// Wrap write operations to auto re-enable network
+async function setDoc(...args)    { await _ensureNetwork(); return _setDoc(...args); }
+async function deleteDoc(...args) { await _ensureNetwork(); return _deleteDoc(...args); }
+// Read operations use cached data when offline — no need to re-enable
+const getDoc  = _getDoc;
+const getDocs = _getDocs;
 
 // ─── Path helpers ────────────────────────────────────────────────────────────
 
@@ -518,6 +539,11 @@ function normalizeMatchFromFirestore(data = {}, docId = '') {
   if (hasActions) {
     try {
       const computed = computeStatsFromMVSMatch(actionsBySet, roster);
+      // Recompute rally rotations if the engine didn't set them (Firestore data has no rotation field)
+      let computedRallies = Array.isArray(computed?.rallies) ? computed.rallies : [];
+      if (computedRallies.length > 0 && computedRallies.every(r => !r.rotation || r.rotation === 0)) {
+        computedRallies = recomputeRallyRotations(computedRallies, sets);
+      }
       return {
         updatedAt: _updatedAt,
         match: {
@@ -525,7 +551,7 @@ function normalizeMatchFromFirestore(data = {}, docId = '') {
           riepilogo: normalizeRiepilogoPlayerBlocks(computed?.riepilogo || {}),
           gioco: computed?.gioco || null,
           giriDiRice: computed?.giriDiRice || null,
-          rallies: Array.isArray(computed?.rallies) ? computed.rallies : [],
+          rallies: computedRallies,
         },
       };
     } catch (err) {

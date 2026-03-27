@@ -790,7 +790,7 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
   const rosterMap = {};
   (Array.isArray(roster) ? roster : []).forEach(p => {
     const num = String(p.number || '').padStart(2, '0');
-    if (num) rosterMap[num] = { surname: String(p.surname || '').trim(), name: String(p.name || '').trim() };
+    if (num) rosterMap[num] = { surname: String(p.surname || '').trim(), name: String(p.name || '').trim(), role: String(p.role || '').trim() };
   });
 
   // ── Riepilogo accumulators ───────────────────────────────────────────────────
@@ -817,6 +817,9 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
   const giocoRotStats = {};
   const arBuckets = { R5: _mkStat(), R4: _mkStat(), R3: _mkStat() };
   const adBuckets = { D5: _mkStat(), D4: _mkStat(), D3: _mkStat() };
+  // Per-role attack buckets: arByRole[quality][role] = _mkStat(), adByRole same
+  const arByRole = { R5: {}, R4: {}, R3: {} };
+  const adByRole = { D5: {}, D4: {}, D3: {} };
   const recByRot  = {};
   const getGRS = r => {
     if (!giocoRotStats[r]) giocoRotStats[r] = { rotation: r, attack: _mkStat(), serve: _mkStat(), reception: _mkStat(), defense: _mkStat() };
@@ -919,13 +922,24 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
             }
             _addEval(giocoOverview.attack, e);
             if (rot) _addEval(getGRS(rot).attack, e);
-            if (lastRcvEval !== null) {
-              const rk = lastRcvEval >= 4 ? 'R5' : (lastRcvEval >= 3 ? 'R4' : 'R3');
-              _addEval(arBuckets[rk], e); lastRcvEval = null;
-            }
-            if (lastDefEval !== null) {
-              const dk = lastDefEval >= 4 ? 'D5' : (lastDefEval >= 3 ? 'D4' : 'D3');
-              _addEval(adBuckets[dk], e); lastDefEval = null;
+            {
+              // Determine attacker role from roster
+              const atkPlayerNum = String(act?.player || '').padStart(2, '0');
+              const atkRole = rosterMap[atkPlayerNum]?.role || 'ATT';
+              if (lastRcvEval !== null) {
+                const rk = lastRcvEval >= 4 ? 'R5' : (lastRcvEval >= 3 ? 'R4' : 'R3');
+                _addEval(arBuckets[rk], e);
+                if (!arByRole[rk][atkRole]) arByRole[rk][atkRole] = _mkStat();
+                _addEval(arByRole[rk][atkRole], e);
+                lastRcvEval = null;
+              }
+              if (lastDefEval !== null) {
+                const dk = lastDefEval >= 4 ? 'D5' : (lastDefEval >= 3 ? 'D4' : 'D3');
+                _addEval(adBuckets[dk], e);
+                if (!adByRole[dk][atkRole]) adByRole[dk][atkRole] = _mkStat();
+                _addEval(adByRole[dk][atkRole], e);
+                lastDefEval = null;
+              }
             }
             break;
           case 'b':
@@ -1054,6 +1068,14 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
         const val    = Number(act?.evaluation !== undefined ? act.evaluation : (act?.value || 0));
         return { type: 'action', player, fundamental: fund, value: val, raw: player + fund + val };
       });
+      // Determine attacker role and server for this rally
+      let rallyAttackRole = null, rallyServer = null;
+      for (const act of acts) {
+        const ff = String(act?.fundamental || '').toLowerCase();
+        const pp = String(act?.player || '').padStart(2, '0');
+        if (ff === 'a' && !rallyAttackRole) rallyAttackRole = rosterMap[pp]?.role || null;
+        if (ff === 'b' && !rallyServer) rallyServer = pp;
+      }
       rallies.push({
         set:          setNum,
         row:          idx + 1,
@@ -1067,12 +1089,113 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
         actionString: String(entry?.actionString || ''),
         pointDesc:    outcome === 'home_point' ? 'Punto' : '',
         errorDesc:    outcome === 'away_point' ? 'Errore' : '',
+        attackRole:   rallyAttackRole,
+        server:       rallyServer,
       });
       if (outcome === 'home_point')       rallyOurScore++;
       else if (outcome === 'away_point')  rallyTheirScore++;
       if (outcome !== 'continue') rallyPhase = outcome === 'home_point' ? 'b' : 'r';
     });
   });
+
+  // ── Recompute rally rotations if all are 0 (Firestore data) ──────────────
+  // Uses side-out tracking: rotation advances when team receives and wins point.
+  if (rallies.length > 0 && rallies.every(r => !r.rotation || r.rotation === 0)) {
+    const bySet = {};
+    for (const r of rallies) { const sn = r.set || 1; if (!bySet[sn]) bySet[sn] = []; bySet[sn].push(r); }
+    for (const setRallies of Object.values(bySet)) {
+      let rot = 1; // default start rotation (will be corrected later if possible)
+      for (const r of setRallies) {
+        r.rotation = rot;
+        if (r.phase === 'r' && r.isPoint) rot = (rot % 6) + 1; // side-out → next rotation
+      }
+    }
+    // Rebuild rotMap from recomputed rotations (the main loop couldn't populate it)
+    for (const r of rallies) {
+      const rr = r.rotation;
+      if (rr >= 1 && rr <= 6) {
+        if (!rotMap[rr]) rotMap[rr] = { rotation: rr, totalPoints: 0, pointsMade: 0, pointsLost: 0 };
+        rotMap[rr].totalPoints++;
+        if (r.isPoint) rotMap[rr].pointsMade++;
+        if (r.isError) rotMap[rr].pointsLost++;
+      }
+    }
+  }
+
+  // ── Setter identification ─────────────────────────────────────────────────
+  // Logic: the setter is the player who serves in P1 (rotation=1, phase='b').
+  // When we find a P1 serve, all preceding rallies (back to the previous P1
+  // or start of set) get that setter assigned.
+  // Sets: process each set independently.
+  {
+    const setGroups = {};
+    rallies.forEach((r, i) => { if (!setGroups[r.set]) setGroups[r.set] = []; setGroups[r.set].push(i); });
+    let lastKnownSetter = null;
+    for (const setNum of Object.keys(setGroups).sort((a, b) => Number(a) - Number(b))) {
+      const indices = setGroups[setNum];
+      // Find all P1 serve occurrences in this set (setter markers)
+      const p1ServeIndices = [];
+      for (const idx of indices) {
+        const r = rallies[idx];
+        if (r.rotation === 1 && r.phase === 'b' && r.server) {
+          p1ServeIndices.push(idx);
+        }
+      }
+
+      if (p1ServeIndices.length > 0) {
+        // First P1 serve: assign setter to all preceding rallies in this set
+        const firstP1 = p1ServeIndices[0];
+        const setterNum = rallies[firstP1].server;
+        const setterRole = rosterMap[setterNum]?.role || 'P';
+        const setterName = ((rosterMap[setterNum]?.surname || '') + ' ' + (rosterMap[setterNum]?.name || '')).trim() || setterNum;
+        lastKnownSetter = { number: setterNum, role: setterRole, name: setterName };
+
+        // Assign to all rallies from start of set up to (not including) firstP1
+        for (const idx of indices) {
+          if (idx >= firstP1) break;
+          rallies[idx].setter = lastKnownSetter;
+        }
+        // Assign to the P1 serve rally itself
+        rallies[firstP1].setter = lastKnownSetter;
+
+        // For subsequent P1 serves, assign the NEW setter to rallies between
+        for (let pi = 0; pi < p1ServeIndices.length; pi++) {
+          const curP1Idx = p1ServeIndices[pi];
+          const curSetter = rallies[curP1Idx].server;
+          const curSetterInfo = {
+            number: curSetter,
+            role: rosterMap[curSetter]?.role || 'P',
+            name: ((rosterMap[curSetter]?.surname || '') + ' ' + (rosterMap[curSetter]?.name || '')).trim() || curSetter,
+          };
+          lastKnownSetter = curSetterInfo;
+          rallies[curP1Idx].setter = curSetterInfo;
+
+          // Assign to all rallies between this P1 and the next P1 (or end of set)
+          const nextP1Idx = pi + 1 < p1ServeIndices.length ? p1ServeIndices[pi + 1] : null;
+          for (const idx of indices) {
+            if (idx <= curP1Idx) continue;
+            if (nextP1Idx !== null && idx >= nextP1Idx) break;
+            rallies[idx].setter = curSetterInfo;
+          }
+        }
+
+        // Remaining rallies after last P1 in set: inherit last setter
+        const lastP1Idx = p1ServeIndices[p1ServeIndices.length - 1];
+        for (const idx of indices) {
+          if (idx > lastP1Idx && !rallies[idx].setter) {
+            rallies[idx].setter = lastKnownSetter;
+          }
+        }
+      } else {
+        // No P1 serve found in this set: inherit from previous set
+        if (lastKnownSetter) {
+          for (const idx of indices) {
+            rallies[idx].setter = lastKnownSetter;
+          }
+        }
+      }
+    }
+  }
 
   // ── Build riepilogo ─────────────────────────────────────────────────────────
   const playerStats = Object.values(pMap).map(p => {
@@ -1134,12 +1257,33 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
   const attackFromReception = {};
   const attackFromDefense   = {};
   ['R5', 'R4', 'R3'].forEach(k => {
-    const s = _finalizeStat(arBuckets[k]);
-    attackFromReception[k] = [{ role: 'ATT', attacks: s.tot, pointsStr: s.kill + '/' + s.err }];
+    const roleEntries = Object.entries(arByRole[k])
+      .filter(([, stat]) => stat.tot > 0)
+      .map(([role, stat]) => {
+        const s = _finalizeStat(stat);
+        return { role, attacks: s.tot, pointsStr: s.kill + '/' + s.err };
+      });
+    // Fallback to generic ATT if no per-role data
+    if (roleEntries.length > 0) {
+      attackFromReception[k] = roleEntries;
+    } else {
+      const s = _finalizeStat(arBuckets[k]);
+      attackFromReception[k] = [{ role: 'ATT', attacks: s.tot, pointsStr: s.kill + '/' + s.err }];
+    }
   });
   ['D5', 'D4', 'D3'].forEach(k => {
-    const s = _finalizeStat(adBuckets[k]);
-    attackFromDefense[k] = [{ role: 'ATT', attacks: s.tot, pointsStr: s.kill + '/' + s.err }];
+    const roleEntries = Object.entries(adByRole[k])
+      .filter(([, stat]) => stat.tot > 0)
+      .map(([role, stat]) => {
+        const s = _finalizeStat(stat);
+        return { role, attacks: s.tot, pointsStr: s.kill + '/' + s.err };
+      });
+    if (roleEntries.length > 0) {
+      attackFromDefense[k] = roleEntries;
+    } else {
+      const s = _finalizeStat(adBuckets[k]);
+      attackFromDefense[k] = [{ role: 'ATT', attacks: s.tot, pointsStr: s.kill + '/' + s.err }];
+    }
   });
   const receptionByRotation = Object.values(recByRot).map(({ rotation: rt, ...rest }) =>
     Object.assign({ rotation: rt }, _finalizeStat(rest))

@@ -94,6 +94,7 @@ import {
   isAdminContentVisibleToUser,
   loadPackageConfig,
   savePackageConfig,
+  terminateFirestore,
 } from './utils/firestoreService';
 import { useAuth } from './context/AuthContext';
 import { PinProvider } from './context/PinContext';
@@ -1576,6 +1577,8 @@ export default function App() {
           setIsLoading(false);
           setDataLoaded(true);
           setTimeout(() => setLoadingMsg(''), 3000);
+          // Close Firestore WebChannel to stop long-polling (data is already loaded)
+          try { await terminateFirestore(); } catch {}
         }
       }
     };

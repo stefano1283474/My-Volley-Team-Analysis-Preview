@@ -2229,19 +2229,6 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
   const atkFromRec = giocoData?.attackFromReception || {};
   const atkFromDef = giocoData?.attackFromDefense || {};
 
-  // ── Player-level metric (bypasses team-level attitude shortcut) ──
-  const playerMetricPct = (data, fundKey) => {
-    if (!data || typeof data !== 'object') return null;
-    const total = Number(data.tot || 0);
-    if (!Number.isFinite(total) || total <= 0) return null;
-    const kill = Number(data.kill || 0);
-    const pos  = Number(data.pos  || 0);
-    const err  = Number(data.err  || 0);
-    const dr = fundKey === 'defense' || fundKey === 'reception';
-    // Use efficacy for player-level: positive outcomes / total
-    return dr ? ((kill + pos) / total) * 100 : (kill / total) * 100;
-  };
-
   // ── Pre-compute player season averages (excluding current match) ──
   const pAvg = {};
   if (matchAnalytics.length > 1) {
@@ -2254,11 +2241,11 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
       for (const p of ps) {
         if (!p.number) continue;
         if (!acc[p.number]) acc[p.number] = { serve: [], attack: [], defense: [], reception: [] };
-        if (p.serve?.tot > 0) acc[p.number].serve.push(playerMetricPct(p.serve, 'serve'));
-        if (p.attack?.tot > 0) acc[p.number].attack.push(playerMetricPct(p.attack, 'attack'));
+        if (p.serve?.tot > 0) acc[p.number].serve.push(teamMetricPct(p.serve, null, 'serve'));
+        if (p.attack?.tot > 0) acc[p.number].attack.push(teamMetricPct(p.attack, null, 'attack'));
       }
-      for (const p of pr) { if (!p.number) continue; if (!acc[p.number]) acc[p.number] = { serve: [], attack: [], defense: [], reception: [] }; if (p.tot > 0) acc[p.number].reception.push(playerMetricPct(p, 'reception')); }
-      for (const p of pd) { if (!p.number) continue; if (!acc[p.number]) acc[p.number] = { serve: [], attack: [], defense: [], reception: [] }; if (p.tot > 0) acc[p.number].defense.push(playerMetricPct(p, 'defense')); }
+      for (const p of pr) { if (!p.number) continue; if (!acc[p.number]) acc[p.number] = { serve: [], attack: [], defense: [], reception: [] }; if (p.tot > 0) acc[p.number].reception.push(teamMetricPct(p, null, 'reception')); }
+      for (const p of pd) { if (!p.number) continue; if (!acc[p.number]) acc[p.number] = { serve: [], attack: [], defense: [], reception: [] }; if (p.tot > 0) acc[p.number].defense.push(teamMetricPct(p, null, 'defense')); }
     }
     for (const [num, a] of Object.entries(acc)) {
       const avg = {};
@@ -2506,7 +2493,7 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
       let attacks = 0, kills = 0, errors = 0;
       for (const e of entries) {
         attacks += safeN(e.attacks);
-        const p = String(e.pointsStr || '').split('/');
+        const p = String(e.pointsStr || '').split('-');
         kills += parseInt(p[0]) || 0;
         errors += parseInt(p[1]) || 0;
       }
@@ -2659,27 +2646,16 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
   {
     const items = [];
 
-    // Starting rotations per set — derive from first rally if set data missing
+    // Starting rotations per set
     if (sets.length > 0) {
       const setRotInfo = [];
       for (const s of sets) {
-        let ourRot = s.ourStartRotation || null;
-        let oppRot = s.oppStartRotation || null;
-        // Fallback: derive from first rally of this set
-        if (!ourRot) {
-          const firstRally = rallies.find(r => r.set === s.number && r.rotation > 0);
-          if (firstRally) ourRot = firstRally.rotation;
-        }
-        const ourLabel = ourRot ? `P${ourRot}` : '?';
-        const oppLabel = oppRot ? `P${oppRot}` : '?';
-        setRotInfo.push(`Set ${s.number}: Team ${ourLabel} vs ${oppName} ${oppLabel} → ${s.ourScore}-${s.theirScore} (${s.won ? 'V' : 'P'})`);
+        const ourRot = s.rotation ? `P${s.rotation}` : '?';
+        const oppRot = s.oppStartRotation ? `P${s.oppStartRotation}` : '?';
+        setRotInfo.push(`Set ${s.number}: Team ${ourRot} vs ${oppName} ${oppRot} → ${s.ourScore}-${s.theirScore} (${s.won ? 'V' : 'P'})`);
       }
       items.push({
-        text: `Rotazioni di partenza: ${sets.map(s => {
-          let ourR = s.ourStartRotation || null;
-          if (!ourR) { const fr = rallies.find(r => r.set === s.number && r.rotation > 0); if (fr) ourR = fr.rotation; }
-          return `Set ${s.number}: Team P${ourR || '?'} / ${oppName} P${s.oppStartRotation || '?'}`;
-        }).join(' | ')}.`,
+        text: `Rotazioni di partenza: ${sets.map(s => `Set ${s.number}: Team P${s.rotation || '?'} / ${oppName} P${s.oppStartRotation || '?'}`).join(' | ')}.`,
         positive: null,
         tooltip: { label: 'Rotazioni per set', values: setRotInfo }
       });
@@ -2688,13 +2664,12 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
     // Best/worst rotation with matchup
     const riepilogoRotations = match?.riepilogo?.rotations || [];
     if (riepilogoRotations.length > 0) {
-      const rots = riepilogoRotations.map(r => {
-        // Support both plain numbers (from rotMap) and {total: N} objects
-        const made = safeN(typeof r.pointsMade === 'object' ? r.pointsMade?.total : r.pointsMade);
-        const lost = safeN(typeof r.pointsLost === 'object' ? r.pointsLost?.total : r.pointsLost);
-        const total = safeN(typeof r.totalPoints === 'object' ? r.totalPoints?.total : r.totalPoints);
-        return { ...r, made, lost, total, balance: made - lost, ratio: total > 0 ? made / total : 0 };
-      }).filter(r => r.total > 0).sort((a, b) => b.ratio - a.ratio);
+      const rots = riepilogoRotations.map(r => ({
+        ...r,
+        made: safeN(r.pointsMade?.total), lost: safeN(r.pointsLost?.total), total: safeN(r.totalPoints?.total),
+        balance: safeN(r.pointsMade?.total) - safeN(r.pointsLost?.total),
+        ratio: safeN(r.totalPoints?.total) > 0 ? safeN(r.pointsMade?.total) / safeN(r.totalPoints?.total) : 0
+      })).filter(r => r.total > 0).sort((a, b) => b.ratio - a.ratio);
 
       // Build matchup matrix
       const oppStart = {};
@@ -2802,7 +2777,7 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
         if (!e.role) continue;
         if (!roleAtt[e.role]) roleAtt[e.role] = { attacks: 0, pts: 0, errs: 0 };
         roleAtt[e.role].attacks += e.attacks || 0;
-        const p = String(e.pointsStr || '').split('/');
+        const p = String(e.pointsStr || '').split('-');
         roleAtt[e.role].pts += parseInt(p[0]) || 0;
         roleAtt[e.role].errs += parseInt(p[1]) || 0;
       }
@@ -2916,7 +2891,7 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
         { key: 'reception', label: 'Ricezione', data: recData },
         { key: 'defense',   label: 'Difesa',    data: defData },
       ]) {
-        const mv = fm.data?.tot > 0 ? playerMetricPct(fm.data, fm.key) : null;
+        const mv = fm.data?.tot > 0 ? teamMetricPct(fm.data, null, fm.key) : null;
         const av = avg[fm.key];
         if (mv !== null && av !== null && Number.isFinite(av) && safeN(fm.data?.tot) >= 3) {
           deltas.push({ key: fm.key, label: fm.label, matchVal: mv, avgVal: av, delta: mv - av, tot: safeN(fm.data?.tot) });
@@ -2929,31 +2904,27 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
       const worst = deltas.reduce((w, d) => !w || d.delta < w.delta ? d : w, null);
 
       if (best && worst && best.key !== worst.key) {
-        // playerMetricPct always returns percentages → always show %
-        const pVal = (v) => `${Number(v).toFixed(1)}%`;
-        const pGap = (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
-
         let text = `${nick} (#${p.number}): `;
         if (best.delta > 0) {
-          text += `↑ ${best.label} ${pGap(best.delta)} vs media (${pVal(best.matchVal)} vs ${pVal(best.avgVal)})`;
+          text += `↑ ${best.label} ${gapFmt(best.delta)} vs media (${valFmt(best.matchVal)} vs ${valFmt(best.avgVal)})`;
         } else {
-          text += `↑ ${best.label} ${pGap(best.delta)} (meno negativo)`;
+          text += `↑ ${best.label} ${gapFmt(best.delta)} (meno negativo)`;
         }
         text += ` | `;
         if (worst.delta < 0) {
-          text += `↓ ${worst.label} ${pGap(worst.delta)} vs media (${pVal(worst.matchVal)} vs ${pVal(worst.avgVal)})`;
+          text += `↓ ${worst.label} ${gapFmt(worst.delta)} vs media (${valFmt(worst.matchVal)} vs ${valFmt(worst.avgVal)})`;
         } else {
-          text += `↓ ${worst.label} ${pGap(worst.delta)} (meno positivo)`;
+          text += `↓ ${worst.label} ${gapFmt(worst.delta)} (meno positivo)`;
         }
         text += '.';
 
         items.push({
           text,
-          positive: best.delta > 0 && worst.delta > -5 ? true : worst.delta < -10 ? false : null,
+          positive: best.delta > 0 && worst.delta > -(isMP ? 0.1 : 5) ? true : worst.delta < -(isMP ? 0.2 : 10) ? false : null,
           tooltip: {
             label: `${nick} — Delta per fondamentale`,
             values: deltas.sort((a, b) => b.delta - a.delta).map(d =>
-              `${d.label}: ${pVal(d.matchVal)} vs media ${pVal(d.avgVal)} (${pGap(d.delta)})`
+              `${d.label}: ${valFmt(d.matchVal)} vs media ${valFmt(d.avgVal)} (${gapFmt(d.delta)})`
             )
           }
         });
