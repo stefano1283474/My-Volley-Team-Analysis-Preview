@@ -256,6 +256,72 @@ function normalizeMatchType(value) {
   return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
 
+function normalizeIdPart(value = '') {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w() -]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[\\/]/g, '-')
+    .replace(/ /g, '_');
+}
+
+function extractRoundCode(match = {}) {
+  const probe = [
+    match?.description,
+    match?.metadata?.phase,
+    match?.phase,
+    match?.metadata?.opponent,
+  ]
+    .map((v) => String(v || '').trim().toLowerCase())
+    .join(' ');
+  if (/(^|\W)andata($|\W)|\([a]\)/i.test(probe)) return 'A';
+  if (/(^|\W)ritorno($|\W)|\([r]\)/i.test(probe)) return 'R';
+  return '';
+}
+
+function parseItalianDateParts(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  let match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (match) {
+    const yy = match[1].slice(-2);
+    return { dd: match[3].padStart(2, '0'), mm: match[2].padStart(2, '0'), yy };
+  }
+  match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (match) {
+    const year = String(match[3]).padStart(2, '0');
+    return { dd: match[1].padStart(2, '0'), mm: match[2].padStart(2, '0'), yy: year.slice(-2) };
+  }
+  return null;
+}
+
+function buildMatchDocumentId(match = {}) {
+  const metadata = match?.metadata || {};
+  const eventRaw = String(metadata?.matchType || match?.matchType || match?.eventType || '').trim();
+  const eventCode = normalizeIdPart(eventRaw).toUpperCase().replace(/_/g, '').slice(0, 4) || 'MATC';
+  const dateParts = parseItalianDateParts(metadata?.date || match?.date || match?.matchDate || '');
+  const dateCode = dateParts ? `${dateParts.dd}-${dateParts.mm}-${dateParts.yy}` : '00-00-00';
+  const roundCode = extractRoundCode(match);
+  const oppRaw = String(metadata?.opponent || match?.opponentTeam || match?.awayTeam || '').replace(/^\([AR]\)\s*/i, '').trim();
+  const opponentCode = normalizeIdPart(oppRaw) || 'AVVERSARIO';
+  const roundToken = roundCode ? `(${roundCode})` : '';
+  return [eventCode, dateCode, opponentCode, roundToken].filter(Boolean).join('_').slice(0, 180);
+}
+
+function buildMatchDisplayName(match = {}) {
+  const metadata = match?.metadata || {};
+  const eventRaw = String(metadata?.matchType || match?.matchType || match?.eventType || '').trim();
+  const eventCode = normalizeIdPart(eventRaw).toUpperCase().replace(/_/g, '').slice(0, 4) || 'MATC';
+  const dateParts = parseItalianDateParts(metadata?.date || match?.date || match?.matchDate || '');
+  const dateLabel = dateParts ? `${dateParts.dd}/${dateParts.mm}/${dateParts.yy}` : '00/00/00';
+  const roundCode = extractRoundCode(match);
+  const opponent = String(metadata?.opponent || match?.opponentTeam || match?.awayTeam || '').replace(/^\([AR]\)\s*/i, '').trim() || 'Avversario';
+  const roundLabel = roundCode ? ` (${roundCode})` : '';
+  return `${eventCode} ${dateLabel} ${opponent}${roundLabel}`.trim();
+}
+
 function normalizeHomeAway(value, fallbackIsHome = true) {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'away' || raw === 'trasferta') return 'away';
@@ -316,20 +382,31 @@ function normalizeSetsForMVTA(rawMatch = {}) {
       .filter((setItem) => (setItem.ourScore + setItem.theirScore) > 0);
   }
   if (src && typeof src === 'object') {
+    // Helper: parse "P3" → 3, or plain "3" → 3
+    const parseRot = (v) => {
+      if (!v) return null;
+      const n = parseInt(String(v).replace(/^[Pp]/i, ''), 10);
+      return (n >= 1 && n <= 6) ? n : null;
+    };
     return Object.keys(src)
       .sort((a, b) => Number(a) - Number(b))
       .map((setKey, index) => {
         const setValue = src[setKey] || {};
         const number = Number(setKey) || (index + 1);
         const { ourScore, theirScore } = deriveSetScoreFromMVS(setValue);
+        // Rotations stored under meta.ourRotation / meta.opponentRotation (format "P3")
+        // Fall back to top-level fields if present
+        const meta = setValue?.meta || {};
+        const ourStartRotation = parseRot(meta.ourRotation)     ?? parseRot(setValue.ourStartRotation)     ?? null;
+        const oppStartRotation = parseRot(meta.opponentRotation) ?? parseRot(setValue.oppStartRotation) ?? null;
         return {
           number,
           ourScore,
           theirScore,
           margin: ourScore - theirScore,
           won: ourScore > theirScore,
-          oppStartRotation: null,
-          ourStartRotation: null,
+          oppStartRotation,
+          ourStartRotation,
         };
       })
       .filter((setItem) => (setItem.ourScore + setItem.theirScore) > 0);
@@ -593,13 +670,17 @@ export async function saveMatch(userId, match, teamId = '') {
       matchType: normalizeMatchType(nextMatch.metadata.matchType),
     };
   }
-  const ref = matchDocRef(ownerId, match.id, teamId);
+  const normalizedMatchId = buildMatchDocumentId(nextMatch);
+  nextMatch.id = normalizedMatchId;
+  nextMatch.matchName = buildMatchDisplayName(nextMatch);
+  const ref = matchDocRef(ownerId, normalizedMatchId, teamId);
   const payload = sanitize({
     _type: 'match',
     _updatedAt: serverTimestamp(),
     ...nextMatch,
   });
   await setDoc(ref, payload);
+  return nextMatch;
 }
 
 /**
@@ -1431,18 +1512,19 @@ export async function updateUserAssignedProfile(uid, assignedProfile, email = ''
 
 // ─── Team News (Bacheca) ──────────────────────────────────────────────────────
 
-function newsDocRef(ownerUid) {
-  return doc(db, MVS_USERS_ROOT, ownerUid, 'news', 'posts');
+function newsDocRef(ownerId) {
+  return doc(db, MVS_USERS_ROOT, ownerId, 'news', 'posts');
 }
 
 /**
  * Carica i post della bacheca per un dataset owner.
+ * ownerId è l'email del proprietario del dataset (chiave uniforme con il resto del DB).
  * Restituisce un array di post ordinati per eventDate / createdAt.
  */
-export async function loadTeamNews(ownerUid) {
-  if (!ownerUid) return [];
+export async function loadTeamNews(ownerId) {
+  if (!ownerId) return [];
   try {
-    const snap = await getDoc(newsDocRef(ownerUid));
+    const snap = await getDoc(newsDocRef(ownerId));
     if (snap.exists()) return snap.data()?.posts || [];
     return [];
   } catch (err) {
@@ -1455,27 +1537,29 @@ export async function loadTeamNews(ownerUid) {
 
 /**
  * Salva l'intero array di post della bacheca.
+ * ownerId è l'email del proprietario del dataset.
  * Sovrascrive il documento con il nuovo array.
  */
-export async function saveTeamNews(ownerUid, posts) {
-  if (!ownerUid) throw new Error('ownerUid mancante');
-  await setDoc(newsDocRef(ownerUid), sanitize({ posts, updatedAt: serverTimestamp() }));
+export async function saveTeamNews(ownerId, posts) {
+  if (!ownerId) throw new Error('ownerId mancante');
+  await setDoc(newsDocRef(ownerId), sanitize({ posts, updatedAt: serverTimestamp() }));
 }
 
 // ─── Team Offerte ─────────────────────────────────────────────────────────────
 
-function offersDocRef(ownerUid) {
-  return doc(db, MVS_USERS_ROOT, ownerUid, 'offers', 'list');
+function offersDocRef(ownerId) {
+  return doc(db, MVS_USERS_ROOT, ownerId, 'offers', 'list');
 }
 
 /**
  * Carica le offerte per un dataset owner.
+ * ownerId è l'email del proprietario del dataset.
  * Restituisce un array di offerte.
  */
-export async function loadTeamOffers(ownerUid) {
-  if (!ownerUid) return [];
+export async function loadTeamOffers(ownerId) {
+  if (!ownerId) return [];
   try {
-    const snap = await getDoc(offersDocRef(ownerUid));
+    const snap = await getDoc(offersDocRef(ownerId));
     if (snap.exists()) return snap.data()?.offers || [];
     return [];
   } catch (err) {
@@ -1488,11 +1572,12 @@ export async function loadTeamOffers(ownerUid) {
 
 /**
  * Salva l'intero array di offerte.
+ * ownerId è l'email del proprietario del dataset.
  * Sovrascrive il documento con il nuovo array.
  */
-export async function saveTeamOffers(ownerUid, offers) {
-  if (!ownerUid) throw new Error('ownerUid mancante');
-  await setDoc(offersDocRef(ownerUid), sanitize({ offers, updatedAt: serverTimestamp() }));
+export async function saveTeamOffers(ownerId, offers) {
+  if (!ownerId) throw new Error('ownerId mancante');
+  await setDoc(offersDocRef(ownerId), sanitize({ offers, updatedAt: serverTimestamp() }));
 }
 
 // ─── User role management ─────────────────────────────────────────────────────

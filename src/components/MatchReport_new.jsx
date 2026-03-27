@@ -1193,19 +1193,19 @@ function AggregatedScoutPanel({
 
   return (
     <div className="glass-card overflow-hidden">
-      <div className="w-full flex items-center justify-between px-5 py-3">
-        <div>
+      <div className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between px-4 py-3 gap-2">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-purple-400 text-sm">●</span>
-            <span className="text-sm font-semibold text-gray-300">{opponentHeaderLabel}</span>
+            <span className="text-purple-400 text-sm flex-shrink-0">●</span>
+            <span className="text-sm font-semibold text-gray-300 truncate">{opponentHeaderLabel}</span>
           </div>
           {activeOpponent !== ALL_OPPONENTS_ID && selectedMatchMA?.match?.metadata?.date && (
-            <div className="mt-1.5 text-sm font-semibold text-gray-300">
+            <div className="mt-1 text-sm font-semibold text-gray-300">
               {selectedMatchMA.match.metadata.date}
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap flex-shrink-0">
           <button
             onClick={() => setLineMode('efficacia')}
             className={`text-[10px] px-2 py-1 rounded border ${lineMode === 'efficacia' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
@@ -3120,18 +3120,19 @@ function OpponentScoutComparisonChart({
           >
             {noiOraLabel}
           </button>
+          {/* Commento inline — no longer absolute-positioned over chart */}
+          <button
+            onClick={() => setShowCommento(true)}
+            className={`ml-auto text-[10px] px-2.5 py-1 rounded-lg border font-semibold tracking-wide transition-all flex-shrink-0 ${
+              showCommento
+                ? 'bg-indigo-500/35 text-white border-indigo-300/70 ring-1 ring-indigo-300/40'
+                : 'bg-indigo-500/20 text-indigo-100 border-indigo-300/55 hover:bg-indigo-500/30 hover:text-white'
+            }`}
+          >
+            💬 Commento
+          </button>
         </div>
       <div className="relative">
-      <button
-        onClick={() => setShowCommento(true)}
-        className={`absolute top-2 right-2 z-10 text-[11px] px-3 py-1.5 rounded-lg border font-semibold tracking-wide shadow-lg transition-all ${
-          showCommento
-            ? 'bg-indigo-500/35 text-white border-indigo-300/70 shadow-indigo-500/30 ring-1 ring-indigo-300/40'
-            : 'bg-indigo-500/20 text-indigo-100 border-indigo-300/55 hover:bg-indigo-500/30 hover:text-white hover:scale-[1.03] shadow-indigo-500/20'
-        }`}
-      >
-        💬 Commento
-      </button>
       <ResponsiveContainer width="100%" height={240}>
         <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />

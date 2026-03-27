@@ -1197,6 +1197,70 @@ function computeStatsFromActionsBySet(actionsBySet, roster) {
     }
   }
 
+  // ── Correct rotation labels to real P1-P6 using setter-serve detection ──────
+  // Principle: setter (role='P') serves in real P1. We find the first serve by
+  // the setter in each set, note its current label (Pk from our relative
+  // recomputation), and shift all labels in that set so Pk → 1.
+  // This converts relative labels to real volleyball rotation numbers.
+  {
+    // Identify all setters by roster role (role-based, no dependency on labels)
+    const setterNums = new Set(
+      Object.entries(rosterMap)
+        .filter(([, p]) => /^P$/i.test(String(p.role || '').trim()))
+        .map(([num]) => num)
+    );
+
+    if (setterNums.size > 0) {
+      // Group rally indices by set
+      const setRallyMap = {};
+      rallies.forEach((r, i) => {
+        const sn = r.set || 1;
+        if (!setRallyMap[sn]) setRallyMap[sn] = [];
+        setRallyMap[sn].push(i);
+      });
+
+      let needsRotMapRebuild = false;
+      for (const indices of Object.values(setRallyMap)) {
+        // Find first serve by any setter in this set
+        let setterServeLabel = null;
+        for (const idx of indices) {
+          const r = rallies[idx];
+          if (r.phase === 'b' && r.server && setterNums.has(r.server)) {
+            setterServeLabel = r.rotation;
+            break;
+          }
+        }
+        if (!setterServeLabel || setterServeLabel < 1 || setterServeLabel > 6) continue;
+
+        // Real starting rotation: if setter serves at label Pk, real P1 = Pk.
+        // Label 1 corresponds to real rotation: ((2 - Pk + 6) % 6) || 6
+        const realStart = ((2 - setterServeLabel + 6) % 6) || 6;
+        if (realStart === 1) continue; // already aligned, no correction needed
+
+        needsRotMapRebuild = true;
+        for (const idx of indices) {
+          const r = rallies[idx];
+          // Shift label so setterServeLabel → 1, preserving cyclical order
+          r.rotation = ((r.rotation + realStart - 2) % 6) + 1;
+        }
+      }
+
+      // Rebuild rotMap with corrected real rotation numbers
+      if (needsRotMapRebuild) {
+        Object.keys(rotMap).forEach(k => delete rotMap[k]);
+        for (const r of rallies) {
+          const rr = r.rotation;
+          if (rr >= 1 && rr <= 6) {
+            if (!rotMap[rr]) rotMap[rr] = { rotation: rr, totalPoints: 0, pointsMade: 0, pointsLost: 0 };
+            rotMap[rr].totalPoints++;
+            if (r.isPoint) rotMap[rr].pointsMade++;
+            if (r.isError) rotMap[rr].pointsLost++;
+          }
+        }
+      }
+    }
+  }
+
   // ── Build riepilogo ─────────────────────────────────────────────────────────
   const playerStats = Object.values(pMap).map(p => {
     // Punti: att_kill + bat_kill + muro_kill (azioni vincenti dirette)

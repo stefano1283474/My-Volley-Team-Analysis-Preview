@@ -1193,19 +1193,19 @@ function AggregatedScoutPanel({
 
   return (
     <div className="glass-card overflow-hidden">
-      <div className="w-full flex items-center justify-between px-5 py-3">
-        <div>
+      <div className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between px-4 py-3 gap-2">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-purple-400 text-sm">●</span>
-            <span className="text-sm font-semibold text-gray-300">{opponentHeaderLabel}</span>
+            <span className="text-purple-400 text-sm flex-shrink-0">●</span>
+            <span className="text-sm font-semibold text-gray-300 truncate">{opponentHeaderLabel}</span>
           </div>
           {activeOpponent !== ALL_OPPONENTS_ID && selectedMatchMA?.match?.metadata?.date && (
-            <div className="mt-1.5 text-sm font-semibold text-gray-300">
+            <div className="mt-1 text-sm font-semibold text-gray-300">
               {selectedMatchMA.match.metadata.date}
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap flex-shrink-0">
           <button
             onClick={() => setLineMode('efficacia')}
             className={`text-[10px] px-2 py-1 rounded border ${lineMode === 'efficacia' ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-white/[0.03] text-gray-400 border-white/10'}`}
@@ -2303,61 +2303,74 @@ function generateMatchComment(selectedMatchMA, selectedOppAgg, seasonTeamAvg, se
   }
 
   // ═══════════════════════════════════════════════════════
-  // 2. ANALISI PERFORMANCE
+  // 2. ANALISI PERFORMANCE — tabella compatta
   // ═══════════════════════════════════════════════════════
   {
-    const items = [];
+    const rows = [];
+    const deltaSign = (v) => v > 0 ? `▲ ${gapFmt(v)}` : v < 0 ? `▼ ${gapFmt(v)}` : `— ${gapFmt(v)}`;
+    const deltaTone = (v, threshold = (isMP ? 0.05 : 3)) =>
+      v === null ? '' : v > threshold ? 'pos' : v < -threshold ? 'neg' : '';
+    const perfLabel = (v) => v > 0 ? '↑' : v < -(isMP ? 0.5 : 3) ? '↓' : '=';
 
     for (const fd of fundDefs) {
-      // --- Team: season avg vs this match ---
-      const teamMatchVal = metricFromRaw(team?.[fd.key], fd.key);
+      const teamMatchVal  = metricFromRaw(team?.[fd.key], fd.key);
       const teamSeasonVal = seasonTeamAvg?.[fd.key]?.[perfAvgKey];
+      const oppMatchVal   = oppMetricPct(selectedOppAgg?.[fd.key], fd.key);
+      const oppSeasonVal  = seasonAgg?.[fd.key]?.[oppAvgKey] != null ? toPct(seasonAgg[fd.key][oppAvgKey]) : null;
 
-      // --- Opponent: season avg (stimato) vs this match (reale) ---
-      const oppMatchVal = oppMetricPct(selectedOppAgg?.[fd.key], fd.key);
-      const oppSeasonVal = seasonAgg?.[fd.key]?.[oppAvgKey] != null ? toPct(seasonAgg[fd.key][oppAvgKey]) : null;
+      const teamDelta = (teamMatchVal !== null && Number.isFinite(teamSeasonVal)) ? teamMatchVal - teamSeasonVal : null;
+      const oppDelta  = (oppMatchVal  !== null && Number.isFinite(oppSeasonVal))  ? oppMatchVal  - oppSeasonVal  : null;
 
-      const parts = [];
-      let teamDelta = null;
-      let oppDelta = null;
+      if (teamDelta === null && oppDelta === null) continue;
 
-      if (teamMatchVal !== null && Number.isFinite(teamSeasonVal)) {
-        teamDelta = teamMatchVal - teamSeasonVal;
-        const teamLabel = teamDelta > 0 ? 'over-performance' : teamDelta < -0.5 ? 'under-performance' : 'in media';
-        parts.push(`Team: ${valFmt(teamMatchVal)} vs media stag. ${valFmt(teamSeasonVal)} (${gapFmt(teamDelta)}) → ${teamLabel}`);
-      }
-
-      if (oppMatchVal !== null && Number.isFinite(oppSeasonVal)) {
-        oppDelta = oppMatchVal - oppSeasonVal;
-        const oppLabel = oppDelta > 0 ? 'over-performance' : oppDelta < -0.5 ? 'under-performance' : 'in media';
-        parts.push(`${oppName}: ${valFmt(oppMatchVal)} vs stimato stag. ${valFmt(oppSeasonVal)} (${gapFmt(oppDelta)}) → ${oppLabel}`);
-      }
-
-      if (parts.length > 0) {
-        const positive = teamDelta !== null && oppDelta !== null
-          ? (teamDelta > 0 && oppDelta <= 0 ? true : teamDelta < 0 && oppDelta > 0 ? false : null)
-          : teamDelta !== null ? (teamDelta > 0 ? true : teamDelta < 0 ? false : null) : null;
-
-        items.push({
-          text: `${fd.label}: ${parts.join(' | ')}.`,
-          positive,
-          highlight: (teamDelta !== null && Math.abs(teamDelta) > (isMP ? 0.15 : 8)) || (oppDelta !== null && Math.abs(oppDelta) > (isMP ? 0.15 : 8)),
-          tooltip: {
-            label: `${fd.label} — Performance`,
-            values: [
-              teamMatchVal !== null ? `Team partita: ${valFmt(teamMatchVal)}` : null,
-              Number.isFinite(teamSeasonVal) ? `Team media stag.: ${valFmt(teamSeasonVal)}` : null,
-              teamDelta !== null ? `Team delta: ${gapFmt(teamDelta)}` : null,
-              oppMatchVal !== null ? `${oppName} partita: ${valFmt(oppMatchVal)}` : null,
-              Number.isFinite(oppSeasonVal) ? `${oppName} stimato stag.: ${valFmt(oppSeasonVal)}` : null,
-              oppDelta !== null ? `${oppName} delta: ${gapFmt(oppDelta)}` : null,
-            ].filter(Boolean)
-          }
-        });
-      }
+      rows.push({
+        cells: [
+          fd.label,
+          teamMatchVal  !== null           ? valFmt(teamMatchVal)  : '—',
+          Number.isFinite(teamSeasonVal)   ? valFmt(teamSeasonVal) : '—',
+          teamDelta !== null               ? deltaSign(teamDelta)  : '—',
+          oppMatchVal   !== null           ? valFmt(oppMatchVal)   : '—',
+          Number.isFinite(oppSeasonVal)    ? valFmt(oppSeasonVal)  : '—',
+          oppDelta  !== null               ? deltaSign(oppDelta)   : '—',
+        ],
+        tones: [
+          'label',
+          '',
+          '',
+          deltaTone(teamDelta),
+          '',
+          '',
+          deltaTone(oppDelta, isMP ? 0.05 : 3),   // avversario: delta positivo = peggio per noi → rosso
+        ],
+        tooltip: {
+          label: `${fd.label} — Performance`,
+          values: [
+            teamMatchVal !== null         ? `Noi partita: ${valFmt(teamMatchVal)}`          : null,
+            Number.isFinite(teamSeasonVal)? `Noi media stag.: ${valFmt(teamSeasonVal)}`     : null,
+            teamDelta !== null            ? `Noi delta: ${gapFmt(teamDelta)} ${perfLabel(teamDelta)}` : null,
+            oppMatchVal !== null          ? `${oppName} partita: ${valFmt(oppMatchVal)}`    : null,
+            Number.isFinite(oppSeasonVal) ? `${oppName} stimato: ${valFmt(oppSeasonVal)}`   : null,
+            oppDelta !== null             ? `${oppName} delta: ${gapFmt(oppDelta)} ${perfLabel(oppDelta)}` : null,
+          ].filter(Boolean)
+        }
+      });
     }
 
-    if (items.length > 0) sections.push({ id: 'performance', title: 'Analisi Performance', color: 'violet', items });
+    if (rows.length > 0) {
+      // Short opponent name for header (max ~12 chars)
+      const oppShort = oppName.replace(/^\([AR]\)\s*/i, '').split(/[\s\-–]/)[0] || oppName;
+      sections.push({
+        id: 'performance',
+        title: 'Analisi Performance',
+        color: 'violet',
+        items: [{
+          type: 'table',
+          headers: ['Fondamentale', 'Noi', 'Media', 'Δ Noi', oppShort, 'Stimato', 'Δ Avv'],
+          rows,
+          caption: `Noi: valore partita vs media stagionale | ${oppShort}: valore stimato vs stagionale avversario`,
+        }]
+      });
+    }
   }
 
   // ═══════════════════════════════════════════════════════
@@ -3149,18 +3162,19 @@ function OpponentScoutComparisonChart({
           >
             {noiOraLabel}
           </button>
+          {/* Commento inline — no longer absolute-positioned over chart */}
+          <button
+            onClick={() => setShowCommento(true)}
+            className={`ml-auto text-[10px] px-2.5 py-1 rounded-lg border font-semibold tracking-wide transition-all flex-shrink-0 ${
+              showCommento
+                ? 'bg-indigo-500/35 text-white border-indigo-300/70 ring-1 ring-indigo-300/40'
+                : 'bg-indigo-500/20 text-indigo-100 border-indigo-300/55 hover:bg-indigo-500/30 hover:text-white'
+            }`}
+          >
+            💬 Commento
+          </button>
         </div>
       <div className="relative">
-      <button
-        onClick={() => setShowCommento(true)}
-        className={`absolute top-2 right-2 z-10 text-[11px] px-3 py-1.5 rounded-lg border font-semibold tracking-wide shadow-lg transition-all ${
-          showCommento
-            ? 'bg-indigo-500/35 text-white border-indigo-300/70 shadow-indigo-500/30 ring-1 ring-indigo-300/40'
-            : 'bg-indigo-500/20 text-indigo-100 border-indigo-300/55 hover:bg-indigo-500/30 hover:text-white hover:scale-[1.03] shadow-indigo-500/20'
-        }`}
-      >
-        💬 Commento
-      </button>
       <ResponsiveContainer width="100%" height={240}>
         <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
@@ -3317,20 +3331,67 @@ function CommentoPanel({ selectedMatchMA, selectedOppAgg, seasonTeamAvg, seasonA
               {section.title}
             </h6>
             <div className="space-y-2">
-              {section.items.map((item, idx) => (
-                <p key={idx} className={`text-[13px] sm:text-sm leading-relaxed ${
-                  item.positive === true  ? 'text-gray-200' :
-                  item.positive === false ? 'text-gray-300' :
-                  'text-gray-200'
-                } ${item.highlight ? 'font-medium' : ''}`}>
-                  {item.positive === true  && <span className="text-emerald-400 mr-1 text-xs">▲</span>}
-                  {item.positive === false && <span className="text-rose-400 mr-1 text-xs">▼</span>}
-                  {item.text}
-                  {item.tooltip && (
-                    <InfoTooltip label={item.tooltip.label} values={item.tooltip.values} />
-                  )}
-                </p>
-              ))}
+              {section.items.map((item, idx) => {
+                // ── Table item ──────────────────────────────────────────
+                if (item.type === 'table') {
+                  return (
+                    <div key={idx} className="overflow-x-auto -mx-1">
+                      <table className="w-full text-[11px] sm:text-[12px] border-collapse">
+                        <thead>
+                          <tr>
+                            {item.headers.map((h, hi) => (
+                              <th key={hi} className={`px-2 py-1.5 text-left font-semibold text-gray-400 border-b border-white/10 whitespace-nowrap ${hi === 0 ? 'pl-1' : ''}`}>
+                                {h}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {item.rows.map((row, ri) => (
+                            <tr key={ri} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                              {row.cells.map((cell, ci) => {
+                                const tone = row.tones?.[ci];
+                                const cls = tone === 'pos' ? 'text-emerald-400 font-medium'
+                                          : tone === 'neg' ? 'text-rose-400 font-medium'
+                                          : tone === 'label' ? 'text-gray-300 font-semibold'
+                                          : 'text-gray-300';
+                                return (
+                                  <td key={ci} className={`px-2 py-1.5 ${cls} ${ci === 0 ? 'pl-1' : ''} whitespace-nowrap`}>
+                                    {cell}
+                                  </td>
+                                );
+                              })}
+                              {row.tooltip && (
+                                <td className="px-1 py-1.5">
+                                  <InfoTooltip label={row.tooltip.label} values={row.tooltip.values} />
+                                </td>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {item.caption && (
+                        <p className="text-[10px] text-gray-500 mt-1.5 italic">{item.caption}</p>
+                      )}
+                    </div>
+                  );
+                }
+                // ── Default text item ────────────────────────────────────
+                return (
+                  <p key={idx} className={`text-[13px] sm:text-sm leading-relaxed ${
+                    item.positive === true  ? 'text-gray-200' :
+                    item.positive === false ? 'text-gray-300' :
+                    'text-gray-200'
+                  } ${item.highlight ? 'font-medium' : ''}`}>
+                    {item.positive === true  && <span className="text-emerald-400 mr-1 text-xs">▲</span>}
+                    {item.positive === false && <span className="text-rose-400 mr-1 text-xs">▼</span>}
+                    {item.text}
+                    {item.tooltip && (
+                      <InfoTooltip label={item.tooltip.label} values={item.tooltip.values} />
+                    )}
+                  </p>
+                );
+              })}
             </div>
           </div>
         );

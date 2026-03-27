@@ -617,6 +617,9 @@ export default function App() {
     : '';
   const isAdmin = userAccess?.role === 'admin';
   const canUseAdminUi = isAdmin && adminViewMode === 'admin';
+  // assignedProfile: fonte di verità = Firestore (letto da syncAccess al login).
+  // L'admin imposta assignedProfile direttamente su Firestore; il valore viene
+  // letto fresco ad ogni login — nessun override da myProfileRequest necessario.
   const assignedProfile = userAccess?.assignedProfile || 'base';
   const availableUpgradeTargets = useMemo(
     () => Object.keys(PROFILE_META).filter(p => PROFILE_ORDER[p] > PROFILE_ORDER[assignedProfile]),
@@ -651,14 +654,26 @@ export default function App() {
     const targetLabel = PROFILE_META[target]?.label || (target || '—');
     const requestedAt = formatItDateTime(myProfileRequest.requestedAt);
     const resolvedAt = formatItDateTime(myProfileRequest.resolvedAt || myProfileRequest.updatedAt);
-    const statusLabel = status === 'approved' ? 'approvata' : status === 'rejected' ? 'rifiutata' : 'in attesa';
-    const statusClass = status === 'approved'
+    // Se la richiesta era 'approved' ma l'admin ha poi retrocesso il profilo
+    // (assignedProfile < targetProfile), mostra lo stato come 'revocata'.
+    const isRevoked = status === 'approved' &&
+      PROFILE_ORDER[target] !== undefined &&
+      PROFILE_ORDER[assignedProfile] !== undefined &&
+      PROFILE_ORDER[assignedProfile] < PROFILE_ORDER[target];
+    const effectiveStatus = isRevoked ? 'revoked' : status;
+    const statusLabel = effectiveStatus === 'approved' ? 'approvata'
+      : effectiveStatus === 'revoked'  ? 'revocata'
+      : effectiveStatus === 'rejected' ? 'rifiutata'
+      : 'in attesa';
+    const statusClass = effectiveStatus === 'approved'
       ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'
-      : status === 'rejected'
-        ? 'border-red-400/30 bg-red-500/10 text-red-300'
-        : 'border-amber-400/30 bg-amber-500/10 text-amber-300';
+      : effectiveStatus === 'revoked'
+        ? 'border-gray-400/30 bg-gray-500/10 text-gray-400'
+        : effectiveStatus === 'rejected'
+          ? 'border-red-400/30 bg-red-500/10 text-red-300'
+          : 'border-amber-400/30 bg-amber-500/10 text-amber-300';
     return {
-      status,
+      status: effectiveStatus,
       statusLabel,
       statusClass,
       targetLabel,
@@ -666,20 +681,24 @@ export default function App() {
       resolvedAt,
       message: String(myProfileRequest.message || '').trim(),
     };
-  }, [myProfileRequest, formatItDateTime]);
+  }, [myProfileRequest, formatItDateTime, assignedProfile]);
   const handleNewsChange = useCallback(async (newPosts) => {
-    const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
-    if (!ownerUid) return;
+    const ownerId = isSharedMode
+      ? (sharedAccess?.ownerEmail || '').trim().toLowerCase()
+      : (user?.email || '').trim().toLowerCase();
+    if (!ownerId) return;
     setTeamNews(newPosts);
-    try { await saveTeamNews(ownerUid, newPosts); } catch (err) {
+    try { await saveTeamNews(ownerId, newPosts); } catch (err) {
       console.error('[App] saveTeamNews:', err);
     }
   }, [isSharedMode, sharedAccess, user]);
 
   const addSystemNotification = useCallback(async ({ metaKey, type = 'comunicazione', text }) => {
     if (!metaKey || !text) return;
-    const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
-    if (!ownerUid) return;
+    const ownerId = isSharedMode
+      ? (sharedAccess?.ownerEmail || '').trim().toLowerCase()
+      : (user?.email || '').trim().toLowerCase();
+    if (!ownerId) return;
     const exists = teamNews.some((p) => p?.metaKey === metaKey);
     if (exists) return;
     const nextPost = {
@@ -693,7 +712,7 @@ export default function App() {
     };
     const next = [...teamNews, nextPost];
     setTeamNews(next);
-    try { await saveTeamNews(ownerUid, next); } catch (err) {
+    try { await saveTeamNews(ownerId, next); } catch (err) {
       console.error('[App] saveSystemNotification:', err);
     }
   }, [isSharedMode, sharedAccess, user, teamNews]);
@@ -705,10 +724,12 @@ export default function App() {
   // ─── Team Offerte ────────────────────────────────────────────────────────
   const [teamOffers, setTeamOffers] = useState([]);
   const handleOffersChange = useCallback(async (newOffers) => {
-    const ownerUid = isSharedMode ? (sharedAccess?.ownerUid || null) : (user?.uid || null);
-    if (!ownerUid) return;
+    const ownerId = isSharedMode
+      ? (sharedAccess?.ownerEmail || '').trim().toLowerCase()
+      : (user?.email || '').trim().toLowerCase();
+    if (!ownerId) return;
     setTeamOffers(newOffers);
-    try { await saveTeamOffers(ownerUid, newOffers); } catch (err) {
+    try { await saveTeamOffers(ownerId, newOffers); } catch (err) {
       console.error('[App] saveTeamOffers:', err);
     }
   }, [isSharedMode, sharedAccess, user]);
@@ -878,6 +899,20 @@ export default function App() {
     }
     try { localStorage.setItem(storageKey, assignedProfile); } catch {}
   }, [user, isAdmin, assignedProfile, addSystemNotification, profileLabel]);
+
+  // Quando assignedProfile cambia (es. upgrade approvato a sessione già aperta),
+  // riallinea activeProfile: se il profilo attivo supera il nuovo massimo, viene
+  // clampato; se era inferiore, resta invariato (l'utente sceglie manualmente).
+  useEffect(() => {
+    if (!assignedProfile) return;
+    setActiveProfile(prev => {
+      const next = clampProfileToAssigned(prev, assignedProfile);
+      if (next !== prev) {
+        try { localStorage.setItem('vpa_active_profile', next); } catch {}
+      }
+      return next;
+    });
+  }, [assignedProfile]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -1183,16 +1218,7 @@ export default function App() {
       } catch {}
     };
     run();
-    const intervalId = setInterval(run, 8000);
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') run();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
+    return () => { cancelled = true; };
   }, [user, isAdmin]);
 
   const handleAdminViewModeChange = useCallback((mode) => {
@@ -1536,8 +1562,8 @@ export default function App() {
         const [loadedMatches, calData, loadedNews, loadedOffers] = await Promise.all([
           activeTeamId ? loadAllMatches(ownerEmail, activeTeamId) : Promise.resolve([]),
           activeTeamId ? loadCalendar(ownerEmail, activeTeamId) : Promise.resolve(null),
-          loadTeamNews(ownerUid).catch(e => { console.warn('[loadData] news failed:', e?.message); return null; }),
-          loadTeamOffers(ownerUid).catch(e => { console.warn('[loadData] offers failed:', e?.message); return null; }),
+          loadTeamNews(ownerEmail).catch(e => { console.warn('[loadData] news failed:', e?.message); return null; }),
+          loadTeamOffers(ownerEmail).catch(e => { console.warn('[loadData] offers failed:', e?.message); return null; }),
         ]);
 
         if (cancelled) return;
@@ -1997,30 +2023,38 @@ export default function App() {
         className="sticky top-0 z-50 flex-shrink-0 border-b border-white/5 px-2.5 sm:px-4 py-2.5 flex items-center justify-between gap-2"
         style={{ background: 'linear-gradient(180deg, rgba(17,24,39,0.97), rgba(10,14,26,0.99))', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       >
-        {/* Left: hamburger + title */}
-        <div className="flex items-center gap-2 min-w-0">
-          {isMobilePortrait && (
-            <button
-              onClick={() => setIsSidebarOpen(v => !v)}
-              className="w-8 h-8 rounded-lg border border-white/10 bg-white/[0.04] text-gray-200 flex items-center justify-center flex-shrink-0"
-              title={isSidebarOpen ? 'Chiudi menu' : 'Apri menu'}
-            >
-              <IconGlyph name={isSidebarOpen ? 'X' : 'Menu'} className="w-4 h-4" />
-            </button>
-          )}
-          {/* Mobile portrait + sidebar closed → compact MVTA + match count */}
-          {isMobilePortrait && !isSidebarOpen && (
-            <div className="min-w-0">
-              <h1 className="text-[13px] font-bold tracking-tight whitespace-nowrap leading-none" style={{ color: '#f59e0b' }}>
-                MVTA
-              </h1>
-              <p className="text-[9px] text-gray-500 tracking-widest uppercase whitespace-nowrap">
-                {filteredMatches.length}/{matches.length} gare
-              </p>
-            </div>
-          )}
-          {/* Desktop / landscape → full name + version + counts */}
-          {!isMobilePortrait && (
+        {/* Left: MVTA (= hamburger in portrait) + full title in desktop */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {isMobilePortrait ? (
+            isSidebarOpen ? (
+              /* Sidebar aperta: solo il tasto ✕ per chiuderla */
+              <button
+                onClick={() => setIsSidebarOpen(false)}
+                title="Chiudi menu"
+                className="w-8 h-8 rounded-lg border border-white/10 bg-white/[0.04] text-gray-200 flex items-center justify-center flex-shrink-0 transition-colors active:bg-white/15"
+              >
+                <IconGlyph name="X" className="w-4 h-4" />
+              </button>
+            ) : (
+              /* Sidebar chiusa: MVTA text è il toggle */
+              <button
+                onClick={() => setIsSidebarOpen(true)}
+                title="Apri menu"
+                className="text-left rounded px-1 -mx-1 transition-opacity active:opacity-70"
+              >
+                <span
+                  className="block text-[13px] font-bold tracking-tight whitespace-nowrap leading-none"
+                  style={{ color: '#f59e0b' }}
+                >
+                  MVTA
+                </span>
+                <span className="block text-[9px] text-gray-500 tracking-widest uppercase whitespace-nowrap">
+                  {filteredMatches.length}/{matches.length} gare
+                </span>
+              </button>
+            )
+          ) : (
+            /* Desktop / landscape → full name + version + counts */
             <div className="min-w-0">
               <h1 className="text-[13px] sm:text-sm font-bold tracking-tight whitespace-nowrap truncate leading-none max-w-[180px] sm:max-w-none" style={{ color: '#f59e0b' }}>
                 {APP_NAME}
@@ -2032,8 +2066,8 @@ export default function App() {
           )}
         </div>
 
-        {/* Centre: profile selector + status */}
-        <div className="flex-1 flex items-center justify-center gap-2 px-2">
+        {/* Centre: pills + status — scrollable on mobile portrait */}
+        <div className={`flex items-center gap-2 ${isMobilePortrait ? 'flex-1 overflow-x-auto scrollbar-none' : 'flex-1 justify-between'} min-w-0`}>
           {/* Profile pills */}
           {canUseAdminUi ? (
             <div className="px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold border border-emerald-400/40 text-emerald-300 bg-emerald-500/10 whitespace-nowrap">
@@ -2090,9 +2124,8 @@ export default function App() {
             {errorMsg && <div className="text-xs text-red-400">{errorMsg}</div>}
           </div>
         </div>
-
-        {/* Right: event filter + data mode selector + user menu */}
-        <div className="flex items-center gap-2">
+        {/* Right controls: outside the scrollable container so absolute dropdowns are not clipped */}
+        <div className="flex items-center gap-2 flex-shrink-0">
           {/* ── Event type filter pill ── */}
           {!canUseAdminUi && availableMatchTypes.length > 0 && (
             <div className="relative" ref={eventFilterRef}>
@@ -2211,6 +2244,14 @@ export default function App() {
                   <p className="text-[11px] font-medium text-gray-200 truncate">{user.displayName || 'Account Google'}</p>
                   <p className="text-[10px] text-gray-500 truncate">{user.email || 'Email non disponibile'}</p>
                   <p className="text-[10px] text-sky-400/80 mt-0.5">Database in Cloud</p>
+                  {!isAdmin && (
+                    <p className="text-[10px] mt-1">
+                      <span className="text-gray-500">Profilo assegnato: </span>
+                      <span className="font-semibold" style={{ color: PROFILE_META[assignedProfile]?.color || '#9ca3af' }}>
+                        {PROFILE_META[assignedProfile]?.label || assignedProfile}
+                      </span>
+                    </p>
+                  )}
                   {isSharedMode && (
                     <p className="text-[10px] text-sky-300 mt-0.5">Modalità sola lettura · Dataset condiviso</p>
                   )}
@@ -2291,6 +2332,7 @@ export default function App() {
               </div>
             )}
           </div>
+          {/* end right controls */}
         </div>
       </header>
 
@@ -2308,7 +2350,7 @@ export default function App() {
         <nav
           className={`${isMobilePortrait
             ? 'absolute left-0 top-0 h-full w-52 z-30'
-            : 'flex-shrink-0'} border-r border-white/5 py-3 px-2 flex flex-col gap-0.5 relative overflow-y-auto overflow-x-hidden`}
+            : 'relative flex-shrink-0'} border-r border-white/5 py-3 px-2 flex flex-col gap-0.5 overflow-y-auto overflow-x-hidden`}
           style={{ background: isMobilePortrait ? 'rgba(2,6,23,0.97)' : 'rgba(17,24,39,0.5)', width: isMobilePortrait ? undefined : `${sidebarWidth}px`, userSelect: isSidebarResizing ? 'none' : undefined }}
         >
           {/* App name + version + profile badge in sidebar (mobile portrait only) */}

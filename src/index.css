@@ -31,6 +31,13 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--navy-600); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-500); }
 
+/* Hide scrollbar visually while keeping scroll functionality */
+.scrollbar-none {
+  scrollbar-width: none;       /* Firefox */
+  -ms-overflow-style: none;    /* IE / Edge */
+}
+.scrollbar-none::-webkit-scrollbar { display: none; } /* Chrome / Safari */
+
 /* Glassmorphism card */
 .glass-card {
   background: rgba(17, 24, 39, 0.7);
