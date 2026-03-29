@@ -1649,6 +1649,9 @@ export default function App() {
   // ─── File upload handler — parse + salva su Firestore ────────────────────
   const handleFileUpload = useCallback(async (files) => {
     if (!user || !dataOwnerId || !ownerTeamId || !canEditDataset) return;
+    // Blocca import Excel (.xlsm/.xlsx) per utenti senza pacchetto ProMax
+    const hasExcelFiles = files.some(f => /\.(xlsm|xlsx)$/i.test(f.name));
+    if (hasExcelFiles && !isAdmin && assignedProfile !== 'promax') return;
     setIsLoading(true);
     setErrorMsg('');
     const queuedFiles = files.map((file, index) => ({
@@ -2876,6 +2879,7 @@ export default function App() {
                   standings={standings}
                   ownerTeamName={ownerTeamName}
                   readOnly={!canEditDataset}
+                  canImportExcel={isAdmin || assignedProfile === 'promax'}
                   isSharedMode={isSharedMode}
                   canManageShare={canManageShare}
                   shareInfo={shareInfo}

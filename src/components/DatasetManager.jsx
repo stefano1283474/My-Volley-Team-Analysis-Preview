@@ -9,6 +9,7 @@ export default function DatasetManager({
   matches, calendar, standings,
   ownerTeamName = '',
   readOnly = false,
+  canImportExcel = false,
   isSharedMode = false,
   canManageShare = false,
   shareInfo = null,
@@ -351,29 +352,37 @@ export default function DatasetManager({
               <p className="text-sm font-semibold text-gray-100">Scout Partite</p>
             </div>
             <p className="text-xs text-gray-500">File di analisi partita esportati da DataVolley. Formati accettati: <span className="text-amber-300 font-mono">.xlsm</span> / <span className="text-amber-300 font-mono">.xlsx</span></p>
-            <div
-              className={`drop-zone min-h-[180px] p-6 flex flex-col justify-center items-center gap-2 cursor-pointer transition-all ${
-                dragOverScout ? 'drag-over' : ''
-              } ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}
-              onClick={() => fileRefScout.current?.click()}
-              onDragOver={(e) => { e.preventDefault(); setDragOverScout(true); }}
-              onDragLeave={() => setDragOverScout(false)}
-              onDrop={handleDropScout}
-            >
-              <div className="text-3xl">{isLoading ? '⏳' : '📊'}</div>
-              <p className="text-sm text-gray-300 text-center">
-                <span className="text-amber-400 font-medium">Clicca o trascina</span> lo scout
-              </p>
-              <p className="text-xs text-gray-500">.xlsm / .xlsx</p>
-              <input
-                ref={fileRefScout}
-                type="file"
-                multiple
-                accept=".xlsm,.xlsx"
-                className="hidden"
-                onChange={handleChangeScout}
-              />
-            </div>
+            {canImportExcel ? (
+              <div
+                className={`drop-zone min-h-[180px] p-6 flex flex-col justify-center items-center gap-2 cursor-pointer transition-all ${
+                  dragOverScout ? 'drag-over' : ''
+                } ${isLoading ? 'opacity-60 pointer-events-none' : ''}`}
+                onClick={() => fileRefScout.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); setDragOverScout(true); }}
+                onDragLeave={() => setDragOverScout(false)}
+                onDrop={handleDropScout}
+              >
+                <div className="text-3xl">{isLoading ? '⏳' : '📊'}</div>
+                <p className="text-sm text-gray-300 text-center">
+                  <span className="text-amber-400 font-medium">Clicca o trascina</span> lo scout
+                </p>
+                <p className="text-xs text-gray-500">.xlsm / .xlsx</p>
+                <input
+                  ref={fileRefScout}
+                  type="file"
+                  multiple
+                  accept=".xlsm,.xlsx"
+                  className="hidden"
+                  onChange={handleChangeScout}
+                />
+              </div>
+            ) : (
+              <div className="min-h-[180px] p-6 flex flex-col justify-center items-center gap-3 rounded-xl border border-white/10 bg-white/[0.015] opacity-70">
+                <div className="text-3xl">🔒</div>
+                <p className="text-sm text-gray-400 text-center font-medium">Funzionalità Pro Max</p>
+                <p className="text-xs text-gray-500 text-center">L'import di file scout richiede il pacchetto <span className="text-amber-400 font-semibold">Pro Max</span>. Contatta l'amministratore per abilitarlo.</p>
+              </div>
+            )}
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
