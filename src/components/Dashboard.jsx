@@ -69,6 +69,11 @@ const CHART_META = {
   top_performers:   { label: 'Top Performer',          icon: '★',  supportsDataMode: true  },
 };
 
+// Convert efficacy to percentage, handling both 0–1 (Excel %) and 0–100 (computed) input scales.
+// Values with |v| ≤ 1 are assumed to be in 0–1 scale and multiplied by 100;
+// values with |v| > 1 are assumed already in 0–100 scale.
+const effPct = (v) => { const n = v || 0; return Math.abs(n) <= 1 ? n * 100 : n; };
+
 const normalizeTeamName = (name) => String(name || '').trim().toUpperCase();
 
 function findStandingTeamByName(standings, teamName) {
@@ -157,12 +162,13 @@ export default function Dashboard({
   const teamAvg = useMemo(() => {
     const avg = {};
     for (const f of FUNDS) {
-      const rawVals = sortedMA.map(ma => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
+      // effPct normalises to 0–100 whether the raw value is in 0–1 or 0–100 scale
+      const rawVals = sortedMA.map(ma => effPct(ma.match.riepilogo?.team?.[f]?.efficacy || 0)).filter(v => v > 0);
       avg[f] = {
         raw: rawVals.length > 0 ? rawVals.reduce((s, v) => s + v, 0) / rawVals.length : 0,
         weighted: rawVals.length > 0
           ? sortedMA.reduce((s, ma) => {
-              const eff = ma.match.riepilogo?.team?.[f]?.efficacy || 0;
+              const eff = effPct(ma.match.riepilogo?.team?.[f]?.efficacy || 0);
               return s + eff * ma.matchWeight.final * (ma.fundWeights[f === 'block' ? 'm' : f.charAt(0)] || 1);
             }, 0) / rawVals.length
           : 0,
@@ -202,14 +208,14 @@ export default function Dashboard({
 
   // ─── Trend chart data ─────────────────────────────────────────────────────
   const teamTrendData = useMemo(() => sortedMA.map(ma => {
-    const vals = FUNDS.map(f => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
-    // efficacy è già in scala 0-100, nessuna moltiplicazione necessaria
+    const vals = FUNDS.map(f => effPct(ma.match.riepilogo?.team?.[f]?.efficacy || 0)).filter(v => v > 0);
+    // effPct normalises to 0–100 regardless of input scale
     const raw = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
     return {
       label:    (ma.match.metadata.opponent || 'N/D').substring(0, 10),
       date:     ma.match.metadata.date || '',
       raw:      +raw.toFixed(1),
-      weighted: +(raw * ma.matchWeight.final).toFixed(1),
+      weighted: +Math.min(raw * ma.matchWeight.final, 150).toFixed(1),
     };
   }), [sortedMA]);
 
@@ -217,8 +223,8 @@ export default function Dashboard({
     const row = { label: (ma.match.metadata.opponent || 'N/D').substring(0, 10) };
     const vals = [];
     for (const f of FUNDS) {
-      // efficacy già in scala 0-100, nessuna moltiplicazione necessaria
-      const eff = ma.match.riepilogo?.team?.[f]?.efficacy || 0;
+      // effPct normalises to 0–100 regardless of input scale
+      const eff = effPct(ma.match.riepilogo?.team?.[f]?.efficacy || 0);
       row[f] = +eff.toFixed(1);
       if (eff > 0) vals.push(eff);
     }

@@ -424,7 +424,7 @@ export default function Glossary() {
         <p className="text-xs text-gray-500">
           {filtered.length === 0
             ? 'Nessun termine trovato.'
-            : `${filtered.length} termine${filtered.length > 1 ? 'i' : ''} trovato${filtered.length > 1 ? 'i' : ''} per "${search}"`}
+            : `${filtered.length} termin${filtered.length > 1 ? 'i' : 'e'} trovato${filtered.length > 1 ? 'i' : ''} per "${search}"`}
         </p>
       )}
 

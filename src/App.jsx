@@ -701,8 +701,19 @@ export default function App() {
       ? (sharedAccess?.ownerEmail || '').trim().toLowerCase()
       : (user?.email || '').trim().toLowerCase();
     if (!ownerId) return;
-    const exists = teamNews.some((p) => p?.metaKey === metaKey);
-    if (exists) return;
+    const existingIndex = teamNews.findIndex((p) => p?.metaKey === metaKey);
+    if (existingIndex >= 0) {
+      // If the text or type changed (e.g. approved→revoked), update the existing post
+      // so the Sistema tab stays consistent with the user menu and top bar.
+      const existing = teamNews[existingIndex];
+      if (existing.text === text && existing.type === type) return;
+      const next = teamNews.map((p, i) => i === existingIndex ? { ...p, type, text } : p);
+      setTeamNews(next);
+      try { await saveTeamNews(ownerId, next); } catch (err) {
+        console.error('[App] updateSystemNotification:', err);
+      }
+      return;
+    }
     const nextPost = {
       id: `sys_${metaKey}`,
       metaKey,
@@ -867,23 +878,41 @@ export default function App() {
     const seenStorageKey = `vpa_profile_request_notice_seen_${user.uid}`;
     let seenKeys = [];
     try { seenKeys = JSON.parse(localStorage.getItem(seenStorageKey) || '[]'); } catch {}
-    if (seenKeys.includes(eventKey)) return;
 
     const targetLabel = myProfileRequest.targetProfile === 'promax' ? 'Pro Max' : 'Pro';
     const when = status === 'pending'
       ? formatItDateTime(myProfileRequest.requestedAt)
       : formatItDateTime(myProfileRequest.resolvedAt || myProfileRequest.updatedAt);
+
+    // Detect inconsistency: approved request but assignedProfile doesn't yet reflect it
+    // (can happen if the admin approval didn't propagate to the profile doc, or was reverted).
+    const isRevoked = status === 'approved' &&
+      PROFILE_ORDER[myProfileRequest.targetProfile] !== undefined &&
+      PROFILE_ORDER[assignedProfile] !== undefined &&
+      PROFILE_ORDER[assignedProfile] < PROFILE_ORDER[myProfileRequest.targetProfile];
+
+    // Skip only when already seen AND nothing changed (isRevoked allows re-check
+    // so the notification text can be updated to reflect the revoked state).
+    if (seenKeys.includes(eventKey) && !isRevoked) return;
+
     const text = status === 'pending'
       ? `Richiesta upgrade profilo inviata: passaggio a ${targetLabel}${when ? ` il ${when}` : ''}.`
-      : status === 'approved'
+      : status === 'approved' && !isRevoked
         ? `Upgrade profilo approvato: ora sei abilitato a ${targetLabel}${when ? ` (approvazione ${when})` : ''}.`
-        : `Richiesta upgrade profilo non approvata${when ? ` (${when})` : ''}.`;
+        : status === 'approved' && isRevoked
+          ? `Upgrade profilo a ${targetLabel} approvato ma non attivo. Profilo corrente: ${PROFILE_META[assignedProfile]?.label || assignedProfile}.`
+          : `Richiesta upgrade profilo non approvata${when ? ` (${when})` : ''}.`;
 
-    const type = status === 'approved' ? 'risultato' : status === 'rejected' ? 'avviso' : 'info';
-    seenKeys = [...seenKeys, eventKey].slice(-50);
-    try { localStorage.setItem(seenStorageKey, JSON.stringify(seenKeys)); } catch {}
+    const type = status === 'approved' && !isRevoked ? 'risultato'
+      : status === 'approved' && isRevoked ? 'avviso'
+      : status === 'rejected' ? 'avviso' : 'info';
+
+    if (!seenKeys.includes(eventKey)) {
+      seenKeys = [...seenKeys, eventKey].slice(-50);
+      try { localStorage.setItem(seenStorageKey, JSON.stringify(seenKeys)); } catch {}
+    }
     addSystemNotification({ metaKey: eventKey, type, text });
-  }, [user, isAdmin, myProfileRequest, toMs, formatItDateTime, addSystemNotification]);
+  }, [user, isAdmin, myProfileRequest, assignedProfile, toMs, formatItDateTime, addSystemNotification]);
 
   useEffect(() => {
     if (!user?.uid || isAdmin) return;
@@ -2086,13 +2115,19 @@ export default function App() {
                 return (
                   <button
                     key={key}
-                    onClick={() => handleProfileChange(key)}
-                    title={locked ? `Profilo ${meta.label} non abilitato` : `Profilo ${meta.label}`}
-                    disabled={locked}
-                    className="px-2 sm:px-3 py-1 rounded-md text-[10px] sm:text-xs font-semibold transition-all whitespace-nowrap"
+                    onClick={() => {
+                      if (locked) {
+                        setRequestTargetProfile(key);
+                        setTimeout(() => setUserMenuOpen(true), 0);
+                      } else {
+                        handleProfileChange(key);
+                      }
+                    }}
+                    title={locked ? `Richiedi upgrade a ${meta.label}` : `Profilo ${meta.label}`}
+                    className={`px-2 sm:px-3 py-1 rounded-md text-[10px] sm:text-xs font-semibold transition-all whitespace-nowrap ${locked ? 'cursor-pointer hover:bg-amber-500/10' : ''}`}
                     style={active
                       ? { background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }
-                      : { color: locked ? '#4b5563' : '#6b7280' }
+                      : { color: locked ? '#78716c' : '#6b7280' }
                     }
                   >
                     <span className="inline-flex items-center gap-1">
@@ -2672,12 +2707,66 @@ export default function App() {
             )}
 
             {activeSection === 'evidenze' && curSubTab === 'coach' && (
-              <CoachProMax
-                matches={filteredMatches}
-                standings={standings}
-                analytics={analytics}
-                activeSubTab={curSubTab}
-              />
+              assignedProfile !== 'promax' ? (
+                /* MVTA-08: Upgrade CTA for non-ProMax users */
+                <div className="flex flex-col items-center justify-center min-h-[60vh] px-6 text-center space-y-6">
+                  <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-2"
+                       style={{ background: 'linear-gradient(135deg, #f59e0b22, #d9770622)', border: '1px solid #f59e0b44' }}>
+                    <svg className="w-8 h-8" fill="none" stroke="#f59e0b" viewBox="0 0 24 24" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                    </svg>
+                  </div>
+                  <div className="space-y-2">
+                    <h2 className="text-xl font-bold text-white">Coach ProMax</h2>
+                    <p className="text-sm text-gray-400 max-w-sm">
+                      L'analisi avanzata per la preparazione tattica è disponibile esclusivamente con il profilo <span className="text-amber-400 font-semibold">Pro Max</span>.
+                    </p>
+                  </div>
+                  <div className="bg-[#111827] border border-white/8 rounded-xl p-5 max-w-sm w-full space-y-3 text-left">
+                    <p className="text-xs text-gray-500 uppercase tracking-widest font-semibold">Incluso in Pro Max</p>
+                    {[
+                      'Profilo tattico partita vs campionato',
+                      'Coefficienti di trasformazione per giocatore',
+                      'Analisi palleggiatore e connessioni di attacco',
+                      'Sintesi per ruolo e situazione',
+                      'Proiezione partita di ritorno',
+                    ].map((feat, i) => (
+                      <div key={i} className="flex items-start gap-2.5">
+                        <svg className="w-4 h-4 mt-0.5 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span className="text-xs text-gray-300">{feat}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {availableUpgradeTargets.length > 0 ? (
+                    <button
+                      onClick={() => { setRequestTargetProfile('promax'); setTimeout(() => setUserMenuOpen(true), 0); }}
+                      className="px-6 py-2.5 rounded-lg text-sm font-semibold transition-all border"
+                      style={{ background: '#f59e0b22', color: '#fbbf24', borderColor: '#f59e0b44' }}
+                      onMouseEnter={e => e.currentTarget.style.background = '#f59e0b33'}
+                      onMouseLeave={e => e.currentTarget.style.background = '#f59e0b22'}
+                    >
+                      Richiedi upgrade a Pro Max
+                    </button>
+                  ) : myProfileRequest?.status === 'pending' ? (
+                    <p className="text-xs text-amber-400/80 border border-amber-400/20 rounded-lg px-4 py-2">
+                      Richiesta upgrade in attesa di approvazione.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      Profilo massimo già richiesto o assegnato.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <CoachProMax
+                  matches={filteredMatches}
+                  standings={standings}
+                  analytics={analytics}
+                  activeSubTab={curSubTab}
+                />
+              )
             )}
 
             {/* ═══════════════════════════════════════════════════════════

@@ -33,6 +33,10 @@ const FUND_TOKEN_MAP = {
   defense: 'd',
   block: 'm',
 };
+
+// Normalise efficacy to 0–100 regardless of whether the source is
+// an Excel percentage cell (0–1 scale) or a computed stat (0–100 scale).
+const effPct = (v) => { const n = v || 0; return Math.abs(n) <= 1 ? n * 100 : n; };
 const ROLE_GROUPS = [
   { id: 'all', label: 'Tutti' },
   { id: 'M',   label: 'Banda' },
@@ -95,12 +99,13 @@ export default function ChartsExplorer({
   const teamAvg = useMemo(() => {
     const avg = {};
     for (const f of FUNDS) {
-      const rawVals = sortedMA.map(ma => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
+      // effPct normalises to 0–100 regardless of input scale
+      const rawVals = sortedMA.map(ma => effPct(ma.match.riepilogo?.team?.[f]?.efficacy || 0)).filter(v => v > 0);
       avg[f] = {
         raw: rawVals.length > 0 ? rawVals.reduce((s, v) => s + v, 0) / rawVals.length : 0,
         weighted: rawVals.length > 0
           ? sortedMA.reduce((s, ma) => {
-              const eff = ma.match.riepilogo?.team?.[f]?.efficacy || 0;
+              const eff = effPct(ma.match.riepilogo?.team?.[f]?.efficacy || 0);
               return s + eff * ma.matchWeight.final * (ma.fundWeights[f === 'block' ? 'm' : f.charAt(0)] || 1);
             }, 0) / rawVals.length
           : 0,
@@ -109,10 +114,11 @@ export default function ChartsExplorer({
     return avg;
   }, [sortedMA]);
 
+  // teamAvg is now in 0–100 scale — no further multiplication needed
   const radarData = FUNDS.map(f => ({
     fund: FUND_LABELS[f],
-    raw:      Math.max(0, teamAvg[f].raw      * 100),
-    weighted: Math.max(0, teamAvg[f].weighted * 100),
+    raw:      Math.max(0, teamAvg[f].raw),
+    weighted: Math.max(0, teamAvg[f].weighted),
   }));
 
   const matchBarData = sortedMA.map(ma => {
@@ -129,13 +135,13 @@ export default function ChartsExplorer({
   });
 
   const teamTrendData = useMemo(() => sortedMA.map(ma => {
-    const vals = FUNDS.map(f => ma.match.riepilogo?.team?.[f]?.efficacy || 0).filter(v => v > 0);
-    const raw  = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length * 100 : 0;
+    const vals = FUNDS.map(f => effPct(ma.match.riepilogo?.team?.[f]?.efficacy || 0)).filter(v => v > 0);
+    const raw  = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
     return {
       label:    (ma.match.metadata.opponent || 'N/D').substring(0, 10),
       date:     ma.match.metadata.date || '',
       raw:      +raw.toFixed(1),
-      weighted: +(raw * ma.matchWeight.final).toFixed(1),
+      weighted: +Math.min(raw * ma.matchWeight.final, 150).toFixed(1),
     };
   }), [sortedMA]);
 
@@ -143,7 +149,7 @@ export default function ChartsExplorer({
     const row  = { label: (ma.match.metadata.opponent || 'N/D').substring(0, 10) };
     const vals = [];
     for (const f of FUNDS) {
-      const eff = (ma.match.riepilogo?.team?.[f]?.efficacy || 0) * 100;
+      const eff = effPct(ma.match.riepilogo?.team?.[f]?.efficacy || 0);
       row[f] = +eff.toFixed(1);
       if (eff > 0) vals.push(eff);
     }
@@ -985,7 +991,7 @@ function CPlayerTrendChart({ playerList, playerTrends, sortedMA }) {
     if (!fundData || !fundData.matchLabels) return [];
     return fundData.matchLabels.map((ml, i) => {
       const ma      = sortedMA.find(m => m.match.id === ml.matchId);
-      const teamEff = (ma?.match.riepilogo?.team?.[selectedFund]?.efficacy || 0) * 100;
+      const teamEff = effPct(ma?.match.riepilogo?.team?.[selectedFund]?.efficacy || 0);
       return {
         label:  (ml.opponent || '').substring(0, 10),
         player: +((fundData.raw[i] || 0) * 100).toFixed(1),

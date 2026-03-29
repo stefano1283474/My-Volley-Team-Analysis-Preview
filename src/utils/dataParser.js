@@ -164,16 +164,32 @@ function parseMetadata(wb) {
   const phase = getCellValue(ws, 'D24') || '';
 
   let date = '';
-  if (dateRaw instanceof Date) {
-    date = dateRaw.toISOString().split('T')[0]; // YYYY-MM-DD
+  if (dateRaw instanceof Date || (dateRaw && typeof dateRaw.getTime === 'function')) {
+    // Date object (cross-frame safe) → YYYY-MM-DD
+    date = new Date(dateRaw.getTime()).toISOString().split('T')[0];
   } else if (typeof dateRaw === 'string') {
     const raw = dateRaw.trim();
     // Normalize DD/MM/YYYY → YYYY-MM-DD for correct chronological sorting
     const dmyMatch = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (dmyMatch) {
       date = `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
-    } else {
+    } else if (/^(\d{4})-(\d{2})-(\d{2})$/.test(raw)) {
+      // Already ISO format — keep as-is
       date = raw;
+    } else {
+      // Try to parse any other date string (e.g. JS Date.toString(), localized dates)
+      const parsed = new Date(raw);
+      if (!isNaN(parsed.getTime())) {
+        date = parsed.toISOString().split('T')[0];
+      } else {
+        date = raw;
+      }
+    }
+  } else if (typeof dateRaw === 'number') {
+    // Excel serial date number
+    const parsed = new Date(dateRaw);
+    if (!isNaN(parsed.getTime())) {
+      date = parsed.toISOString().split('T')[0];
     }
   }
 
