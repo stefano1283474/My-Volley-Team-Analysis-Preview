@@ -3,16 +3,40 @@
 // Mostrata quando l'utente non è autenticato.
 // ============================================================================
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { APP_NAME, APP_VERSION } from '../utils/constants';
+import LegalModal from './LegalModal';
 
 export default function LoginPage() {
   const { signInWithGoogle, authError } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [ageError, setAgeError] = useState(false);
+  const [legalModal, setLegalModal] = useState({ open: false, tab: 'privacy' });
+  const [cookieDismissed, setCookieDismissed] = useState(true);
+
+  // Controlla se il banner cookie è già stato accettato
+  useEffect(() => {
+    try {
+      setCookieDismissed(!!localStorage.getItem('mvta_cookie_ok'));
+    } catch (_) {}
+  }, []);
+
+  const handleDismissCookie = () => {
+    try { localStorage.setItem('mvta_cookie_ok', '1'); } catch (_) {}
+    setCookieDismissed(true);
+  };
+
+  const openLegal = (tab) => setLegalModal({ open: true, tab });
 
   const handleLogin = async () => {
+    if (!ageConfirmed) {
+      setAgeError(true);
+      return;
+    }
+    setAgeError(false);
     setLoading(true);
     setError('');
     try {
@@ -108,12 +132,92 @@ export default function LoginPage() {
           )}
         </div>
 
-        {/* Footer note */}
+        {/* Checkbox età + consenso */}
+        <div
+          style={{
+            background: ageError ? 'rgba(220,38,38,0.10)' : 'rgba(245,158,11,0.06)',
+            border: `1px solid ${ageError ? 'rgba(220,38,38,0.35)' : 'rgba(245,158,11,0.20)'}`,
+            borderRadius: '10px',
+            padding: '12px 14px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '10px',
+          }}
+        >
+          <input
+            type="checkbox"
+            id="ageCheck"
+            checked={ageConfirmed}
+            onChange={(e) => { setAgeConfirmed(e.target.checked); if (e.target.checked) setAgeError(false); }}
+            style={{ width: '16px', height: '16px', marginTop: '2px', cursor: 'pointer', accentColor: '#f59e0b', flexShrink: 0 }}
+          />
+          <label htmlFor="ageCheck" style={{ fontSize: '12px', color: ageError ? '#fca5a5' : '#9ca3af', cursor: 'pointer', lineHeight: 1.5 }}>
+            Confermo di avere almeno <strong style={{ color: ageError ? '#fca5a5' : '#e5e7eb' }}>14 anni</strong> e di aver letto e accettato i{' '}
+            <button type="button" onClick={() => openLegal('terms')} style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', padding: 0, fontSize: '12px', textDecoration: 'underline' }}>
+              Termini d'Uso
+            </button>
+            {' '}e la{' '}
+            <button type="button" onClick={() => openLegal('privacy')} style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', padding: 0, fontSize: '12px', textDecoration: 'underline' }}>
+              Privacy Policy
+            </button>.
+          </label>
+        </div>
+        {ageError && (
+          <p style={{ fontSize: '11px', color: '#f87171', textAlign: 'center', margin: 0 }}>
+            Devi confermare l'età e accettare i Termini prima di continuare.
+          </p>
+        )}
+
+        {/* Footer note — testo corretto (GDPR: non fuorviante) */}
         <p className="text-[11px] text-gray-600 text-center px-4">
-          I dati vengono archiviati esclusivamente nel tuo Database in Cloud.
-          Solo tu puoi accedervi.
+          I tuoi dati sportivi sono archiviati nel tuo spazio Cloud personale.
+          L'accesso è protetto e riservato a te e all'amministratore del servizio per finalità di gestione tecnica.{' '}
+          <button type="button" onClick={() => openLegal('privacy')} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}>
+            Privacy Policy
+          </button>
         </p>
       </div>
+
+      {/* Modale legale */}
+      <LegalModal
+        open={legalModal.open}
+        defaultTab={legalModal.tab}
+        onClose={() => setLegalModal({ open: false, tab: 'privacy' })}
+      />
+
+      {/* Cookie notice banner */}
+      {!cookieDismissed && (
+        <div style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 9998,
+          background: '#1e293b',
+          borderTop: '2px solid #f59e0b',
+          padding: '12px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          flexWrap: 'wrap',
+        }}>
+          <p style={{ fontSize: '13px', color: '#cbd5e1', margin: 0, lineHeight: 1.5 }}>
+            Questo sito usa cookie tecnici necessari per l'autenticazione. Nessun cookie di profilazione.{' '}
+            <button type="button" onClick={() => openLegal('privacy')} style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', padding: 0, fontSize: '13px', textDecoration: 'underline' }}>
+              Privacy Policy
+            </button>
+          </p>
+          <button
+            onClick={handleDismissCookie}
+            style={{
+              background: '#f59e0b', color: '#1a1a1a',
+              border: 'none', borderRadius: '8px',
+              padding: '7px 18px', cursor: 'pointer',
+              fontSize: '13px', fontWeight: 700,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Capito
+          </button>
+        </div>
+      )}
     </div>
   );
 }

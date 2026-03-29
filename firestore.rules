@@ -142,7 +142,10 @@ service cloud.firestore {
     }
 
     match /users/{ownerId}/invites/{inviteId} {
-      allow read: if isSignedIn();
+      // get (singolo doc) permesso a qualsiasi utente autenticato con il token esatto;
+      // list (elenco completo) solo al proprietario.
+      allow get:   if isSignedIn();
+      allow list:  if isUser(ownerId);
       allow write: if isUser(ownerId);
     }
 

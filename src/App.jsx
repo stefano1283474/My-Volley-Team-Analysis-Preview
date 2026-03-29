@@ -125,6 +125,7 @@ import AdminUsageStatsPanel from './components/AdminUsageStatsPanel';
 import MatchStats from './components/MatchStats';
 import CoachProMax from './components/CoachProMax';
 import AdminPackagePanel from './components/AdminPackagePanel';
+import DeleteAccountModal from './components/DeleteAccountModal';
 
 // ─── Profile system ───────────────────────────────────────────────────────────
 const PROFILE_ORDER = { base: 0, pro: 1, promax: 2 };
@@ -551,6 +552,7 @@ export default function App() {
   const [isAccessReady, setIsAccessReady] = useState(false);
   const [newsSeenByCategory, setNewsSeenByCategory] = useState(() => normalizeNewsSeenState({}));
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
   const userMenuRef = useRef(null);
   const [eventFilterMenuOpen, setEventFilterMenuOpen] = useState(false);
   const eventFilterRef = useRef(null);
@@ -2323,6 +2325,14 @@ export default function App() {
                     )}
                   </div>
                 )}
+                {!isSharedMode && (
+                  <button
+                    onClick={() => { setUserMenuOpen(false); setShowDeleteAccountModal(true); }}
+                    className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors border-t border-white/5"
+                  >
+                    Elimina account e dati
+                  </button>
+                )}
                 <button
                   onClick={signOut}
                   className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/5 transition-colors border-t border-white/5"
@@ -3007,6 +3017,10 @@ export default function App() {
         </div>
       </div>
     )}
+    <DeleteAccountModal
+      open={showDeleteAccountModal}
+      onClose={() => setShowDeleteAccountModal(false)}
+    />
     </ProfileProvider>
   );
 }

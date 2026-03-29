@@ -1868,3 +1868,63 @@ export async function savePackageConfig(config) {
   });
   await setDoc(packageConfigRef(), payload, { merge: false });
 }
+
+// ============================================================================
+// 12. ELIMINAZIONE ACCOUNT UTENTE (GDPR Art. 17 — Diritto all'oblio)
+// ============================================================================
+
+/**
+ * Elimina tutti i dati Firestore dell'utente corrente.
+ * Deve essere chiamata PRIMA di user.delete() su Firebase Auth.
+ *
+ * @param {import('firebase/auth').User} firebaseUser  — oggetto utente Firebase Auth
+ * @returns {Promise<{ success: boolean, error?: string }>}
+ */
+export async function deleteUserAccount(firebaseUser) {
+  try {
+    if (!firebaseUser) throw new Error('Utente non autenticato');
+
+    const rawEmail = String(firebaseUser.email || '').trim();
+    if (!rawEmail) throw new Error('Email utente non disponibile');
+
+    // Risolvi l'ID documento dell'utente (può essere email o email con punti→underscore)
+    const userDocId = await resolveUserEmail({ uid: firebaseUser.uid, email: rawEmail });
+    if (!userDocId) throw new Error('Documento utente non trovato');
+
+    const userRef = doc(db, MVS_USERS_ROOT, userDocId);
+
+    // Helper: elimina tutti i documenti di una subcollection
+    async function deleteSubcollection(parentRef, subColName) {
+      try {
+        const snap = await getDocs(collection(parentRef, subColName));
+        await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+      } catch (_) { /* subcollection potrebbe non esistere */ }
+    }
+
+    // Elimina subcollection dei team (con matches, user_access, calendar annidati)
+    try {
+      const teamsSnap = await getDocs(teamsCol(userDocId));
+      for (const teamDoc of teamsSnap.docs) {
+        await deleteSubcollection(teamDoc.ref, 'matches');
+        await deleteSubcollection(teamDoc.ref, 'user_access');
+        await deleteSubcollection(teamDoc.ref, 'calendar');
+        await deleteDoc(teamDoc.ref);
+      }
+    } catch (_) {}
+
+    // Elimina le altre subcollection radice dell'utente
+    for (const sub of ['invites', 'shared_teams', 'shared_access', 'usage', 'news', 'offers']) {
+      await deleteSubcollection(userRef, sub);
+    }
+
+    // Elimina il documento radice utente
+    await deleteDoc(userRef);
+
+    console.log('[MVTA] Account Firestore eliminato per:', rawEmail);
+    return { success: true };
+  } catch (error) {
+    console.error('[MVTA] Errore eliminazione account:', error);
+    return { success: false, error: error.message };
+  }
+}
+
